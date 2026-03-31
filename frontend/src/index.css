@@ -1,0 +1,716 @@
+/* ============================================================
+   Scan2Floor — Global Design System
+   Dark glassmorphism theme
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:          #070b18;
+  --surface:     rgba(13, 20, 45, 0.88);
+  --surface-2:   rgba(20, 30, 60, 0.75);
+  --border:      rgba(0, 180, 255, 0.12);
+  --border-hi:   rgba(0, 200, 255, 0.35);
+
+  --cyan:        #00c8ff;
+  --cyan-dim:    rgba(0, 200, 255, 0.15);
+  --purple:      #8b5cf6;
+  --purple-dim:  rgba(139, 92, 246, 0.15);
+  --green:       #10b981;
+  --amber:       #f59e0b;
+  --red:         #ef4444;
+
+  --text-1:  #e2e8f0;
+  --text-2:  #94a3b8;
+  --text-3:  #475569;
+
+  --radius:  10px;
+  --radius-lg: 16px;
+  --blur:    12px;
+
+  --sidebar-w: 280px;
+  --topbar-h:  56px;
+}
+
+html, body, #root {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text-1);
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Layout ─────────────────────────────────────────────── */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse 80% 50% at 20% 0%, rgba(0,100,200,.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 100%, rgba(139,92,246,.06) 0%, transparent 60%),
+    var(--bg);
+}
+
+/* ── Top bar ─────────────────────────────────────────────── */
+.topbar {
+  height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  gap: 24px;
+  background: rgba(7, 11, 24, 0.9);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(var(--blur));
+  z-index: 100;
+  flex-shrink: 0;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none;
+}
+.logo-icon {
+  width: 32px; height: 32px;
+  background: linear-gradient(135deg, var(--cyan), var(--purple));
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px;
+  box-shadow: 0 0 16px rgba(0,200,255,.3);
+}
+.logo-text {
+  font-size: 18px;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--cyan), var(--purple));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: -0.5px;
+}
+.logo-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  margin-left: 2px;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
+.topbar-spacer { flex: 1; }
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: pulse-dot 2s infinite;
+}
+.status-dot.ready   { background: var(--green); }
+.status-dot.loading { background: var(--amber); }
+.status-dot.error   { background: var(--red); }
+
+@keyframes pulse-dot {
+  0%,100% { opacity: 1; }
+  50%      { opacity: .4; }
+}
+
+/* ── Workspace ───────────────────────────────────────────── */
+.workspace {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+.sidebar {
+  width: var(--sidebar-w);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  backdrop-filter: blur(var(--blur));
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex-shrink: 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.sidebar-section {
+  padding: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.sidebar-section:last-child { border-bottom: none; }
+
+.section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 12px;
+}
+
+/* Project info card */
+.project-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.project-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-1);
+  margin-bottom: 4px;
+}
+.project-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Layer toggles */
+.layer-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background .15s;
+  user-select: none;
+}
+.layer-item:hover { background: var(--cyan-dim); }
+
+.layer-icon {
+  width: 28px; height: 28px;
+  border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+.layer-icon.mesh    { background: rgba(0,200,255,.15); }
+.layer-icon.cloud   { background: rgba(139,92,246,.15); }
+.layer-icon.floorplan { background: rgba(16,185,129,.15); }
+
+.layer-label { flex: 1; font-size: 13px; font-weight: 500; }
+.layer-sub   { font-size: 11px; color: var(--text-3); }
+
+/* Toggle switch */
+.toggle {
+  position: relative;
+  width: 36px; height: 20px;
+  flex-shrink: 0;
+}
+.toggle input { display: none; }
+.toggle-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 10px;
+  background: var(--border);
+  border: 1px solid var(--border-hi);
+  transition: background .2s;
+  cursor: pointer;
+}
+.toggle input:checked + .toggle-track { background: var(--cyan-dim); border-color: var(--cyan); }
+.toggle-thumb {
+  position: absolute;
+  top: 3px; left: 3px;
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: var(--text-3);
+  transition: left .2s, background .2s;
+  pointer-events: none;
+}
+.toggle input:checked ~ .toggle-thumb { left: 19px; background: var(--cyan); }
+
+/* Stats */
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+}
+.stat-row:last-child { border-bottom: none; }
+.stat-label { font-size: 11px; color: var(--text-3); }
+.stat-value { font-size: 12px; font-family: 'JetBrains Mono', monospace; color: var(--cyan); }
+
+/* Camera buttons */
+.cam-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.cam-btn {
+  padding: 8px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  text-align: center;
+}
+.cam-btn:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  background: var(--cyan-dim);
+  box-shadow: 0 0 10px rgba(0,200,255,.15);
+}
+
+/* ── Viewport ─────────────────────────────────────────────── */
+.viewport {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.canvas-wrap {
+  width: 100%;
+  height: 100%;
+}
+
+/* Corner info */
+.corner-info {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-3);
+  backdrop-filter: blur(var(--blur));
+  pointer-events: none;
+}
+
+/* ── Loading overlay ─────────────────────────────────────── */
+.loading-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(7,11,24,.85);
+  backdrop-filter: blur(8px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  z-index: 200;
+}
+
+.loading-ring {
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--cyan);
+  animation: spin 1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.loading-label {
+  font-size: 13px;
+  color: var(--text-2);
+  text-align: center;
+  max-width: 260px;
+}
+.loading-label strong { color: var(--cyan); font-weight: 600; }
+
+.loading-progress-bar {
+  width: 220px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.loading-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--cyan), var(--purple));
+  border-radius: 2px;
+  transition: width .3s ease;
+}
+
+/* ── Processing notice ───────────────────────────────────── */
+.processing-banner {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  background: var(--surface);
+  border: 1px solid rgba(245,158,11,.25);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--amber);
+  backdrop-filter: blur(var(--blur));
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  animation: fadeIn .4s ease;
+  z-index: 50;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateY(-8px); } }
+
+/* ── Floor plan panel ───────────────────────────────────── */
+.floorplan-panel {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px;
+  backdrop-filter: blur(var(--blur));
+  animation: fadeIn .3s ease;
+  z-index: 50;
+}
+.floorplan-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.fp-tab {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  transition: all .15s;
+}
+.fp-tab.active {
+  background: var(--cyan-dim);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.floorplan-img {
+  width: 300px;
+  border-radius: 8px;
+  display: block;
+  object-fit: contain;
+}
+
+/* ── Generate Floor Plan Button ─────────────────────────── */
+.generate-btn {
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .2s;
+  text-align: center;
+  letter-spacing: 0.3px;
+}
+.generate-btn:hover:not(:disabled) {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  background: var(--cyan-dim);
+  box-shadow: 0 0 18px rgba(0,200,255,.2);
+}
+.generate-btn.active {
+  border-color: var(--cyan);
+  color: var(--cyan);
+  background: var(--cyan-dim);
+}
+.generate-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ── FloorPlan Viewer Panel ──────────────────────────────── */
+.fpv-panel {
+  width: 460px;
+  flex-shrink: 0;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  backdrop-filter: blur(var(--blur));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideInRight .25s ease;
+}
+@keyframes slideInRight {
+  from { transform: translateX(40px); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+.floorplan-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Header */
+.fpv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.fpv-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-1);
+}
+.fpv-icon { font-size: 18px; }
+.fpv-close {
+  width: 28px; height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  font-size: 14px;
+  transition: all .15s;
+  display: flex; align-items: center; justify-content: center;
+}
+.fpv-close:hover { border-color: var(--red); color: var(--red); }
+
+/* Controls */
+.fpv-controls {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.fpv-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.fpv-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+/* Floor tabs + resolution tabs */
+.fpv-floor-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.fpv-tab {
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  transition: all .15s;
+}
+.fpv-tab:hover:not(:disabled) {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.fpv-tab.active {
+  background: var(--cyan-dim);
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+.fpv-tab:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Snap row */
+.fpv-snap-row { gap: 8px; }
+.fpv-snap-group {
+  display: flex;
+  gap: 0;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  width: fit-content;
+}
+.fpv-snap-btn {
+  padding: 5px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--text-3);
+  transition: all .15s;
+}
+.fpv-snap-btn + .fpv-snap-btn {
+  border-left: 1px solid var(--border);
+}
+.fpv-snap-btn.active {
+  background: var(--cyan-dim);
+  color: var(--cyan);
+}
+.fpv-snap-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.fpv-snap-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  font-style: italic;
+}
+
+.fpv-dim { color: var(--text-3); font-size: 12px; }
+
+/* Run button */
+.fpv-run-btn {
+  width: 100%;
+  padding: 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--cyan);
+  background: linear-gradient(135deg, rgba(0,200,255,.15), rgba(139,92,246,.1));
+  color: var(--cyan);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .2s;
+  letter-spacing: 0.3px;
+}
+.fpv-run-btn:hover:not(:disabled):not(.running) {
+  background: linear-gradient(135deg, rgba(0,200,255,.3), rgba(139,92,246,.2));
+  box-shadow: 0 0 20px rgba(0,200,255,.25);
+}
+.fpv-run-btn.running {
+  opacity: 0.7;
+  cursor: wait;
+  animation: pulse-run 1.5s ease-in-out infinite;
+}
+.fpv-run-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+@keyframes pulse-run {
+  0%,100% { box-shadow: 0 0 0 rgba(0,200,255,0); }
+  50%      { box-shadow: 0 0 16px rgba(0,200,255,.3); }
+}
+
+/* Result / error rows */
+.fpv-result-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+}
+.fpv-result-badge {
+  font-size: 12px;
+  color: var(--green);
+  font-weight: 600;
+}
+.fpv-dl-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  border: 1px solid var(--green);
+  background: rgba(16,185,129,.12);
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-decoration: none;
+  transition: all .15s;
+}
+.fpv-dl-btn:hover {
+  background: rgba(16,185,129,.25);
+  box-shadow: 0 0 12px rgba(16,185,129,.2);
+}
+.fpv-error {
+  font-size: 12px;
+  color: var(--red);
+  padding: 8px 0;
+}
+
+/* SVG Preview area */
+.fpv-preview {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+.fpv-preview-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text-3);
+  padding: 10px 18px 6px;
+  flex-shrink: 0;
+}
+.fpv-svg {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.fpv-placeholder {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  font-size: 13px;
+  text-align: center;
+  padding: 30px;
+  line-height: 1.7;
+}
+.fpv-spinner {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--cyan);
+  animation: spin 1s linear infinite;
+}
+
+/* ── Phase 5 result badges ───────────────────────────────── */
+.fpv-result-col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.fpv-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+}
+.fpv-badge {
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.fpv-badge.wall   { background: rgba(0,200,255,.12); color: var(--cyan);  border: 1px solid rgba(0,200,255,.3); }
+.fpv-badge.door   { background: rgba(34,197,94,.12); color: #22c55e;      border: 1px solid rgba(34,197,94,.3); }
+.fpv-badge.window { background: rgba(232,121,249,.12); color: #e879f9;    border: 1px solid rgba(232,121,249,.3); }
+
+

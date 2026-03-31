@@ -1,0 +1,229 @@
+import { Suspense, useState, useEffect, useRef, useCallback } from 'react'
+import { Canvas }        from '@react-three/fiber'
+import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
+import Sidebar           from './components/Sidebar'
+import OBJModel          from './components/OBJModel'
+import PointCloud        from './components/PointCloud'
+import LoadingOverlay    from './components/LoadingOverlay'
+import FloorPlanPanel    from './components/FloorPlanPanel'
+import FloorPlanViewer   from './components/FloorPlanViewer'
+
+const POLL_MS = 4000
+
+export default function App() {
+  /* ---------- server status ---------- */
+  const [backendStatus, setBackendStatus] = useState('connecting') // connecting|ready|processing|error
+  const [modelInfo, setModelInfo]         = useState(null)
+
+  /* ---------- layer visibility -------- */
+  const [showMesh,           setShowMesh]           = useState(false)
+  const [showCloud,          setShowCloud]           = useState(false)
+  const [showFloorPlan,      setShowFloorPlan]       = useState(false)
+  const [showFloorPlanViewer,setShowFloorPlanViewer] = useState(false)
+  const [fpFloor,            setFpFloor]             = useState(0)
+  const [activeFloor,        setActiveFloor]         = useState('all')
+
+  /* ---------- loading state ----------- */
+  const [meshLoading,  setMeshLoading]   = useState(false)
+  const [cloudLoading, setCloudLoading]  = useState(false)
+  const [meshProgress, setMeshProgress]  = useState(0)
+  const [cloudPoints,  setCloudPoints]   = useState(null)
+
+  /* ---------- camera ref -------------- */
+  const cameraRef = useRef()
+  const controlsRef = useRef()
+
+  /* ---------- poll backend ------------ */
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const r = await fetch('/api/status')
+        if (!r.ok) { setBackendStatus('error'); return; }
+        const d = await r.json()
+        setBackendStatus(d.status)
+        if (d.info) setModelInfo(d.info)
+      } catch {
+        setBackendStatus('error')
+      }
+    }
+    poll()
+    const id = setInterval(poll, POLL_MS)
+    return () => clearInterval(id)
+  }, [])
+
+  /* ---------- camera presets ---------- */
+  const setView = useCallback((preset) => {
+    if (!controlsRef.current) return
+    const cam = controlsRef.current.object
+    const tgt = controlsRef.current.target
+    const bbox = modelInfo?.bbox
+    const cy = bbox ? (bbox.max[1] + bbox.min[1]) / 2 : 3
+    const r  = bbox ? Math.max(
+      bbox.max[0] - bbox.min[0],
+      bbox.max[2] - bbox.min[2],
+    ) * 0.7 : 30
+
+    switch (preset) {
+      case 'top':
+        cam.position.set(0, r * 2, 0.01)
+        tgt.set(0, cy, 0)
+        break
+      case '3d':
+        cam.position.set(r, r * 0.8, r)
+        tgt.set(0, cy, 0)
+        break
+      case 'front':
+        cam.position.set(0, cy, r * 1.5)
+        tgt.set(0, cy, 0)
+        break
+      case 'side':
+        cam.position.set(r * 1.5, cy, 0)
+        tgt.set(0, cy, 0)
+        break
+    }
+    cam.updateProjectionMatrix()
+    controlsRef.current.update()
+  }, [modelInfo])
+
+  const anyLoading = meshLoading || cloudLoading
+  const loadingLabel = meshLoading
+    ? `Loading OBJ mesh… ${meshProgress}%`
+    : cloudLoading
+      ? 'Loading point cloud…'
+      : ''
+
+  return (
+    <div className="app">
+      {/* ── Top bar ── */}
+      <header className="topbar">
+        <a className="logo">
+          <div className="logo-icon">🏗</div>
+          <span className="logo-text">Scan2Floor</span>
+          <span className="logo-badge">MVP</span>
+        </a>
+        <div className="topbar-spacer" />
+        <div className="status-pill">
+          <div className={`status-dot ${backendStatus === 'ready' ? 'ready' : backendStatus === 'error' ? 'error' : 'loading'}`} />
+          {backendStatus === 'ready'       && 'Point cloud ready'}
+          {backendStatus === 'processing'  && 'Processing point cloud…'}
+          {backendStatus === 'connecting'  && 'Connecting…'}
+          {backendStatus === 'error'       && 'Backend offline'}
+        </div>
+      </header>
+
+      {/* ── Workspace ── */}
+      <div className="workspace">
+        <Sidebar
+          showMesh={showMesh}       setShowMesh={setShowMesh}
+          showCloud={showCloud}     setShowCloud={setShowCloud}
+          showFloorPlan={showFloorPlan} setShowFloorPlan={setShowFloorPlan}
+          showFloorPlanViewer={showFloorPlanViewer}
+          setShowFloorPlanViewer={setShowFloorPlanViewer}
+          modelInfo={modelInfo}
+          backendStatus={backendStatus}
+          cloudPoints={cloudPoints}
+          onCameraPreset={setView}
+          activeFloor={activeFloor} setActiveFloor={setActiveFloor}
+        />
+
+        <div className="viewport">
+          {/* Three.js canvas */}
+          <div className="canvas-wrap">
+            <Canvas
+              camera={{ position: [30, 15, 30], fov: 50, near: 0.1, far: 2000 }}
+              gl={{ antialias: true, localClippingEnabled: true }}
+              onCreated={({ camera }) => { cameraRef.current = camera }}
+            >
+              <color attach="background" args={['#070b18']} />
+              <ambientLight intensity={0.6} />
+              <directionalLight position={[20, 30, 10]} intensity={1} castShadow />
+              <directionalLight position={[-20, 10, -10]} intensity={0.4} />
+
+              <Grid
+                args={[200, 200]}
+                position={[0, -0.05, 0]}
+                cellColor="#0d1428"
+                sectionColor="#0a2050"
+                sectionSize={10}
+                fadeDistance={120}
+                infiniteGrid
+              />
+
+              <Suspense fallback={null}>
+                {showMesh && (
+                  <OBJModel
+                    modelInfo={modelInfo}
+                    activeFloor={activeFloor}
+                    onLoadStart={() => { setMeshLoading(true); setMeshProgress(0) }}
+                    onProgress={p  => setMeshProgress(p)}
+                    onLoaded={()   => setMeshLoading(false)}
+                  />
+                )}
+                {showCloud && backendStatus === 'ready' && (
+                  <PointCloud
+                    modelInfo={modelInfo}
+                    activeFloor={activeFloor}
+                    onLoadStart={() => setCloudLoading(true)}
+                    onLoaded={n    => { setCloudLoading(false); setCloudPoints(n) }}
+                  />
+                )}
+              </Suspense>
+
+              <OrbitControls
+                ref={controlsRef}
+                makeDefault
+                enableDamping
+                dampingFactor={0.08}
+                minDistance={1}
+                maxDistance={500}
+              />
+              <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
+                <GizmoViewport labelColor="white" axisHeadScale={1} />
+              </GizmoHelper>
+            </Canvas>
+          </div>
+
+          {/* Loading overlay */}
+          {anyLoading && (
+            <LoadingOverlay
+              label={loadingLabel}
+              progress={meshLoading ? meshProgress : null}
+            />
+          )}
+
+          {/* Processing banner */}
+          {backendStatus === 'processing' && (
+            <div className="processing-banner">
+              ⏳ Point cloud is being preprocessed — check back shortly
+            </div>
+          )}
+
+          {/* Corner metric */}
+          {modelInfo && (
+            <div className="corner-info">
+              {modelInfo.n_points?.toLocaleString()} pts &nbsp;·&nbsp; 1:100 sample
+            </div>
+          )}
+
+          {/* Floor plan panel (Matterport image) */}
+          {showFloorPlan && (
+            <FloorPlanPanel
+              floor={fpFloor}
+              setFloor={setFpFloor}
+            />
+          )}
+        </div>
+
+        {/* Phase 4: 2D Vector Floor Plan Viewer */}
+        {showFloorPlanViewer && (
+          <div className="fpv-panel">
+            <FloorPlanViewer
+              modelInfo={modelInfo}
+              onClose={() => setShowFloorPlanViewer(false)}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
