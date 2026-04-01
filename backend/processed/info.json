@@ -24,5 +24,11 @@
     -1.5130600929260307,
     1.0369399070739602,
     4.186939907073949
-  ]
+  ],
+  "wall_slices": {
+    "wall_slice_floor_0": 1599605,
+    "wall_slice_floor_1": 1308413,
+    "wall_slice_floor_2": 822713
+  },
+  "wall_slice_voxel_m": 0.05
 }

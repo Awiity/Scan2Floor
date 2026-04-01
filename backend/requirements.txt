@@ -2,3 +2,8 @@ fastapi
 uvicorn[standard]
 numpy
 aiofiles
+pandas
+scipy
+matplotlib
+open3d
+opencv-python

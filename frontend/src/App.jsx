@@ -1,96 +1,106 @@
-import { Suspense, useState, useEffect, useRef, useCallback } from 'react'
-import { Canvas }        from '@react-three/fiber'
-import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei'
-import Sidebar           from './components/Sidebar'
-import OBJModel          from './components/OBJModel'
-import PointCloud        from './components/PointCloud'
-import LoadingOverlay    from './components/LoadingOverlay'
-import FloorPlanPanel    from './components/FloorPlanPanel'
-import FloorPlanViewer   from './components/FloorPlanViewer'
+import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { Canvas } from "@react-three/fiber";
+import {
+  OrbitControls,
+  Grid,
+  GizmoHelper,
+  GizmoViewport,
+} from "@react-three/drei";
+import Sidebar from "./components/Sidebar";
+import OBJModel from "./components/OBJModel";
+import PointCloud from "./components/PointCloud";
+import LoadingOverlay from "./components/LoadingOverlay";
+import FloorPlanPanel from "./components/FloorPlanPanel";
+import FloorPlanViewer from "./components/FloorPlanViewer";
 
-const POLL_MS = 4000
+const POLL_MS = 4000;
 
 export default function App() {
   /* ---------- server status ---------- */
-  const [backendStatus, setBackendStatus] = useState('connecting') // connecting|ready|processing|error
-  const [modelInfo, setModelInfo]         = useState(null)
+  const [backendStatus, setBackendStatus] = useState("connecting"); // connecting|ready|processing|error
+  const [modelInfo, setModelInfo] = useState(null);
 
   /* ---------- layer visibility -------- */
-  const [showMesh,           setShowMesh]           = useState(false)
-  const [showCloud,          setShowCloud]           = useState(false)
-  const [showFloorPlan,      setShowFloorPlan]       = useState(false)
-  const [showFloorPlanViewer,setShowFloorPlanViewer] = useState(false)
-  const [fpFloor,            setFpFloor]             = useState(0)
-  const [activeFloor,        setActiveFloor]         = useState('all')
+  const [showMesh, setShowMesh] = useState(false);
+  const [showCloud, setShowCloud] = useState(false);
+  const [showFloorPlan, setShowFloorPlan] = useState(false);
+  const [showFloorPlanViewer, setShowFloorPlanViewer] = useState(false);
+  const [fpFloor, setFpFloor] = useState(0);
+  const [activeFloor, setActiveFloor] = useState("all");
 
   /* ---------- loading state ----------- */
-  const [meshLoading,  setMeshLoading]   = useState(false)
-  const [cloudLoading, setCloudLoading]  = useState(false)
-  const [meshProgress, setMeshProgress]  = useState(0)
-  const [cloudPoints,  setCloudPoints]   = useState(null)
+  const [meshLoading, setMeshLoading] = useState(false);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [meshProgress, setMeshProgress] = useState(0);
+  const [cloudPoints, setCloudPoints] = useState(null);
 
   /* ---------- camera ref -------------- */
-  const cameraRef = useRef()
-  const controlsRef = useRef()
+  const cameraRef = useRef();
+  const controlsRef = useRef();
 
   /* ---------- poll backend ------------ */
   useEffect(() => {
     const poll = async () => {
       try {
-        const r = await fetch('/api/status')
-        if (!r.ok) { setBackendStatus('error'); return; }
-        const d = await r.json()
-        setBackendStatus(d.status)
-        if (d.info) setModelInfo(d.info)
+        const r = await fetch("/api/status");
+        if (!r.ok) {
+          setBackendStatus("error");
+          return;
+        }
+        const d = await r.json();
+        setBackendStatus(d.status);
+        if (d.info) setModelInfo(d.info);
       } catch {
-        setBackendStatus('error')
+        setBackendStatus("error");
       }
-    }
-    poll()
-    const id = setInterval(poll, POLL_MS)
-    return () => clearInterval(id)
-  }, [])
+    };
+    poll();
+    const id = setInterval(poll, POLL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   /* ---------- camera presets ---------- */
-  const setView = useCallback((preset) => {
-    if (!controlsRef.current) return
-    const cam = controlsRef.current.object
-    const tgt = controlsRef.current.target
-    const bbox = modelInfo?.bbox
-    const cy = bbox ? (bbox.max[1] + bbox.min[1]) / 2 : 3
-    const r  = bbox ? Math.max(
-      bbox.max[0] - bbox.min[0],
-      bbox.max[2] - bbox.min[2],
-    ) * 0.7 : 30
+  const setView = useCallback(
+    (preset) => {
+      if (!controlsRef.current) return;
+      const cam = controlsRef.current.object;
+      const tgt = controlsRef.current.target;
+      const bbox = modelInfo?.bbox;
+      const cy = bbox ? (bbox.max[1] + bbox.min[1]) / 2 : 3;
+      const r = bbox
+        ? Math.max(bbox.max[0] - bbox.min[0], bbox.max[2] - bbox.min[2]) * 0.7
+        : 30;
 
-    switch (preset) {
-      case 'top':
-        cam.position.set(0, r * 2, 0.01)
-        tgt.set(0, cy, 0)
-        break
-      case '3d':
-        cam.position.set(r, r * 0.8, r)
-        tgt.set(0, cy, 0)
-        break
-      case 'front':
-        cam.position.set(0, cy, r * 1.5)
-        tgt.set(0, cy, 0)
-        break
-      case 'side':
-        cam.position.set(r * 1.5, cy, 0)
-        tgt.set(0, cy, 0)
-        break
-    }
-    cam.updateProjectionMatrix()
-    controlsRef.current.update()
-  }, [modelInfo])
+      switch (preset) {
+        case "top":
+          cam.position.set(0, r * 2, 0.01);
+          tgt.set(0, cy, 0);
+          break;
+        case "3d":
+          cam.position.set(r, r * 0.8, r);
+          tgt.set(0, cy, 0);
+          break;
+        case "front":
+          cam.position.set(0, cy, r * 1.5);
+          tgt.set(0, cy, 0);
+          break;
+        case "side":
+          cam.position.set(r * 1.5, cy, 0);
+          tgt.set(0, cy, 0);
+          break;
+      }
+      cam.updateProjectionMatrix();
+      controlsRef.current.update();
+    },
+    [modelInfo],
+  );
 
-  const anyLoading = meshLoading || cloudLoading
+  const anyLoading = meshLoading || cloudLoading;
   const loadingLabel = meshLoading
     ? `Loading OBJ mesh… ${meshProgress}%`
     : cloudLoading
-      ? 'Loading point cloud…'
-      : ''
+      ? "Loading point cloud…"
+      : "";
 
   return (
     <div className="app">
@@ -103,27 +113,33 @@ export default function App() {
         </a>
         <div className="topbar-spacer" />
         <div className="status-pill">
-          <div className={`status-dot ${backendStatus === 'ready' ? 'ready' : backendStatus === 'error' ? 'error' : 'loading'}`} />
-          {backendStatus === 'ready'       && 'Point cloud ready'}
-          {backendStatus === 'processing'  && 'Processing point cloud…'}
-          {backendStatus === 'connecting'  && 'Connecting…'}
-          {backendStatus === 'error'       && 'Backend offline'}
+          <div
+            className={`status-dot ${backendStatus === "ready" ? "ready" : backendStatus === "error" ? "error" : "loading"}`}
+          />
+          {backendStatus === "ready" && "Point cloud ready"}
+          {backendStatus === "processing" && "Processing point cloud…"}
+          {backendStatus === "connecting" && "Connecting…"}
+          {backendStatus === "error" && "Backend offline"}
         </div>
       </header>
 
       {/* ── Workspace ── */}
       <div className="workspace">
         <Sidebar
-          showMesh={showMesh}       setShowMesh={setShowMesh}
-          showCloud={showCloud}     setShowCloud={setShowCloud}
-          showFloorPlan={showFloorPlan} setShowFloorPlan={setShowFloorPlan}
+          showMesh={showMesh}
+          setShowMesh={setShowMesh}
+          showCloud={showCloud}
+          setShowCloud={setShowCloud}
+          showFloorPlan={showFloorPlan}
+          setShowFloorPlan={setShowFloorPlan}
           showFloorPlanViewer={showFloorPlanViewer}
           setShowFloorPlanViewer={setShowFloorPlanViewer}
           modelInfo={modelInfo}
           backendStatus={backendStatus}
           cloudPoints={cloudPoints}
           onCameraPreset={setView}
-          activeFloor={activeFloor} setActiveFloor={setActiveFloor}
+          activeFloor={activeFloor}
+          setActiveFloor={setActiveFloor}
         />
 
         <div className="viewport">
@@ -132,11 +148,17 @@ export default function App() {
             <Canvas
               camera={{ position: [30, 15, 30], fov: 50, near: 0.1, far: 2000 }}
               gl={{ antialias: true, localClippingEnabled: true }}
-              onCreated={({ camera }) => { cameraRef.current = camera }}
+              onCreated={({ camera }) => {
+                cameraRef.current = camera;
+              }}
             >
-              <color attach="background" args={['#070b18']} />
+              <color attach="background" args={["#070b18"]} />
               <ambientLight intensity={0.6} />
-              <directionalLight position={[20, 30, 10]} intensity={1} castShadow />
+              <directionalLight
+                position={[20, 30, 10]}
+                intensity={1}
+                castShadow
+              />
               <directionalLight position={[-20, 10, -10]} intensity={0.4} />
 
               <Grid
@@ -154,17 +176,23 @@ export default function App() {
                   <OBJModel
                     modelInfo={modelInfo}
                     activeFloor={activeFloor}
-                    onLoadStart={() => { setMeshLoading(true); setMeshProgress(0) }}
-                    onProgress={p  => setMeshProgress(p)}
-                    onLoaded={()   => setMeshLoading(false)}
+                    onLoadStart={() => {
+                      setMeshLoading(true);
+                      setMeshProgress(0);
+                    }}
+                    onProgress={(p) => setMeshProgress(p)}
+                    onLoaded={() => setMeshLoading(false)}
                   />
                 )}
-                {showCloud && backendStatus === 'ready' && (
+                {showCloud && backendStatus === "ready" && (
                   <PointCloud
                     modelInfo={modelInfo}
                     activeFloor={activeFloor}
                     onLoadStart={() => setCloudLoading(true)}
-                    onLoaded={n    => { setCloudLoading(false); setCloudPoints(n) }}
+                    onLoaded={(n) => {
+                      setCloudLoading(false);
+                      setCloudPoints(n);
+                    }}
                   />
                 )}
               </Suspense>
@@ -192,7 +220,7 @@ export default function App() {
           )}
 
           {/* Processing banner */}
-          {backendStatus === 'processing' && (
+          {backendStatus === "processing" && (
             <div className="processing-banner">
               ⏳ Point cloud is being preprocessed — check back shortly
             </div>
@@ -201,16 +229,20 @@ export default function App() {
           {/* Corner metric */}
           {modelInfo && (
             <div className="corner-info">
-              {modelInfo.n_points?.toLocaleString()} pts &nbsp;·&nbsp; 1:100 sample
+              {modelInfo.n_points?.toLocaleString()} pts &nbsp;·&nbsp;
+              {modelInfo.wall_slices_ready ? (
+                <span style={{ color: "#00c850" }}>✓ dense slices</span>
+              ) : modelInfo.preprocess_walls_running ? (
+                <span style={{ color: "#ffa000" }}>⏳ extracting…</span>
+              ) : (
+                <span style={{ color: "#ffa000" }}>⚠ 1:100 sparse</span>
+              )}
             </div>
           )}
 
           {/* Floor plan panel (Matterport image) */}
           {showFloorPlan && (
-            <FloorPlanPanel
-              floor={fpFloor}
-              setFloor={setFpFloor}
-            />
+            <FloorPlanPanel floor={fpFloor} setFloor={setFpFloor} />
           )}
         </div>
 
@@ -225,5 +257,5 @@ export default function App() {
         )}
       </div>
     </div>
-  )
+  );
 }
