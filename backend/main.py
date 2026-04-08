@@ -14,6 +14,7 @@ from pydantic import BaseModel
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from pipeline.dxf_export import export_floor_dxf
 from pipeline.opening_detection import detect_openings_for_floor
+from pipeline.room_detection import detect_rooms_for_floor
 from pipeline.wall_detection import detect_walls_for_floor
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -238,6 +239,7 @@ class WallDetectionParams(BaseModel):
     # Phase 5 opening params (passed through for auto-run)
     wall_thickness: float = 0.25  # metres — 'tight' or 'loose'
     detect_openings: bool = True  # auto-run opening detection after walls
+    detect_rooms: bool = True     # auto-run room detection after openings
 
 
 @app.post("/api/walls")
@@ -256,6 +258,7 @@ def generate_walls(params: WallDetectionParams):
             "lines_count": len(lines),
             "n_doors": 0,
             "n_windows": 0,
+            "n_rooms": 0,
         }
 
         if params.detect_openings:
@@ -263,7 +266,11 @@ def generate_walls(params: WallDetectionParams):
             result["n_doors"] = op_result["n_doors"]
             result["n_windows"] = op_result["n_windows"]
 
-        # Export DXF + SVG (includes openings if they were detected)
+        if params.detect_rooms:
+            rm_result = detect_rooms_for_floor(params.floor_idx, cfg)
+            result["n_rooms"] = rm_result["n_rooms"]
+
+        # Export DXF + SVG (includes openings + rooms if they were detected)
         export_floor_dxf(params.floor_idx, PROCESSED_DIR)
 
         return result
@@ -345,6 +352,45 @@ def get_openings(floor_idx: int):
     path = os.path.join(PROCESSED_DIR, f"openings_floor_{floor_idx}.json")
     if not os.path.exists(path):
         return JSONResponse({"status": "not_processed", "openings": []})
+    with open(path) as f:
+        return json.load(f)
+
+
+# ── Phase M3: Room Detection ──────────────────────────────────────────────────
+
+
+class RoomDetectionParams(BaseModel):
+    floor_idx: int
+    wall_thickness_px: int = 4      # drawn wall half-width in pixels
+    close_kernel_px: int = 7        # morphological close kernel (must be odd)
+    min_seg_m: float = 0.4          # ignore wall segments shorter than this
+    min_room_m2: float = 0.8        # drop regions smaller than this
+    max_room_m2: float = 800.0      # drop regions larger than this
+    save_debug: bool = True
+
+
+@app.post("/api/rooms")
+def generate_rooms(params: RoomDetectionParams):
+    """Run room boundary detection for a floor (walls must already exist)."""
+    try:
+        result = detect_rooms_for_floor(params.floor_idx, params.model_dump())
+        export_floor_dxf(params.floor_idx, PROCESSED_DIR)
+        return {
+            "status": "success",
+            "n_rooms": result["n_rooms"],
+            "rooms": result["rooms"],
+        }
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/rooms/{floor_idx}")
+def get_rooms(floor_idx: int):
+    path = os.path.join(PROCESSED_DIR, f"rooms_floor_{floor_idx}.json")
+    if not os.path.exists(path):
+        return JSONResponse({"status": "not_processed", "rooms": []})
     with open(path) as f:
         return json.load(f)
 

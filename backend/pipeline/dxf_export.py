@@ -22,6 +22,7 @@ LAYER_DOOR   = "A-DOOR"
 LAYER_WINDOW = "A-WINDOW"
 LAYER_TEXT   = "A-TEXT"
 LAYER_GRID   = "A-GRID"
+LAYER_ROOM   = "A-ROOM"
 
 
 # ── DXF helpers ──────────────────────────────────────────────────────────────
@@ -105,6 +106,7 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
     """
     wall_path    = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
     opening_path = os.path.join(processed_dir, f"openings_floor_{floor_idx}.json")
+    room_path    = os.path.join(processed_dir, f"rooms_floor_{floor_idx}.json")
 
     if not os.path.exists(wall_path):
         raise FileNotFoundError(f"Wall data not found: {wall_path}")
@@ -122,6 +124,12 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
             op_data = json.load(f)
         openings = op_data.get("openings", [])
 
+    rooms = []
+    if os.path.exists(room_path):
+        with open(room_path) as f:
+            room_data = json.load(f)
+        rooms = room_data.get("rooms", [])
+
     # ── DXF document ─────────────────────────────────────────────────────────
     doc = ezdxf.new(dxfversion="R2010")
     doc.header["$INSUNITS"]   = 6   # metres
@@ -135,6 +143,7 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
     doc.layers.add(LAYER_WINDOW, color=4,  lineweight=25)   # cyan,  0.25 mm
     doc.layers.add(LAYER_TEXT,   color=2)                   # yellow
     doc.layers.add(LAYER_GRID,   color=8,  lineweight=13)   # grey, 0.13 mm
+    doc.layers.add(LAYER_ROOM,   color=6,  lineweight=13)   # magenta, dashed
 
     # Wall segments
     for seg in lines:
@@ -158,7 +167,25 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
         except Exception:
             pass
 
-    # Title
+    # ── Rooms (bounding boxes + area labels) ─────────────────────────────────
+    for room in rooms:
+        bb = room["bbox"]
+        rx1, rz1 = bb["x_min"], bb["z_min"]
+        rx2, rz2 = bb["x_max"], bb["z_max"]
+        room_dxf = {"layer": LAYER_ROOM}
+        # Draw closed bounding-box rectangle
+        msp.add_lwpolyline(
+            [(rx1, rz1), (rx2, rz1), (rx2, rz2), (rx1, rz2)],
+            close=True,
+            dxfattribs=room_dxf,
+        )
+        # Centroid label
+        cx, cz = room["centroid_x"], room["centroid_z"]
+        label = f"R{room['id']}  {room['area_m2']:.1f} m\u00b2"
+        msp.add_text(label, dxfattribs={"layer": LAYER_TEXT, "height": 0.25}) \
+           .set_placement((cx, cz), align=TextEntityAlignment.MIDDLE_CENTER)
+
+    # ── Title ─────────────────────────────────────────────────────────────────
     n_doors   = len(doors)
     n_windows = len(windows)
     title = (
@@ -174,16 +201,17 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
 
     # Companion SVG
     svg_path = os.path.join(processed_dir, f"floor_{floor_idx}.svg")
-    _write_svg(svg_path, lines, openings)
+    _write_svg(svg_path, lines, openings, rooms)
 
     return dxf_path
 
 
 # ── SVG preview ───────────────────────────────────────────────────────────────
 
-def _write_svg(path: str, lines: list, openings: list = None):
-    """Write an SVG preview with walls (cyan), doors (green), windows (magenta)."""
+def _write_svg(path: str, lines: list, openings: list = None, rooms: list = None):
+    """Write an SVG preview with rooms (semi-transparent), walls (cyan), doors (green), windows (magenta)."""
     openings = openings or []
+    rooms = rooms or []
 
     if not lines:
         with open(path, "w") as f:
@@ -206,6 +234,35 @@ def _write_svg(path: str, lines: list, openings: list = None):
     def ty(y): return SVG_H - pad - (y - min_y) * scale
 
     parts = []
+
+    # ── Rooms (semi-transparent fills, rendered first / behind walls) ───────
+    room_colours = [
+        "#7c3aed", "#2563eb", "#059669", "#b45309",
+        "#db2777", "#0891b2", "#65a30d", "#9333ea",
+        "#0284c7", "#16a34a", "#d97706", "#dc2626",
+    ]
+    for room in rooms:
+        bb = room["bbox"]
+        rx1_s = tx(bb["x_min"])
+        rz1_s = ty(bb["z_max"])   # ty is Y-flipped: z_max → top in SVG
+        rw_s  = (bb["x_max"] - bb["x_min"]) * scale
+        rh_s  = (bb["z_max"] - bb["z_min"]) * scale
+        col   = room_colours[(room["id"] - 1) % len(room_colours)]
+        cx_s  = tx(room["centroid_x"])
+        cz_s  = ty(room["centroid_z"])
+        parts.append(
+            f'<rect x="{rx1_s:.1f}" y="{rz1_s:.1f}" '
+            f'width="{rw_s:.1f}" height="{rh_s:.1f}" '
+            f'fill="{col}" fill-opacity="0.18" '
+            f'stroke="{col}" stroke-width="0.8" stroke-dasharray="5,3"/>'
+        )
+        parts.append(
+            f'<text x="{cx_s:.1f}" y="{cz_s:.1f}" '
+            f'text-anchor="middle" dominant-baseline="middle" '
+            f'fill="{col}" font-size="11" font-family="sans-serif" '
+            f'font-weight="bold">'
+            f'R{room["id"]} {room["area_m2"]:.0f}m\u00b2</text>'
+        )
 
     # ── Walls ──────────────────────────────────────────────────────────────
     for seg in lines:

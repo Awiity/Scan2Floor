@@ -1,0 +1,127 @@
+{
+  "floor_idx": 0,
+  "grid_size": 0.05,
+  "n_rooms": 10,
+  "rooms": [
+    {
+      "id": 1,
+      "area_m2": 18.46,
+      "bbox": {
+        "x_min": 7.175,
+        "z_min": 1.675,
+        "x_max": 11.375,
+        "z_max": 6.625
+      },
+      "centroid_x": 9.372,
+      "centroid_z": 4.2342
+    },
+    {
+      "id": 2,
+      "area_m2": 8.798,
+      "bbox": {
+        "x_min": -8.975,
+        "z_min": 8.325,
+        "x_max": -3.225,
+        "z_max": 10.025
+      },
+      "centroid_x": -6.1411,
+      "centroid_z": 9.2059
+    },
+    {
+      "id": 3,
+      "area_m2": 7.77,
+      "bbox": {
+        "x_min": -16.225,
+        "z_min": 7.575,
+        "x_max": -12.025,
+        "z_max": 9.425
+      },
+      "centroid_x": -14.15,
+      "centroid_z": 8.475
+    },
+    {
+      "id": 4,
+      "area_m2": 6.9,
+      "bbox": {
+        "x_min": -16.325,
+        "z_min": 14.125,
+        "x_max": -10.975,
+        "z_max": 15.475
+      },
+      "centroid_x": -13.5988,
+      "centroid_z": 14.7478
+    },
+    {
+      "id": 5,
+      "area_m2": 6.195,
+      "bbox": {
+        "x_min": -4.175,
+        "z_min": 12.925,
+        "x_max": -0.625,
+        "z_max": 15.525
+      },
+      "centroid_x": -2.5463,
+      "centroid_z": 14.1971
+    },
+    {
+      "id": 6,
+      "area_m2": 6.008,
+      "bbox": {
+        "x_min": -16.275,
+        "z_min": 9.975,
+        "x_max": -11.775,
+        "z_max": 11.325
+      },
+      "centroid_x": -14.0704,
+      "centroid_z": 10.6311
+    },
+    {
+      "id": 7,
+      "area_m2": 4.115,
+      "bbox": {
+        "x_min": -9.275,
+        "z_min": 13.725,
+        "x_max": -6.825,
+        "z_max": 15.425
+      },
+      "centroid_x": -8.0893,
+      "centroid_z": 14.5529
+    },
+    {
+      "id": 8,
+      "area_m2": 3.833,
+      "bbox": {
+        "x_min": 11.875,
+        "z_min": -0.125,
+        "x_max": 15.525,
+        "z_max": 0.925
+      },
+      "centroid_x": 13.675,
+      "centroid_z": 0.375
+    },
+    {
+      "id": 9,
+      "area_m2": 2.675,
+      "bbox": {
+        "x_min": -9.725,
+        "z_min": -19.925,
+        "x_max": -8.475,
+        "z_max": -17.675
+      },
+      "centroid_x": -9.1537,
+      "centroid_z": -18.7917
+    },
+    {
+      "id": 10,
+      "area_m2": 1.103,
+      "bbox": {
+        "x_min": -5.675,
+        "z_min": 11.175,
+        "x_max": -4.625,
+        "z_max": 12.225
+      },
+      "centroid_x": -5.175,
+      "centroid_z": 11.675
+    }
+  ]
+}

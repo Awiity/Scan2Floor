@@ -1,0 +1,79 @@
+{
+  "floor_idx": 1,
+  "grid_size": 0.05,
+  "n_rooms": 6,
+  "rooms": [
+    {
+      "id": 1,
+      "area_m2": 41.138,
+      "bbox": {
+        "x_min": -10.475,
+        "z_min": 2.025,
+        "x_max": -4.925,
+        "z_max": 12.175
+      },
+      "centroid_x": -7.1806,
+      "centroid_z": 7.4267
+    },
+    {
+      "id": 2,
+      "area_m2": 16.288,
+      "bbox": {
+        "x_min": -10.475,
+        "z_min": 12.625,
+        "x_max": -2.875,
+        "z_max": 15.475
+      },
+      "centroid_x": -7.0161,
+      "centroid_z": 14.0469
+    },
+    {
+      "id": 3,
+      "area_m2": 12.935,
+      "bbox": {
+        "x_min": -16.175,
+        "z_min": -19.475,
+        "x_max": -8.625,
+        "z_max": -17.725
+      },
+      "centroid_x": -12.4887,
+      "centroid_z": -18.6367
+    },
+    {
+      "id": 4,
+      "area_m2": 5.71,
+      "bbox": {
+        "x_min": -4.225,
+        "z_min": -3.125,
+        "x_max": -0.425,
+        "z_max": -1.475
+      },
+      "centroid_x": -2.4552,
+      "centroid_z": -2.2663
+    },
+    {
+      "id": 5,
+      "area_m2": 1.785,
+      "bbox": {
+        "x_min": -10.475,
+        "z_min": 0.675,
+        "x_max": -9.375,
+        "z_max": 2.325
+      },
+      "centroid_x": -9.9588,
+      "centroid_z": 1.4662
+    },
+    {
+      "id": 6,
+      "area_m2": 1.32,
+      "bbox": {
+        "x_min": -1.525,
+        "z_min": -0.925,
+        "x_max": -0.425,
+        "z_max": 0.275
+      },
+      "centroid_x": -1.0,
+      "centroid_z": -0.35
+    }
+  ]
+}
