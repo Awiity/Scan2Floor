@@ -127,11 +127,14 @@ def merge_collinear_segments(
     Only merges when ALL three conditions hold:
       • angle difference  < angle_tol_deg
       • perpendicular offset of one segment's midpoint from the other < max_perp_px
-      • endpoint gap  ≤ gap_px
+      • 1D projected gap along the shared axis ≤ gap_px  (negative = overlap)
 
-    This conservative check avoids accidentally merging parallel walls that
-    belong to different rooms (the bug that was collapsing rooms in earlier
-    iterations).
+    The gap is measured by projecting both segments onto a shared 1D axis
+    (segment i's direction) and checking the distance between the two
+    projected spans.  This correctly handles the case where one segment is
+    entirely contained within another — their 2D endpoint distances can be
+    large even though there is zero real gap — which the old min-Euclidean
+    check failed to detect.
     """
     if not lines_px:
         return lines_px
@@ -173,13 +176,25 @@ def merge_collinear_segments(
                 if perp > max_perp_px:
                     continue
 
-                # --- gap check ---
-                min_gap = min(
-                    ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
-                    for a in [(x1, y1), (x2, y2)]
-                    for b in [(x3, y3), (x4, y4)]
-                )
-                if min_gap > gap_px:
+                # --- gap check (1D projection along segment i's axis) ---
+                # Project all four endpoints onto the unit direction of
+                # segment i.  The gap between the two 1D spans is negative
+                # when the segments overlap, zero when they touch, and
+                # positive when there is a true gap.  This handles the case
+                # where one segment is entirely inside the other (endpoints
+                # are far apart in 2D but the real gap is zero).
+                ux, uy = (x2 - x1) / seg_len, (y2 - y1) / seg_len
+                proj_i0 = x1 * ux + y1 * uy
+                proj_i1 = x2 * ux + y2 * uy
+                proj_j0 = x3 * ux + y3 * uy
+                proj_j1 = x4 * ux + y4 * uy
+
+                lo_i, hi_i = min(proj_i0, proj_i1), max(proj_i0, proj_i1)
+                lo_j, hi_j = min(proj_j0, proj_j1), max(proj_j0, proj_j1)
+
+                # Gap between projected spans (negative = overlap)
+                gap_1d = max(lo_j - hi_i, lo_i - hi_j)
+                if gap_1d > gap_px:
                     continue
 
                 group.extend([(x3, y3), (x4, y4)])

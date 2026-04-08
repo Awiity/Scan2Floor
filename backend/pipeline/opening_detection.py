@@ -156,8 +156,14 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
 
     # ── Zone index boundaries ────────────────────────────────────────────────
     door_top = min(n_v, int(door_h_thr / bin_m))
-    sill_bot = 0
-    sill_top = min(n_v, int(0.65 / bin_m))  # sill region  0 – 0.65 m
+    # Skip the bottom 15 cm when testing for door emptiness.
+    # Real-world scans frequently contain floor-level noise, door thresholds,
+    # and metallic transition strips.  A single rogue point at 0.05 m would
+    # otherwise block the entire opening from being classified as a door.
+    door_floor_ignore_m = 0.15  # metres to ignore at the very bottom
+    door_chk_bot = min(n_v, int(door_floor_ignore_m / bin_m))  # e.g. 3 cells
+    sill_bot = door_chk_bot  # sill check also starts above the noisy zone
+    sill_top = min(n_v, int(0.65 / bin_m))  # sill region  0.15 – 0.65 m
     win_bot = int(0.65 / bin_m)
     win_top = min(n_v, int(2.05 / bin_m))  # window band  0.65 – 2.05 m
 
@@ -170,7 +176,8 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
     for u in range(n_u):
         col = occupied[:, u]
 
-        door_empty = not np.any(col[:door_top])
+        # Ignore the bottom door_chk_bot cells (threshold / floor noise)
+        door_empty = not np.any(col[door_chk_bot:door_top])
         has_sill = np.any(col[sill_bot:sill_top])
         win_empty = not np.any(col[win_bot:win_top])
 
