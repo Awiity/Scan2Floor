@@ -39,6 +39,7 @@ Usage
     python -m pipeline.preprocess_walls
 """
 
+import argparse
 import json
 import sys
 import time
@@ -56,7 +57,7 @@ _THIS_FILE = Path(__file__).resolve()
 BASE_DIR = _THIS_FILE.parent.parent  # …/scan2floor/backend
 PROCESSED_DIR = BASE_DIR / "processed"
 DATA_DIR = BASE_DIR.parent.parent / "data" / "matterpak"
-XYZ_PATH = DATA_DIR / "cloud.xyz"
+_DEFAULT_XYZ_PATH = DATA_DIR / "cloud.xyz"
 INFO_PATH = PROCESSED_DIR / "info.json"
 
 # ── Tuning constants ─────────────────────────────────────────────────────────
@@ -100,6 +101,18 @@ def _voxels_to_pts(vx: np.ndarray, vy: np.ndarray, vz: np.ndarray) -> np.ndarray
 
 
 def main() -> None:
+    # ── CLI arguments ─────────────────────────────────────────────────────────
+    parser = argparse.ArgumentParser(description="Full-density wall slice extractor")
+    parser.add_argument(
+        "--xyz",
+        metavar="PATH",
+        default=None,
+        help="Path to the .xyz point cloud file (overrides default location)",
+    )
+    args = parser.parse_args()
+
+    XYZ_PATH = Path(args.xyz) if args.xyz else _DEFAULT_XYZ_PATH
+
     t0 = time.time()
 
     # ── Validate inputs ───────────────────────────────────────────────────────

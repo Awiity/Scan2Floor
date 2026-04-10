@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { Suspense, useState, useEffect, useRef } from "react";
 import { Canvas } from "@react-three/fiber";
 import {
   OrbitControls,
@@ -35,7 +35,6 @@ export default function App() {
   const [cloudPoints, setCloudPoints] = useState(null);
 
   /* ---------- camera ref -------------- */
-  const cameraRef = useRef();
   const controlsRef = useRef();
 
   /* ---------- poll backend ------------ */
@@ -59,41 +58,7 @@ export default function App() {
     return () => clearInterval(id);
   }, []);
 
-  /* ---------- camera presets ---------- */
-  const setView = useCallback(
-    (preset) => {
-      if (!controlsRef.current) return;
-      const cam = controlsRef.current.object;
-      const tgt = controlsRef.current.target;
-      const bbox = modelInfo?.bbox;
-      const cy = bbox ? (bbox.max[1] + bbox.min[1]) / 2 : 3;
-      const r = bbox
-        ? Math.max(bbox.max[0] - bbox.min[0], bbox.max[2] - bbox.min[2]) * 0.7
-        : 30;
 
-      switch (preset) {
-        case "top":
-          cam.position.set(0, r * 2, 0.01);
-          tgt.set(0, cy, 0);
-          break;
-        case "3d":
-          cam.position.set(r, r * 0.8, r);
-          tgt.set(0, cy, 0);
-          break;
-        case "front":
-          cam.position.set(0, cy, r * 1.5);
-          tgt.set(0, cy, 0);
-          break;
-        case "side":
-          cam.position.set(r * 1.5, cy, 0);
-          tgt.set(0, cy, 0);
-          break;
-      }
-      cam.updateProjectionMatrix();
-      controlsRef.current.update();
-    },
-    [modelInfo],
-  );
 
   const anyLoading = meshLoading || cloudLoading;
   const loadingLabel = meshLoading
@@ -137,7 +102,6 @@ export default function App() {
           modelInfo={modelInfo}
           backendStatus={backendStatus}
           cloudPoints={cloudPoints}
-          onCameraPreset={setView}
           activeFloor={activeFloor}
           setActiveFloor={setActiveFloor}
         />
@@ -148,9 +112,6 @@ export default function App() {
             <Canvas
               camera={{ position: [30, 15, 30], fov: 50, near: 0.1, far: 2000 }}
               gl={{ antialias: true, localClippingEnabled: true }}
-              onCreated={({ camera }) => {
-                cameraRef.current = camera;
-              }}
             >
               <color attach="background" args={["#070b18"]} />
               <ambientLight intensity={0.6} />

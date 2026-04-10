@@ -1,127 +1,211 @@
 {
   "floor_idx": 0,
-  "grid_size": 0.05,
-  "n_rooms": 10,
+  "grid_size": 0.02,
+  "n_rooms": 17,
   "rooms": [
     {
       "id": 1,
-      "area_m2": 18.46,
+      "area_m2": 34.206,
       "bbox": {
-        "x_min": 7.175,
-        "z_min": 1.675,
-        "x_max": 11.375,
-        "z_max": 6.625
+        "x_min": -16.285,
+        "z_min": 6.715,
+        "x_max": -11.365,
+        "z_max": 14.335
       },
-      "centroid_x": 9.372,
-      "centroid_z": 4.2342
+      "centroid_x": -13.8036,
+      "centroid_z": 10.6001
     },
     {
       "id": 2,
-      "area_m2": 8.798,
+      "area_m2": 24.186,
       "bbox": {
-        "x_min": -8.975,
-        "z_min": 8.325,
-        "x_max": -3.225,
-        "z_max": 10.025
+        "x_min": -4.685,
+        "z_min": -16.885,
+        "x_max": -1.425,
+        "z_max": -8.265
       },
-      "centroid_x": -6.1411,
-      "centroid_z": 9.2059
+      "centroid_x": -3.0306,
+      "centroid_z": -12.3133
     },
     {
       "id": 3,
-      "area_m2": 7.77,
+      "area_m2": 22.714,
       "bbox": {
-        "x_min": -16.225,
-        "z_min": 7.575,
-        "x_max": -12.025,
-        "z_max": 9.425
+        "x_min": -10.105,
+        "z_min": -20.285,
+        "x_max": -3.645,
+        "z_max": -13.305
       },
-      "centroid_x": -14.15,
-      "centroid_z": 8.475
+      "centroid_x": -7.2942,
+      "centroid_z": -17.5002
     },
     {
       "id": 4,
-      "area_m2": 6.9,
+      "area_m2": 20.578,
       "bbox": {
-        "x_min": -16.325,
-        "z_min": 14.125,
-        "x_max": -10.975,
-        "z_max": 15.475
+        "x_min": -15.285,
+        "z_min": -16.705,
+        "x_max": -11.765,
+        "z_max": -10.745
       },
-      "centroid_x": -13.5988,
-      "centroid_z": 14.7478
+      "centroid_x": -13.5332,
+      "centroid_z": -13.728
     },
     {
       "id": 5,
-      "area_m2": 6.195,
+      "area_m2": 17.553,
       "bbox": {
-        "x_min": -4.175,
-        "z_min": 12.925,
-        "x_max": -0.625,
-        "z_max": 15.525
+        "x_min": -9.885,
+        "z_min": -12.845,
+        "x_max": -5.125,
+        "z_max": -8.905
       },
-      "centroid_x": -2.5463,
-      "centroid_z": 14.1971
+      "centroid_x": -7.4971,
+      "centroid_z": -10.8353
     },
     {
       "id": 6,
-      "area_m2": 6.008,
+      "area_m2": 8.534,
       "bbox": {
-        "x_min": -16.275,
-        "z_min": 9.975,
-        "x_max": -11.775,
-        "z_max": 11.325
+        "x_min": -16.505,
+        "z_min": -19.605,
+        "x_max": -10.545,
+        "z_max": -17.665
       },
-      "centroid_x": -14.0704,
-      "centroid_z": 10.6311
+      "centroid_x": -13.3472,
+      "centroid_z": -18.4605
     },
     {
       "id": 7,
-      "area_m2": 4.115,
+      "area_m2": 6.81,
       "bbox": {
-        "x_min": -9.275,
-        "z_min": 13.725,
-        "x_max": -6.825,
-        "z_max": 15.425
+        "x_min": -26.445,
+        "z_min": 9.415,
+        "x_max": -20.705,
+        "z_max": 11.995
       },
-      "centroid_x": -8.0893,
-      "centroid_z": 14.5529
+      "centroid_x": -24.1161,
+      "centroid_z": 10.5347
     },
     {
       "id": 8,
-      "area_m2": 3.833,
+      "area_m2": 3.192,
       "bbox": {
-        "x_min": 11.875,
-        "z_min": -0.125,
-        "x_max": 15.525,
-        "z_max": 0.925
+        "x_min": -16.685,
+        "z_min": 14.795,
+        "x_max": -11.365,
+        "z_max": 15.395
       },
-      "centroid_x": 13.675,
-      "centroid_z": 0.375
+      "centroid_x": -14.035,
+      "centroid_z": 15.105
     },
     {
       "id": 9,
-      "area_m2": 2.675,
+      "area_m2": 1.729,
       "bbox": {
-        "x_min": -9.725,
-        "z_min": -19.925,
-        "x_max": -8.475,
-        "z_max": -17.675
+        "x_min": -17.165,
+        "z_min": 7.835,
+        "x_max": -16.405,
+        "z_max": 10.215
       },
-      "centroid_x": -9.1537,
-      "centroid_z": -18.7917
+      "centroid_x": -16.7895,
+      "centroid_z": 9.0579
     },
     {
       "id": 10,
-      "area_m2": 1.103,
+      "area_m2": 1.532,
       "bbox": {
-        "x_min": -5.675,
-        "z_min": 11.175,
-        "x_max": -4.625,
-        "z_max": 12.225
+        "x_min": -28.005,
+        "z_min": -20.225,
+        "x_max": -26.965,
+        "z_max": -18.465
       },
-      "centroid_x": -5.175,
-      "centroid_z": 11.675
+      "centroid_x": -27.557,
+      "centroid_z": -19.2637
+    },
+    {
+      "id": 11,
+      "area_m2": 1.477,
+      "bbox": {
+        "x_min": -18.125,
+        "z_min": -9.785,
+        "x_max": -17.425,
+        "z_max": -7.445
+      },
+      "centroid_x": -17.7767,
+      "centroid_z": -8.609
+    },
+    {
+      "id": 12,
+      "area_m2": 1.258,
+      "bbox": {
+        "x_min": -6.885,
+        "z_min": -17.025,
+        "x_max": -6.065,
+        "z_max": -15.365
+      },
+      "centroid_x": -6.5103,
+      "centroid_z": -16.1363
+    },
+    {
+      "id": 13,
+      "area_m2": 1.252,
+      "bbox": {
+        "x_min": 10.635,
+        "z_min": -6.965,
+        "x_max": 11.255,
+        "z_max": -4.945
+      },
+      "centroid_x": 10.935,
+      "centroid_z": -5.945
+    },
+    {
+      "id": 14,
+      "area_m2": 1.2,
+      "bbox": {
+        "x_min": -7.385,
+        "z_min": -7.225,
+        "x_max": -6.785,
+        "z_max": -5.225
+      },
+      "centroid_x": -7.095,
+      "centroid_z": -6.215
+    },
+    {
+      "id": 15,
+      "area_m2": 0.869,
+      "bbox": {
+        "x_min": 9.315,
+        "z_min": -6.965,
+        "x_max": 10.175,
+        "z_max": -5.905
+      },
+      "centroid_x": 9.7217,
+      "centroid_z": -6.4478
+    },
+    {
+      "id": 16,
+      "area_m2": 0.846,
+      "bbox": {
+        "x_min": -6.925,
+        "z_min": -14.785,
+        "x_max": -6.145,
+        "z_max": -13.665
+      },
+      "centroid_x": -6.5537,
+      "centroid_z": -14.2248
+    },
+    {
+      "id": 17,
+      "area_m2": 0.824,
+      "bbox": {
+        "x_min": -26.045,
+        "z_min": -5.645,
+        "x_max": -24.725,
+        "z_max": -5.005
+      },
+      "centroid_x": -25.4099,
+      "centroid_z": -5.3217
     }
   ]
 }

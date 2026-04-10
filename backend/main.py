@@ -15,14 +15,38 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from pipeline.dxf_export import export_floor_dxf
 from pipeline.opening_detection import detect_openings_for_floor
 from pipeline.room_detection import detect_rooms_for_floor
-from pipeline.wall_detection import detect_walls_for_floor
+from pipeline.wall_detection_c2b import detect_walls_c2b_for_floor
+from pipeline.floor_from_c2b import update_floor_levels_from_c2b
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROCESSED_DIR = os.path.join(BASE_DIR, "processed")
 MATTERPAK_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "data", "matterpak"))
-XYZ_PATH = os.path.abspath(
+_DEFAULT_XYZ_PATH = os.path.abspath(
     os.path.join(BASE_DIR, "..", "..", "data", "matterpak", "cloud.xyz")
 )
+# Cloud2BIM output directory (pre-computed from cloud.xyz)
+_C2B_OUTPUT_DIR = os.path.abspath(
+    os.path.join(BASE_DIR, "..", "..", "Cloud2BIM-1.03", "output_xyz")
+)
+_XYZ_CONFIG_PATH = os.path.join(BASE_DIR, "processed", "xyz_path.json")
+
+
+def _get_xyz_path() -> str:
+    """Return the currently configured XYZ path (persisted or default)."""
+    if os.path.exists(_XYZ_CONFIG_PATH):
+        try:
+            with open(_XYZ_CONFIG_PATH) as fh:
+                return json.load(fh).get("xyz_path", _DEFAULT_XYZ_PATH)
+        except Exception:
+            pass
+    return _DEFAULT_XYZ_PATH
+
+
+def _set_xyz_path(path: str) -> None:
+    """Persist a new XYZ path to disk."""
+    os.makedirs(PROCESSED_DIR, exist_ok=True)
+    with open(_XYZ_CONFIG_PATH, "w") as fh:
+        json.dump({"xyz_path": path}, fh, indent=2)
 
 # ── Background preprocess-walls job state ─────────────────────────────────────
 _preprocess_lock = threading.Lock()
@@ -45,6 +69,30 @@ app.add_middleware(
 )
 
 app.mount("/model", StaticFiles(directory=MATTERPAK_DIR), name="model")
+
+
+# ── XYZ Path Configuration ──────────────────────────────────────────────────
+
+
+class XYZPathPayload(BaseModel):
+    xyz_path: str
+
+
+@app.get("/api/xyz-path")
+def get_xyz_path():
+    """Return the currently configured .xyz file path."""
+    path = _get_xyz_path()
+    return {"xyz_path": path, "exists": os.path.isfile(path)}
+
+
+@app.post("/api/xyz-path")
+def set_xyz_path(payload: XYZPathPayload):
+    """Persist a new .xyz file path chosen by the user."""
+    p = payload.xyz_path.strip()
+    if not p.lower().endswith(".xyz"):
+        raise HTTPException(status_code=400, detail="Path must point to a .xyz file.")
+    _set_xyz_path(p)
+    return {"status": "ok", "xyz_path": p, "exists": os.path.isfile(p)}
 
 
 # ── Status / Point Cloud ─────────────────────────────────────────────────────
@@ -102,7 +150,7 @@ def info():
 # ── Preprocess Walls (full-density slice extractor) ──────────────────────────
 
 
-def _run_preprocess_walls_bg() -> None:
+def _run_preprocess_walls_bg(xyz_path: str) -> None:
     """
     Background thread target — runs preprocess_walls.py and updates the global
     _preprocess_status dict so the API can report progress.
@@ -116,14 +164,14 @@ def _run_preprocess_walls_bg() -> None:
                 "error": None,
                 "started_at": time.time(),
                 "finished_at": None,
-                "log": ["Starting preprocess_walls.py …"],
+                "log": [f"Starting preprocess_walls.py with {xyz_path} …"],
             }
         )
 
     script = os.path.join(BASE_DIR, "pipeline", "preprocess_walls.py")
     try:
         proc = subprocess.Popen(
-            [sys.executable, script],
+            [sys.executable, script, "--xyz", xyz_path],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -163,14 +211,15 @@ def _run_preprocess_walls_bg() -> None:
 def preprocess_walls_start():
     """
     Kick off the full-density wall-slice extraction in the background.
-    Streams cloud.xyz → wall_slice_floor_<N>.npy  (one per floor).
+    Streams the configured .xyz file → wall_slice_floor_<N>.npy (one per floor).
     Expected runtime: 3–8 minutes.
     Returns immediately with job status.
     """
-    if not os.path.exists(XYZ_PATH):
+    xyz_path = _get_xyz_path()
+    if not os.path.exists(xyz_path):
         raise HTTPException(
             status_code=404,
-            detail=f"cloud.xyz not found at {XYZ_PATH}",
+            detail=f".xyz file not found at {xyz_path}. Set it via POST /api/xyz-path first.",
         )
 
     with _preprocess_lock:
@@ -182,11 +231,14 @@ def preprocess_walls_start():
                 }
             )
 
-    thread = threading.Thread(target=_run_preprocess_walls_bg, daemon=True)
+    thread = threading.Thread(
+        target=_run_preprocess_walls_bg, args=(xyz_path,), daemon=True
+    )
     thread.start()
     return JSONResponse(
         {
             "status": "started",
+            "xyz_path": xyz_path,
             "message": "Wall-slice preprocessing started in the background. "
             "Poll /api/preprocess-walls/status for progress.",
         }
@@ -225,60 +277,22 @@ def preprocess_walls_status():
 # ── Phase 4: Wall Detection ───────────────────────────────────────────────────
 
 
-class WallDetectionParams(BaseModel):
+
+class C2BWallParams(BaseModel):
+    """Parameters for the Cloud2BIM-style wall detector."""
     floor_idx: int
-    grid_size: float = 0.05
+    grid_size: float = 0.02          # finer grid = better accuracy, more RAM
     snap_to_axis: bool = True
-    min_wall_m: float = 0.80  # minimum wall segment length in metres
-    hough_threshold: int = 40  # minimum Hough vote count
-    max_gap_m: float = 0.25  # maximum gap to bridge in metres
-    car_filter: bool = True  # vertical-extent car/furniture filter
-    car_top_m: float = 1.55  # height above floor considered "above cars"
-    ceiling_cap_m: float = 2.05  # mid-zone upper cap (below parking ceiling)
-    save_debug: bool = True  # save per-floor debug PNGs to processed/
-    # Phase 5 opening params (passed through for auto-run)
-    wall_thickness: float = 0.25  # metres — 'tight' or 'loose'
-    detect_openings: bool = True  # auto-run opening detection after walls
-    detect_rooms: bool = True     # auto-run room detection after openings
+    min_wall_m: float = 0.40         # shorter minimum — contour segs are smaller
+    max_wall_thickness: float = 0.75 # maximum slab thickness for face-pairing
+    dp_tolerance: float = 0.04       # Douglas-Peucker tolerance in metres
+    threshold_frac: float = 0.01     # relative density threshold for binarisation
+    save_debug: bool = True
+    # Auto-run downstream phases
+    detect_openings: bool = True
+    detect_rooms: bool = True
+    wall_thickness: float = 0.25     # used by opening detection
 
-
-@app.post("/api/walls")
-def generate_walls(params: WallDetectionParams):
-    """
-    Run wall detection for a floor.
-    If detect_openings=True (default), immediately run opening detection too
-    and export DXF with all layers.
-    """
-    try:
-        cfg = params.model_dump()
-        lines = detect_walls_for_floor(params.floor_idx, cfg)
-
-        result: dict = {
-            "status": "success",
-            "lines_count": len(lines),
-            "n_doors": 0,
-            "n_windows": 0,
-            "n_rooms": 0,
-        }
-
-        if params.detect_openings:
-            op_result = detect_openings_for_floor(params.floor_idx, cfg)
-            result["n_doors"] = op_result["n_doors"]
-            result["n_windows"] = op_result["n_windows"]
-
-        if params.detect_rooms:
-            rm_result = detect_rooms_for_floor(params.floor_idx, cfg)
-            result["n_rooms"] = rm_result["n_rooms"]
-
-        # Export DXF + SVG (includes openings + rooms if they were detected)
-        export_floor_dxf(params.floor_idx, PROCESSED_DIR)
-
-        return result
-
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/walls/{floor_idx}")
@@ -361,11 +375,12 @@ def get_openings(floor_idx: int):
 
 class RoomDetectionParams(BaseModel):
     floor_idx: int
-    wall_thickness_px: int = 4      # drawn wall half-width in pixels
-    close_kernel_px: int = 7        # morphological close kernel (must be odd)
-    min_seg_m: float = 0.4          # ignore wall segments shorter than this
-    min_room_m2: float = 0.8        # drop regions smaller than this
-    max_room_m2: float = 800.0      # drop regions larger than this
+    wall_thickness_m: float = 0.20   # drawn wall half-width in metres (auto-scales to px)
+    extend_m: float = 0.45           # endpoint extension to seal T-junctions (metres)
+    min_seg_m: float = 0.4           # ignore wall segments shorter than this
+    min_room_m2: float = 0.8         # drop regions smaller than this
+    max_room_m2: float = 800.0       # drop regions larger than this
+    min_room_width_m: float = 0.60   # reject rooms thinner than this (aspect filter)
     save_debug: bool = True
 
 
@@ -414,3 +429,137 @@ def colorplans():
             },
         ]
     }
+
+
+# ── Cloud2BIM Integration ─────────────────────────────────────────────────────
+
+
+@app.get("/api/c2b/status")
+def c2b_status():
+    """
+    Report the status of Cloud2BIM pre-computed data.
+    Checks which horiz_surface_*.xyz files are present and returns their sizes.
+    """
+    import glob
+
+    xyz_files = sorted(glob.glob(os.path.join(_C2B_OUTPUT_DIR, "horiz_surface_*.xyz")))
+    files_info = [
+        {
+            "name": os.path.basename(f),
+            "size_mb": round(os.path.getsize(f) / 1_048_576, 1),
+        }
+        for f in xyz_files
+    ]
+    return {
+        "c2b_output_dir": _C2B_OUTPUT_DIR,
+        "dir_exists": os.path.isdir(_C2B_OUTPUT_DIR),
+        "n_surfaces": len(xyz_files),
+        "files": files_info,
+    }
+
+
+@app.post("/api/c2b/floors")
+def c2b_update_floors():
+    """
+    Read Cloud2BIM horiz_surface_*.xyz files and derive accurate floor levels.
+    Updates info.json with the new floor_levels array.
+
+    After calling this endpoint you should re-run POST /api/preprocess-walls
+    so that wall_slice_floor_N.npy files are re-computed with the corrected
+    height bands.
+    """
+    if not os.path.isdir(_C2B_OUTPUT_DIR):
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Cloud2BIM output directory not found: {_C2B_OUTPUT_DIR}\n"
+                "Make sure Cloud2BIM-1.03/output_xyz/ exists in the WORK folder."
+            ),
+        )
+
+    info_path = os.path.join(PROCESSED_DIR, "info.json")
+    if not os.path.exists(info_path):
+        raise HTTPException(
+            status_code=404,
+            detail="info.json not found. Run preprocess_o3d.py first.",
+        )
+
+    try:
+        result = update_floor_levels_from_c2b(
+            c2b_output_dir=_C2B_OUTPUT_DIR,
+            processed_dir=PROCESSED_DIR,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("message", "Unknown error"))
+
+    return result
+
+
+@app.post("/api/c2b/walls")
+def c2b_generate_walls(params: C2BWallParams):
+    """
+    Run the Cloud2BIM-style wall detector for one floor.
+
+    Algorithm: 2-D density histogram → threshold → morphological close
+               → contour tracing → Douglas-Peucker → collinear merge
+               → parallel face-pair grouping → wall-axis extraction.
+
+    This produces the same walls_floor_N.json output as POST /api/walls
+    so the frontend works transparently with either algorithm.
+    Optionally runs opening and room detection afterwards.
+    """
+    try:
+        cfg = params.model_dump()
+        real_lines = detect_walls_c2b_for_floor(params.floor_idx, cfg)
+
+        result: dict = {
+            "status": "success",
+            "algorithm": "cloud2bim",
+            "lines_count": len(real_lines),
+            "n_doors": 0,
+            "n_windows": 0,
+            "n_rooms": 0,
+        }
+
+        if params.detect_openings and real_lines:
+            try:
+                op = detect_openings_for_floor(params.floor_idx, cfg)
+                result["n_doors"]   = op["n_doors"]
+                result["n_windows"] = op["n_windows"]
+            except Exception as exc:
+                result["opening_warning"] = str(exc)
+
+        if params.detect_rooms and real_lines:
+            try:
+                room_cfg = {
+                    **cfg,
+                    "wall_thickness_m":  0.20,
+                    "extend_m":          0.45,
+                    "min_seg_m":         0.4,
+                    "min_room_m2":       0.8,
+                    "max_room_m2":       800.0,
+                    "min_room_width_m":  0.60,
+                    "save_debug":        True,
+                }
+                rm = detect_rooms_for_floor(params.floor_idx, room_cfg)
+                result["n_rooms"] = rm["n_rooms"]
+            except Exception as exc:
+                result["room_warning"] = str(exc)
+
+        # Export DXF + SVG with all layers
+        try:
+            export_floor_dxf(params.floor_idx, PROCESSED_DIR)
+        except Exception as exc:
+            result["dxf_warning"] = str(exc)
+
+        return result
+
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

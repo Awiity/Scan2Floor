@@ -1,15 +1,15 @@
 """
-Reprocess all floors: wall detection (snap=True) + opening detection + room detection.
+Reprocess all floors: Cloud2BIM wall detection + opening detection + room detection.
 Run from backend/ directory:
     python tmp_reprocess_all.py
 """
 import sys
 sys.path.insert(0, '.')
 
-from pipeline.wall_detection   import detect_walls_for_floor
-from pipeline.opening_detection import detect_openings_for_floor
-from pipeline.room_detection   import detect_rooms_for_floor
-from pipeline.dxf_export       import export_floor_dxf
+from pipeline.wall_detection_c2b import detect_walls_c2b_for_floor
+from pipeline.opening_detection   import detect_openings_for_floor
+from pipeline.room_detection      import detect_rooms_for_floor
+from pipeline.dxf_export          import export_floor_dxf
 import json, os
 
 PROCESSED_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "processed")
@@ -19,35 +19,34 @@ with open(os.path.join(PROCESSED_DIR, "info.json")) as fh:
 n_floors = len(info.get("floor_levels", []))
 
 wall_cfg = {
-    "grid_size"      : 0.05,
-    "snap_to_axis"   : True,   # ← ENABLED
-    "min_wall_m"     : 0.80,
-    "hough_threshold": 40,
-    "max_gap_m"      : 0.25,
-    "car_filter"     : True,
-    "car_top_m"      : 1.55,
-    "ceiling_cap_m"  : 2.05,
-    "save_debug"     : True,
+    "grid_size"         : 0.02,
+    "snap_to_axis"      : True,
+    "min_wall_m"        : 0.40,
+    "max_wall_thickness": 0.75,
+    "dp_tolerance"      : 0.04,
+    "threshold_frac"    : 0.01,
+    "save_debug"        : True,
 }
 
 opening_cfg = {
-    "wall_thickness"       : 0.25,
-    "min_door_width"       : 0.70,
-    "min_window_width"     : 0.50,
-    "door_height_threshold": 1.85,
+    "wall_thickness"        : 0.25,
+    "min_door_width"        : 0.70,
+    "min_window_width"      : 0.50,
+    "door_height_threshold" : 1.85,
 }
 
 room_cfg = {
-    "wall_thickness_px": 4,
-    "close_kernel_px"  : 7,
-    "min_seg_m"        : 0.4,
-    "min_room_m2"      : 0.8,
-    "max_room_m2"      : 800.0,
-    "save_debug"       : True,
+    "wall_thickness_m"  : 0.20,   # auto-scales to pixels based on grid_size
+    "extend_m"          : 0.45,   # endpoint extension to seal T-junctions
+    "min_seg_m"         : 0.4,
+    "min_room_m2"       : 0.8,
+    "max_room_m2"       : 800.0,
+    "min_room_width_m"  : 0.60,
+    "save_debug"        : True,
 }
 
 print(f"\n{'='*60}")
-print(f"  Reprocessing {n_floors} floor(s) with snap_to_axis=True")
+print(f"  Reprocessing {n_floors} floor(s) — Cloud2BIM algorithm")
 print(f"{'='*60}\n")
 
 for fi in range(n_floors):
@@ -55,8 +54,8 @@ for fi in range(n_floors):
     print(f"  FLOOR {fi}")
     print(f"{'─'*60}")
 
-    # 1 – Walls
-    walls = detect_walls_for_floor(fi, wall_cfg)
+    # 1 – Walls (C2B)
+    walls = detect_walls_c2b_for_floor(fi, wall_cfg)
     print(f"  → {len(walls)} wall segments")
 
     # 2 – Openings

@@ -1,3 +1,5 @@
+import { useState, useEffect, useRef } from "react";
+
 export default function Sidebar({
   showMesh,
   setShowMesh,
@@ -5,18 +7,125 @@ export default function Sidebar({
   setShowCloud,
   showFloorPlan,
   setShowFloorPlan,
-  showFloorPlanViewer,
-  setShowFloorPlanViewer,
   modelInfo,
   backendStatus,
   cloudPoints,
-  onCameraPreset,
   activeFloor,
   setActiveFloor,
 }) {
   const cloudReady = backendStatus === "ready";
-
   const fmt = (n) => n?.toLocaleString?.() ?? "—";
+
+  // ── XYZ path state ────────────────────────────────────────────────────────
+  const [xyzPath, setXyzPath] = useState("");
+  const [xyzExists, setXyzExists] = useState(null); // null=unknown, true, false
+  const [xyzSaving, setXyzSaving] = useState(false);
+  const [xyzError, setXyzError] = useState("");
+  const xyzInputRef = useRef(null);
+
+  // ── Cloud2BIM state ───────────────────────────────────────────────────────
+  const [c2bStatus, setC2bStatus] = useState(null);      // {n_surfaces, files}
+  const [c2bFloorsBusy, setC2bFloorsBusy] = useState(false);
+  const [c2bFloorsMsg, setC2bFloorsMsg] = useState("");
+  const [c2bWallBusy, setC2bWallBusy] = useState(false);
+  const [c2bWallMsg,  setC2bWallMsg]  = useState("");
+  const [c2bFloor, setC2bFloor] = useState(0);
+
+  useEffect(() => {
+    fetch("/api/c2b/status")
+      .then((r) => r.json())
+      .then((d) => setC2bStatus(d))
+      .catch(() => {});
+  }, []);
+
+  const handleC2bFloors = async () => {
+    setC2bFloorsBusy(true);
+    setC2bFloorsMsg("");
+    try {
+      const r = await fetch("/api/c2b/floors", { method: "POST" });
+      const d = await r.json();
+      if (!r.ok) {
+        setC2bFloorsMsg("⚠ " + (d.detail ?? "Error"));
+      } else {
+        setC2bFloorsMsg(
+          `✓ ${d.new_floor_levels.length} floors → ${d.new_floor_levels.map((v) => v.toFixed(2) + " m").join(", ")}`
+        );
+      }
+    } catch {
+      setC2bFloorsMsg("⚠ Network error");
+    } finally {
+      setC2bFloorsBusy(false);
+    }
+  };
+
+  const handleC2bWalls = async () => {
+    setC2bWallBusy(true);
+    setC2bWallMsg("");
+    try {
+      const r = await fetch("/api/c2b/walls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          floor_idx: c2bFloor,
+          grid_size: 0.02,
+          snap_to_axis: true,
+          min_wall_m: 0.40,
+          max_wall_thickness: 0.75,
+          dp_tolerance: 0.04,
+          threshold_frac: 0.01,
+          detect_openings: true,
+          detect_rooms: true,
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        setC2bWallMsg("⚠ " + (d.detail ?? "Error"));
+      } else {
+        setC2bWallMsg(
+          `✓ ${d.lines_count} walls · ${d.n_doors}D ${d.n_windows}W · ${d.n_rooms} rooms`
+        );
+      }
+    } catch {
+      setC2bWallMsg("⚠ Network error");
+    } finally {
+      setC2bWallBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    fetch("/api/xyz-path")
+      .then((r) => r.json())
+      .then((d) => {
+        setXyzPath(d.xyz_path ?? "");
+        setXyzExists(d.exists ?? null);
+      })
+      .catch(() => {});
+  }, []);
+
+  const handleSetXyzPath = async () => {
+    const val = xyzPath.trim();
+    if (!val) return;
+    setXyzSaving(true);
+    setXyzError("");
+    try {
+      const r = await fetch("/api/xyz-path", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ xyz_path: val }),
+      });
+      const d = await r.json();
+      if (!r.ok) {
+        setXyzError(d.detail ?? "Error");
+      } else {
+        setXyzPath(d.xyz_path);
+        setXyzExists(d.exists);
+      }
+    } catch (e) {
+      setXyzError("Network error");
+    } finally {
+      setXyzSaving(false);
+    }
+  };
 
   const Toggle = ({ checked, onChange, disabled }) => (
     <label className="toggle" style={{ opacity: disabled ? 0.4 : 1 }}>
@@ -32,6 +141,70 @@ export default function Sidebar({
 
   return (
     <aside className="sidebar">
+      {/* ── Data Source ── */}
+      <div className="sidebar-section">
+        <div className="section-title">Data Source</div>
+        <div style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 6 }}>
+          Point cloud (.xyz) file path
+        </div>
+        <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+          <input
+            ref={xyzInputRef}
+            id="xyz-path-input"
+            type="text"
+            value={xyzPath}
+            onChange={(e) => { setXyzPath(e.target.value); setXyzExists(null); setXyzError(""); }}
+            onKeyDown={(e) => e.key === "Enter" && handleSetXyzPath()}
+            placeholder="C:\path\to\cloud.xyz"
+            style={{
+              flex: 1,
+              background: "var(--surface-2, #111827)",
+              border: `1px solid ${xyzExists === false ? "#ef4444" : xyzExists === true ? "#00c850" : "var(--border, #1e2d4a)"}`,
+              borderRadius: 6,
+              color: "var(--text-1, #e2e8f0)",
+              fontSize: 11,
+              padding: "6px 8px",
+              outline: "none",
+              fontFamily: "monospace",
+              transition: "border-color 0.2s",
+            }}
+          />
+          <button
+            id="xyz-path-set-btn"
+            onClick={handleSetXyzPath}
+            disabled={xyzSaving || !xyzPath.trim()}
+            style={{
+              background: "var(--cyan, #06b6d4)",
+              color: "#000",
+              border: "none",
+              borderRadius: 6,
+              padding: "6px 10px",
+              fontSize: 11,
+              fontWeight: 700,
+              cursor: xyzSaving ? "wait" : "pointer",
+              opacity: xyzSaving ? 0.6 : 1,
+              whiteSpace: "nowrap",
+              transition: "opacity 0.2s",
+            }}
+          >
+            {xyzSaving ? "…" : "Set"}
+          </button>
+        </div>
+
+        {/* Status badge */}
+        <div style={{ marginTop: 5, fontSize: 11, minHeight: 16 }}>
+          {xyzError && (
+            <span style={{ color: "#ef4444" }}>⚠ {xyzError}</span>
+          )}
+          {!xyzError && xyzExists === true && (
+            <span style={{ color: "#00c850" }}>✓ File found</span>
+          )}
+          {!xyzError && xyzExists === false && (
+            <span style={{ color: "#ef4444" }}>✗ File not found at this path</span>
+          )}
+        </div>
+      </div>
+
       {/* ── Project ── */}
       <div className="sidebar-section">
         <div className="section-title">Project</div>
@@ -166,113 +339,133 @@ export default function Sidebar({
         )}
       </div>
 
-      {/* ── Camera presets ── */}
+      {/* ── Cloud2BIM Integration ── */}
       <div className="sidebar-section">
-        <div className="section-title">Camera</div>
-        <div className="cam-grid">
-          {[
-            { key: "top", label: "⬆ Top" },
-            { key: "3d", label: "◈ 3D" },
-            { key: "front", label: "▣ Front" },
-            { key: "side", label: "▷ Side" },
-          ].map(({ key, label }) => (
-            <button
-              key={key}
-              className="cam-btn"
-              onClick={() => onCameraPreset(key)}
-            >
-              {label}
-            </button>
-          ))}
+        <div className="section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span>Cloud2BIM</span>
+          {c2bStatus?.n_surfaces > 0 && (
+            <span style={{
+              background: "rgba(0,200,80,0.15)",
+              color: "#00c850",
+              border: "1px solid rgba(0,200,80,0.3)",
+              borderRadius: 4,
+              fontSize: 9,
+              fontWeight: 700,
+              padding: "1px 5px",
+              letterSpacing: 0.5,
+            }}>READY</span>
+          )}
         </div>
-      </div>
 
-      {/* ── Floor Slicer ── */}
-      {modelInfo?.floor_levels && modelInfo.floor_levels.length > 0 && (
-        <div className="sidebar-section">
-          <div className="section-title">Slice by Floor</div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            <button
-              className={`fp-tab ${activeFloor === "all" ? "active" : ""}`}
-              onClick={() => setActiveFloor("all")}
-              style={{ padding: "6px 12px", flex: "1 1 auto" }}
-            >
-              All
-            </button>
-            {modelInfo.floor_levels.map((level, i) => (
-              <button
-                key={i}
-                className={`fp-tab ${activeFloor === i ? "active" : ""}`}
-                onClick={() => setActiveFloor(i)}
-                style={{ padding: "6px 12px", flex: "1 1 auto" }}
-              >
-                Floor {i}
-              </button>
-            ))}
+        {/* Status summary */}
+        <div style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 8 }}>
+          {c2bStatus == null
+            ? "Checking…"
+            : c2bStatus.n_surfaces === 0
+            ? "⚠ No horiz_surface_*.xyz found in Cloud2BIM-1.03/output_xyz/"
+            : `${c2bStatus.n_surfaces} horizontal surfaces pre-computed`}
+        </div>
+
+        {/* Floor level import */}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4, fontWeight: 600 }}>
+            Step 1 — Improve floor levels
           </div>
-        </div>
-      )}
-
-      {/* ── Generate Floor Plan ── */}
-      <div className="sidebar-section">
-        <div className="section-title">Floor Plan (Phase 4)</div>
-        <button
-          className={`generate-btn ${showFloorPlanViewer ? "active" : ""}`}
-          onClick={() => setShowFloorPlanViewer((v) => !v)}
-          disabled={!modelInfo?.floor_levels?.length}
-        >
-          {showFloorPlanViewer ? "✕ Close Generator" : "📐 Generate Floor Plan"}
-        </button>
-        <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>
-          Wall detection · DXF export
-        </div>
-      </div>
-
-      {/* ── Roadmap ── */}
-      <div className="sidebar-section">
-        <div className="section-title">Roadmap</div>
-        {[
-          { icon: "✅", label: "Wall Detection", note: "M3 Done", done: true },
-          {
-            icon: "✅",
-            label: "Car-Filter (parking)",
-            note: "M3b Done",
-            done: true,
-          },
-          {
-            icon: "🚪",
-            label: "Door / Window Detection",
-            note: "M4 Active",
-            done: false,
-          },
-          { icon: "📄", label: "DXF Export", note: "M5 Active", done: false },
-          { icon: "📋", label: "Building Passport", note: "M6", done: false },
-        ].map(({ icon, label, note, done }) => (
-          <div
-            key={label}
+          <button
+            id="c2b-floors-btn"
+            onClick={handleC2bFloors}
+            disabled={c2bFloorsBusy || !c2bStatus?.n_surfaces}
             style={{
-              display: "flex",
-              gap: 8,
-              alignItems: "center",
-              padding: "5px 0",
-              color: done ? "var(--cyan)" : "var(--text-3)",
-              fontSize: 12,
+              width: "100%",
+              background: c2bFloorsBusy
+                ? "rgba(168,85,247,0.3)"
+                : "rgba(168,85,247,0.18)",
+              border: "1px solid rgba(168,85,247,0.5)",
+              borderRadius: 6,
+              color: "#c084fc",
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "7px 10px",
+              cursor: c2bFloorsBusy ? "wait" : "pointer",
+              transition: "all 0.2s",
+              letterSpacing: 0.2,
             }}
           >
-            <span>{icon}</span>
-            <span>{label}</span>
-            <span
+            {c2bFloorsBusy ? "⏳ Reading surfaces…" : "↑ Import Floor Levels from C2B"}
+          </button>
+          {c2bFloorsMsg && (
+            <div style={{
+              marginTop: 5,
+              fontSize: 11,
+              color: c2bFloorsMsg.startsWith("⚠") ? "#ef4444" : "#00c850",
+              lineHeight: 1.4,
+            }}>{c2bFloorsMsg}</div>
+          )}
+        </div>
+
+        {/* Wall detection */}
+        <div>
+          <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4, fontWeight: 600 }}>
+            Step 2 — Run Cloud2BIM wall detector
+          </div>
+          <div style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "var(--text-3)", flexShrink: 0 }}>Floor</span>
+            <select
+              id="c2b-floor-select"
+              value={c2bFloor}
+              onChange={(e) => setC2bFloor(Number(e.target.value))}
               style={{
-                marginLeft: "auto",
-                fontSize: 10,
-                color: done ? "var(--cyan)" : "var(--purple)",
+                flex: 1,
+                background: "var(--surface-2, #111827)",
+                border: "1px solid var(--border, #1e2d4a)",
+                borderRadius: 5,
+                color: "var(--text-1)",
+                fontSize: 11,
+                padding: "4px 6px",
+                cursor: "pointer",
               }}
             >
-              {note}
-            </span>
+              {(modelInfo?.floor_levels ?? [0, 1, 2]).map((_, i) => (
+                <option key={i} value={i}>Floor {i}</option>
+              ))}
+            </select>
           </div>
-        ))}
+          <button
+            id="c2b-walls-btn"
+            onClick={handleC2bWalls}
+            disabled={c2bWallBusy || !c2bStatus?.n_surfaces}
+            style={{
+              width: "100%",
+              background: c2bWallBusy
+                ? "rgba(6,182,212,0.3)"
+                : "rgba(6,182,212,0.18)",
+              border: "1px solid rgba(6,182,212,0.5)",
+              borderRadius: 6,
+              color: "#67e8f9",
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "7px 10px",
+              cursor: c2bWallBusy ? "wait" : "pointer",
+              transition: "all 0.2s",
+              letterSpacing: 0.2,
+            }}
+          >
+            {c2bWallBusy ? "⏳ Detecting walls…" : "🧱 Detect Walls (Cloud2BIM algo)"}
+          </button>
+          {c2bWallMsg && (
+            <div style={{
+              marginTop: 5,
+              fontSize: 11,
+              color: c2bWallMsg.startsWith("⚠") ? "#ef4444" : "#00c850",
+              lineHeight: 1.4,
+            }}>{c2bWallMsg}</div>
+          )}
+          <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 5, lineHeight: 1.4 }}>
+            Contour tracing + Douglas-Peucker +<br/>parallel face-pair grouping
+          </div>
+        </div>
       </div>
+
     </aside>
   );
 }
