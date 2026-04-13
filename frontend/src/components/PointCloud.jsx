@@ -8,7 +8,7 @@ import { useEffect, useRef, useState, useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE   from 'three'
 
-export default function PointCloud({ modelInfo, activeFloor, onLoadStart, onLoaded }) {
+export default function PointCloud({ modelInfo, activeFloor, onLoadStart, onLoaded, reloadKey }) {
   const [points, setPoints] = useState(null)
   const { camera }          = useThree()
   const mounted             = useRef(true)
@@ -17,7 +17,13 @@ export default function PointCloud({ modelInfo, activeFloor, onLoadStart, onLoad
     mounted.current = true
     onLoadStart?.()
 
-    fetch('/api/pointcloud')
+    // Append reloadKey as a cache-busting param so the browser always
+    // fetches the latest pointcloud.bin after a reprocess.
+    const url = reloadKey
+      ? `/api/pointcloud?v=${encodeURIComponent(reloadKey)}`
+      : '/api/pointcloud'
+
+    fetch(url)
       .then(r => {
         if (!r.ok) throw new Error('Point cloud not ready')
         return r.arrayBuffer()
@@ -61,7 +67,7 @@ export default function PointCloud({ modelInfo, activeFloor, onLoadStart, onLoad
       })
 
     return () => { mounted.current = false }
-  }, [])
+  }, [reloadKey])
 
   const clippingPlanes = useMemo(() => {
     if (activeFloor === 'all' || !modelInfo?.floor_levels) return []

@@ -59,6 +59,17 @@ _preprocess_status = {
     "log": [],
 }
 
+# ── Background full-reprocess job state ───────────────────────────────────────
+_reprocess_lock = threading.Lock()
+_reprocess_status = {
+    "running": False,
+    "done": False,
+    "error": None,
+    "started_at": None,
+    "finished_at": None,
+    "log": [],
+}
+
 app = FastAPI(title="Scan2Floor API", version="0.3.0")
 
 app.add_middleware(
@@ -93,6 +104,150 @@ def set_xyz_path(payload: XYZPathPayload):
         raise HTTPException(status_code=400, detail="Path must point to a .xyz file.")
     _set_xyz_path(p)
     return {"status": "ok", "xyz_path": p, "exists": os.path.isfile(p)}
+
+
+@app.get("/api/browse-xyz")
+def browse_xyz():
+    """
+    Open a native Windows file-picker dialog and return the selected .xyz path.
+    Uses a tiny tkinter subprocess so it never blocks the FastAPI event loop.
+    """
+    tk_script = (
+        "import tkinter as tk; "
+        "from tkinter import filedialog; "
+        "root = tk.Tk(); root.withdraw(); root.wm_attributes('-topmost', True); "
+        "p = filedialog.askopenfilename("
+        "    title='Select point cloud file',"
+        "    filetypes=[('XYZ point cloud', '*.xyz'), ('All files', '*.*')]"
+        "); print(p, end='')"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", tk_script],
+            capture_output=True, text=True, timeout=120
+        )
+        chosen = result.stdout.strip()
+        if not chosen:
+            return {"cancelled": True, "xyz_path": None}
+        return {"cancelled": False, "xyz_path": chosen, "exists": os.path.isfile(chosen)}
+    except subprocess.TimeoutExpired:
+        return JSONResponse({"error": "File dialog timed out"}, status_code=408)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Full Reprocess Pipeline ──────────────────────────────────────────────────
+
+
+def _run_reprocess_bg(xyz_path: str) -> None:
+    """
+    Background thread: clears stale outputs then runs preprocess_xyz.py so the
+    UI gets a fresh pointcloud.bin + info.json for the newly chosen file.
+    """
+    global _reprocess_status
+    with _reprocess_lock:
+        _reprocess_status.update({
+            "running": True,
+            "done": False,
+            "error": None,
+            "started_at": time.time(),
+            "finished_at": None,
+            "log": [f"Clearing stale outputs and reprocessing: {xyz_path}"],
+        })
+
+    # Delete stale processed files so /api/status transitions to 'processing'
+    stale = ["pointcloud.bin", "info.json"]
+    for name in stale:
+        p = os.path.join(PROCESSED_DIR, name)
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except Exception as exc:
+            with _reprocess_lock:
+                _reprocess_status["log"].append(f"[warn] could not delete {name}: {exc}")
+
+    script = os.path.join(BASE_DIR, "pipeline", "preprocess_xyz.py")
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script, "--xyz", xyz_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=BASE_DIR,
+            encoding="utf-8",
+            errors="replace",
+        )
+        log_lines: list[str] = []
+        for line in proc.stdout:
+            line = line.rstrip()
+            log_lines.append(line)
+            if len(log_lines) > 100:
+                log_lines = log_lines[-100:]
+            with _reprocess_lock:
+                _reprocess_status["log"] = log_lines
+
+        proc.wait()
+        with _reprocess_lock:
+            if proc.returncode == 0:
+                _reprocess_status["done"] = True
+                _reprocess_status["log"].append("\u2713 Finished successfully.")
+            else:
+                _reprocess_status["error"] = f"Exit code {proc.returncode}"
+                _reprocess_status["log"].append(
+                    f"\u2717 Failed with exit code {proc.returncode}"
+                )
+    except Exception as exc:
+        with _reprocess_lock:
+            _reprocess_status["error"] = str(exc)
+            _reprocess_status["log"].append(f"\u2717 Exception: {exc}")
+    finally:
+        with _reprocess_lock:
+            _reprocess_status["running"] = False
+            _reprocess_status["finished_at"] = time.time()
+
+
+@app.post("/api/reprocess")
+def reprocess_start():
+    """
+    Delete stale pointcloud.bin / info.json and rerun preprocess_xyz.py
+    for the currently configured .xyz file. Returns immediately; poll
+    /api/reprocess/status for progress.
+    """
+    xyz_path = _get_xyz_path()
+    if not os.path.exists(xyz_path):
+        raise HTTPException(
+            status_code=404,
+            detail=f".xyz file not found at {xyz_path}. Set the correct path first.",
+        )
+
+    with _reprocess_lock:
+        if _reprocess_status["running"]:
+            return JSONResponse({
+                "status": "already_running",
+                "message": "Full reprocess is already in progress.",
+            })
+
+    thread = threading.Thread(
+        target=_run_reprocess_bg, args=(xyz_path,), daemon=True
+    )
+    thread.start()
+    return JSONResponse({
+        "status": "started",
+        "xyz_path": xyz_path,
+        "message": "Full reprocess pipeline started. Poll /api/reprocess/status for progress.",
+    })
+
+
+@app.get("/api/reprocess/status")
+def reprocess_status():
+    """Poll the current status of the full-reprocess background job."""
+    with _reprocess_lock:
+        snap = dict(_reprocess_status)
+    if snap.get("started_at"):
+        snap["elapsed_s"] = round(
+            (snap.get("finished_at") or time.time()) - snap["started_at"], 1
+        )
+    return snap
 
 
 # ── Status / Point Cloud ─────────────────────────────────────────────────────
@@ -133,7 +288,7 @@ def pointcloud():
     return FileResponse(
         path,
         media_type="application/octet-stream",
-        headers={"Cache-Control": "public, max-age=86400"},
+        headers={"Cache-Control": "no-cache, must-revalidate"},
     )
 
 

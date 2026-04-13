@@ -34,6 +34,12 @@ export default function App() {
   const [meshProgress, setMeshProgress] = useState(0);
   const [cloudPoints, setCloudPoints] = useState(null);
 
+  /* ---------- cloud reload key --------- */
+  // Bumped by Sidebar after a successful full reprocess so PointCloud
+  // re-fetches the new pointcloud.bin with a cache-busting URL param.
+  const [cloudReloadKey, setCloudReloadKey] = useState(null);
+  const handleReprocessDone = () => setCloudReloadKey(String(Date.now()));
+
   /* ---------- camera ref -------------- */
   const controlsRef = useRef();
 
@@ -104,6 +110,7 @@ export default function App() {
           cloudPoints={cloudPoints}
           activeFloor={activeFloor}
           setActiveFloor={setActiveFloor}
+          onReprocessDone={handleReprocessDone}
         />
 
         <div className="viewport">
@@ -149,6 +156,7 @@ export default function App() {
                   <PointCloud
                     modelInfo={modelInfo}
                     activeFloor={activeFloor}
+                    reloadKey={cloudReloadKey}
                     onLoadStart={() => setCloudLoading(true)}
                     onLoaded={(n) => {
                       setCloudLoading(false);

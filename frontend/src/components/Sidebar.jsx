@@ -12,24 +12,34 @@ export default function Sidebar({
   cloudPoints,
   activeFloor,
   setActiveFloor,
+  onReprocessDone,
 }) {
   const cloudReady = backendStatus === "ready";
   const fmt = (n) => n?.toLocaleString?.() ?? "—";
 
-  // ── XYZ path state ────────────────────────────────────────────────────────
+  // ── XYZ path state ─────────────────────────────────────────────────
   const [xyzPath, setXyzPath] = useState("");
   const [xyzExists, setXyzExists] = useState(null); // null=unknown, true, false
   const [xyzSaving, setXyzSaving] = useState(false);
   const [xyzError, setXyzError] = useState("");
+  const [xyzBrowsing, setXyzBrowsing] = useState(false);
   const xyzInputRef = useRef(null);
 
-  // ── Cloud2BIM state ───────────────────────────────────────────────────────
+  // ── Cloud2BIM state ─────────────────────────────────────────────────
   const [c2bStatus, setC2bStatus] = useState(null);      // {n_surfaces, files}
   const [c2bFloorsBusy, setC2bFloorsBusy] = useState(false);
   const [c2bFloorsMsg, setC2bFloorsMsg] = useState("");
   const [c2bWallBusy, setC2bWallBusy] = useState(false);
   const [c2bWallMsg,  setC2bWallMsg]  = useState("");
   const [c2bFloor, setC2bFloor] = useState(0);
+
+  // ── Reprocess state ─────────────────────────────────────────────────
+  const [reprocessRunning, setReprocessRunning] = useState(false);
+  const [reprocessDone, setReprocessDone] = useState(false);
+  const [reprocessError, setReprocessError] = useState("");
+  const [reprocessLog, setReprocessLog] = useState("");
+  const [reprocessElapsed, setReprocessElapsed] = useState(null);
+  const reprocessPollRef = useRef(null);
 
   useEffect(() => {
     fetch("/api/c2b/status")
@@ -127,6 +137,74 @@ export default function Sidebar({
     }
   };
 
+  const handleBrowseXyz = async () => {
+    setXyzBrowsing(true);
+    setXyzError("");
+    try {
+      const r = await fetch("/api/browse-xyz");
+      const d = await r.json();
+      if (d.cancelled || !d.xyz_path) return;
+      // Auto-fill the input and immediately save to backend
+      setXyzPath(d.xyz_path);
+      setXyzExists(d.exists ?? null);
+      // Persist the chosen path
+      const r2 = await fetch("/api/xyz-path", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ xyz_path: d.xyz_path }),
+      });
+      const d2 = await r2.json();
+      if (!r2.ok) setXyzError(d2.detail ?? "Error saving path");
+      else setXyzExists(d2.exists);
+    } catch {
+      setXyzError("Could not open file dialog");
+    } finally {
+      setXyzBrowsing(false);
+    }
+  };
+
+  // ── Reprocess helpers ───────────────────────────────────────────────
+  const startReprocessPoll = () => {
+    if (reprocessPollRef.current) return;
+    reprocessPollRef.current = setInterval(async () => {
+      try {
+        const r = await fetch("/api/reprocess/status");
+        const d = await r.json();
+        setReprocessRunning(d.running);
+        setReprocessDone(d.done);
+        setReprocessError(d.error ?? "");
+        setReprocessElapsed(d.elapsed_s ?? null);
+        if (d.log?.length) setReprocessLog(d.log[d.log.length - 1]);
+        if (!d.running) {
+          clearInterval(reprocessPollRef.current);
+          reprocessPollRef.current = null;
+          // Notify App so it bumps cloudReloadKey → PointCloud re-fetches
+          if (d.done && !d.error) onReprocessDone?.();
+        }
+      } catch { /* ignore poll errors */ }
+    }, 2000);
+  };
+
+  const handleReprocess = async () => {
+    if (reprocessRunning) return;
+    setReprocessDone(false);
+    setReprocessError("");
+    setReprocessLog("");
+    setReprocessElapsed(null);
+    try {
+      const r = await fetch("/api/reprocess", { method: "POST" });
+      const d = await r.json();
+      if (d.status === "started" || d.status === "already_running") {
+        setReprocessRunning(true);
+        startReprocessPoll();
+      } else if (d.detail) {
+        setReprocessError(d.detail);
+      }
+    } catch {
+      setReprocessError("Network error");
+    }
+  };
+
   const Toggle = ({ checked, onChange, disabled }) => (
     <label className="toggle" style={{ opacity: disabled ? 0.4 : 1 }}>
       <input
@@ -170,6 +248,26 @@ export default function Sidebar({
             }}
           />
           <button
+            id="xyz-browse-btn"
+            onClick={handleBrowseXyz}
+            disabled={xyzBrowsing}
+            title="Browse for .xyz file"
+            style={{
+              background: "var(--surface-2, #111827)",
+              color: "var(--text-2, #94a3b8)",
+              border: "1px solid var(--border, #1e2d4a)",
+              borderRadius: 6,
+              padding: "6px 8px",
+              fontSize: 13,
+              cursor: xyzBrowsing ? "wait" : "pointer",
+              opacity: xyzBrowsing ? 0.5 : 1,
+              transition: "all 0.2s",
+              lineHeight: 1,
+            }}
+          >
+            {xyzBrowsing ? "…" : "📂"}
+          </button>
+          <button
             id="xyz-path-set-btn"
             onClick={handleSetXyzPath}
             disabled={xyzSaving || !xyzPath.trim()}
@@ -201,6 +299,68 @@ export default function Sidebar({
           )}
           {!xyzError && xyzExists === false && (
             <span style={{ color: "#ef4444" }}>✗ File not found at this path</span>
+          )}
+        </div>
+
+        {/* Rerun pipeline */}
+        <div style={{ marginTop: 10 }}>
+          <button
+            id="reprocess-btn"
+            onClick={handleReprocess}
+            disabled={reprocessRunning || !xyzExists}
+            title={!xyzExists ? "Set a valid .xyz path first" : "Delete existing outputs and rerun preprocess_xyz.py"}
+            style={{
+              width: "100%",
+              background: reprocessRunning
+                ? "rgba(251,146,60,0.25)"
+                : reprocessDone && !reprocessError
+                  ? "rgba(0,200,80,0.15)"
+                  : reprocessError
+                    ? "rgba(239,68,68,0.15)"
+                    : "rgba(251,146,60,0.15)",
+              border: `1px solid ${reprocessRunning ? "rgba(251,146,60,0.6)" : reprocessDone && !reprocessError ? "rgba(0,200,80,0.4)" : reprocessError ? "rgba(239,68,68,0.4)" : "rgba(251,146,60,0.4)"}`,
+              borderRadius: 6,
+              color: reprocessRunning ? "#fb923c" : reprocessDone && !reprocessError ? "#00c850" : reprocessError ? "#ef4444" : "#fb923c",
+              fontSize: 11,
+              fontWeight: 700,
+              padding: "7px 10px",
+              cursor: reprocessRunning || !xyzExists ? (reprocessRunning ? "wait" : "not-allowed") : "pointer",
+              opacity: !xyzExists && !reprocessRunning ? 0.5 : 1,
+              transition: "all 0.2s",
+              letterSpacing: 0.2,
+            }}
+          >
+            {reprocessRunning
+              ? `⏳ Processing… ${reprocessElapsed != null ? `(${reprocessElapsed}s)` : ""}`
+              : reprocessDone && !reprocessError
+                ? "✓ Pipeline complete — reload page to view"
+                : reprocessError
+                  ? "✗ Failed — click to retry"
+                  : "🔄 Rerun Full Preprocess Pipeline"}
+          </button>
+
+          {/* Live log tail */}
+          {reprocessRunning && reprocessLog && (
+            <div style={{
+              marginTop: 5,
+              fontSize: 10,
+              color: "var(--text-3)",
+              fontFamily: "monospace",
+              background: "rgba(0,0,0,0.3)",
+              borderRadius: 4,
+              padding: "4px 6px",
+              lineHeight: 1.4,
+              wordBreak: "break-all",
+              maxHeight: 48,
+              overflow: "hidden",
+            }}>
+              {reprocessLog}
+            </div>
+          )}
+          {reprocessError && (
+            <div style={{ marginTop: 4, fontSize: 10, color: "#ef4444", lineHeight: 1.4 }}>
+              {reprocessError}
+            </div>
           )}
         </div>
       </div>
