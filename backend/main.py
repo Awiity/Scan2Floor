@@ -459,6 +459,66 @@ def get_walls(floor_idx: int):
         return json.load(f)
 
 
+class WallsEditPayload(BaseModel):
+    lines: list   # list of [[x1, z1], [x2, z2]] pairs
+
+
+@app.put("/api/walls/{floor_idx}")
+def save_walls_edit(floor_idx: int, payload: WallsEditPayload):
+    """
+    Persist user-edited wall lines → re-run room detection → re-export DXF/SVG.
+    Called by the canvas editor's Save button.
+    """
+    wall_path = os.path.join(PROCESSED_DIR, f"walls_floor_{floor_idx}.json")
+
+    # Load existing header metadata (grid_size, bounds etc.) to keep provenance
+    existing: dict = {"floor_idx": floor_idx}
+    if os.path.exists(wall_path):
+        with open(wall_path) as f:
+            existing = json.load(f)
+
+    existing["lines"] = payload.lines
+    existing["source"] = f"user-edited ({len(payload.lines)} walls)"
+
+    with open(wall_path, "w") as f:
+        json.dump(existing, f)
+
+    # Re-run room detection with default parameters
+    n_rooms = 0
+    room_warning = None
+    try:
+        room_cfg = {
+            "floor_idx":       floor_idx,
+            "wall_thickness_m": 0.20,
+            "extend_m":        0.45,
+            "min_seg_m":       0.40,
+            "min_room_m2":     0.80,
+            "max_room_m2":     800.0,
+            "min_room_width_m": 0.60,
+            "save_debug":      True,
+        }
+        rm = detect_rooms_for_floor(floor_idx, room_cfg)
+        n_rooms = rm["n_rooms"]
+    except Exception as exc:
+        room_warning = str(exc)
+
+    # Re-export DXF + SVG
+    dxf_warning = None
+    try:
+        export_floor_dxf(floor_idx, PROCESSED_DIR)
+    except Exception as exc:
+        dxf_warning = str(exc)
+
+    result = {
+        "status":   "saved",
+        "n_walls":  len(payload.lines),
+        "n_rooms":  n_rooms,
+    }
+    if room_warning: result["room_warning"] = room_warning
+    if dxf_warning:  result["dxf_warning"]  = dxf_warning
+    return result
+
+
 @app.post("/api/walls/{floor_idx}/export")
 def export_walls(floor_idx: int):
     try:

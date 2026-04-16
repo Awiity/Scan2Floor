@@ -1,5 +1,49 @@
 import { useState, useEffect, useRef } from "react";
 
+// ── ParamSlider ────────────────────────────────────────────────────────────────
+// Reusable slider row with label, live value chip, and optional hint text.
+function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, defaultVal, onChange, accent = "#67e8f9" }) {
+  const pct = ((value - min) / (max - min)) * 100;
+  const isDefault = Math.abs(value - defaultVal) < step * 0.5;
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+        <div>
+          <span style={{ fontSize: 11, color: "var(--text-2)", fontWeight: 600 }}>{label}</span>
+          {!isDefault && (
+            <span style={{
+              marginLeft: 5, fontSize: 9, background: `${accent}22`, color: accent,
+              border: `1px solid ${accent}44`, borderRadius: 3, padding: "1px 4px", fontWeight: 700,
+            }}>modified</span>
+          )}
+        </div>
+        <span style={{
+          fontSize: 11, fontWeight: 700, color: accent,
+          fontFamily: "JetBrains Mono, monospace", minWidth: 48, textAlign: "right",
+        }}>
+          {value.toFixed(precision)}{unit}
+        </span>
+      </div>
+      {hint && <div style={{ fontSize: 10, color: "var(--text-3)", marginBottom: 4 }}>{hint}</div>}
+      <input
+        type="range"
+        min={min} max={max} step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{
+          width: "100%", accentColor: accent, cursor: "pointer", height: 4,
+        }}
+      />
+      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "var(--text-3)", marginTop: 2 }}>
+        <span>{min}{unit}</span>
+        <span>{max}{unit}</span>
+      </div>
+    </div>
+  );
+}
+
+// ── Main Sidebar ───────────────────────────────────────────────────────────────
+
 export default function Sidebar({
   showMesh,
   setShowMesh,
@@ -7,12 +51,15 @@ export default function Sidebar({
   setShowCloud,
   showFloorPlan,
   setShowFloorPlan,
+  showFloorPlanViewer,
+  setShowFloorPlanViewer,
   modelInfo,
   backendStatus,
   cloudPoints,
   activeFloor,
   setActiveFloor,
   onReprocessDone,
+  onWallsDetected,
 }) {
   const cloudReady = backendStatus === "ready";
   const fmt = (n) => n?.toLocaleString?.() ?? "—";
@@ -26,12 +73,29 @@ export default function Sidebar({
   const xyzInputRef = useRef(null);
 
   // ── Cloud2BIM state ─────────────────────────────────────────────────
-  const [c2bStatus, setC2bStatus] = useState(null);      // {n_surfaces, files}
-  const [c2bFloorsBusy, setC2bFloorsBusy] = useState(false);
-  const [c2bFloorsMsg, setC2bFloorsMsg] = useState("");
-  const [c2bWallBusy, setC2bWallBusy] = useState(false);
-  const [c2bWallMsg,  setC2bWallMsg]  = useState("");
-  const [c2bFloor, setC2bFloor] = useState(0);
+  const [c2bStatus,      setC2bStatus]      = useState(null);
+  const [c2bFloorsBusy,  setC2bFloorsBusy]  = useState(false);
+  const [c2bFloorsMsg,   setC2bFloorsMsg]   = useState("");
+  const [c2bWallBusy,    setC2bWallBusy]    = useState(false);
+  const [c2bWallMsg,     setC2bWallMsg]     = useState("");
+  const [c2bFloor,       setC2bFloor]       = useState(0);
+
+  // ── Wall detection parameters ────────────────────────────────────────
+  const [showWallParams,    setShowWallParams]   = useState(false);
+  const [gridSize,          setGridSize]         = useState(0.02);
+  const [thresholdFrac,     setThresholdFrac]    = useState(0.01);
+  const [minWallM,          setMinWallM]         = useState(0.40);
+  const [maxWallThickness,  setMaxWallThickness] = useState(0.75);
+  const [dpTolerance,       setDpTolerance]      = useState(0.04);
+  const [snapToAxis,        setSnapToAxis]       = useState(true);
+
+  // ── Room detection parameters ────────────────────────────────────────
+  const [showRoomParams,    setShowRoomParams]   = useState(false);
+  const [wallThicknessM,    setWallThicknessM]   = useState(0.20);
+  const [extendM,           setExtendM]          = useState(0.45);
+  const [minSegM,           setMinSegM]          = useState(0.40);
+  const [minRoomM2,         setMinRoomM2]        = useState(0.80);
+  const [minRoomWidthM,     setMinRoomWidthM]    = useState(0.60);
 
   // ── Reprocess state ─────────────────────────────────────────────────
   const [reprocessRunning, setReprocessRunning] = useState(false);
@@ -76,27 +140,34 @@ export default function Sidebar({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          floor_idx: c2bFloor,
-          grid_size: 0.02,
-          snap_to_axis: true,
-          min_wall_m: 0.40,
-          max_wall_thickness: 0.75,
-          dp_tolerance: 0.04,
-          threshold_frac: 0.01,
-          detect_openings: true,
-          detect_rooms: true,
+          floor_idx:          c2bFloor,
+          grid_size:          gridSize,
+          snap_to_axis:       snapToAxis,
+          min_wall_m:         minWallM,
+          max_wall_thickness: maxWallThickness,
+          dp_tolerance:       dpTolerance,
+          threshold_frac:     thresholdFrac,
+          detect_openings:    true,
+          detect_rooms:       true,
+          wall_thickness:     wallThicknessM,
+          // room params packed inside cfg on the backend
+          extend_m:           extendM,
+          min_seg_m:          minSegM,
+          min_room_m2:        minRoomM2,
+          min_room_width_m:   minRoomWidthM,
         }),
       });
       const d = await r.json();
       if (!r.ok) {
-        setC2bWallMsg("⚠ " + (d.detail ?? "Error"));
+        setC2bWallMsg("\u26a0 " + (d.detail ?? "Error"));
       } else {
         setC2bWallMsg(
-          `✓ ${d.lines_count} walls · ${d.n_doors}D ${d.n_windows}W · ${d.n_rooms} rooms`
+          `\u2713 ${d.lines_count} walls \u00b7 ${d.n_doors}D ${d.n_windows}W \u00b7 ${d.n_rooms} rooms`
         );
+        onWallsDetected?.(); // signal canvas to refresh
       }
     } catch {
-      setC2bWallMsg("⚠ Network error");
+      setC2bWallMsg("\u26a0 Network error");
     } finally {
       setC2bWallBusy(false);
     }
@@ -424,6 +495,26 @@ export default function Sidebar({
           </div>
           <Toggle checked={showFloorPlan} onChange={setShowFloorPlan} />
         </div>
+
+        <div
+          className="layer-item"
+          onClick={() => setShowFloorPlanViewer((v) => !v)}
+          style={{
+            background: showFloorPlanViewer ? "rgba(0,200,224,0.07)" : undefined,
+            borderRadius: 10,
+          }}
+        >
+          <div className="layer-icon" style={{ background: "rgba(0,200,224,0.15)" }}>🗺️</div>
+          <div style={{ flex: 1 }}>
+            <div className="layer-label">Vector Floor Plan</div>
+            <div className="layer-sub">
+              {modelInfo?.floor_levels?.length
+                ? `${modelInfo.floor_levels.length} floors · walls, rooms & openings`
+                : "Canvas renderer · pan & zoom"}
+            </div>
+          </div>
+          <Toggle checked={!!showFloorPlanViewer} onChange={setShowFloorPlanViewer} />
+        </div>
       </div>
 
       {/* ── Statistics ── */}
@@ -504,15 +595,11 @@ export default function Sidebar({
         <div className="section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span>Cloud2BIM</span>
           {c2bStatus?.n_surfaces > 0 && (
+
             <span style={{
-              background: "rgba(0,200,80,0.15)",
-              color: "#00c850",
-              border: "1px solid rgba(0,200,80,0.3)",
-              borderRadius: 4,
-              fontSize: 9,
-              fontWeight: 700,
-              padding: "1px 5px",
-              letterSpacing: 0.5,
+              background: "rgba(0,200,80,0.15)", color: "#00c850",
+              border: "1px solid rgba(0,200,80,0.3)", borderRadius: 4,
+              fontSize: 9, fontWeight: 700, padding: "1px 5px", letterSpacing: 0.5,
             }}>READY</span>
           )}
         </div>
@@ -526,7 +613,7 @@ export default function Sidebar({
             : `${c2bStatus.n_surfaces} horizontal surfaces pre-computed`}
         </div>
 
-        {/* Floor level import */}
+        {/* Step 1 — Floor levels */}
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4, fontWeight: 600 }}>
             Step 1 — Improve floor levels
@@ -536,53 +623,38 @@ export default function Sidebar({
             onClick={handleC2bFloors}
             disabled={c2bFloorsBusy || !c2bStatus?.n_surfaces}
             style={{
-              width: "100%",
-              background: c2bFloorsBusy
-                ? "rgba(168,85,247,0.3)"
-                : "rgba(168,85,247,0.18)",
-              border: "1px solid rgba(168,85,247,0.5)",
-              borderRadius: 6,
-              color: "#c084fc",
-              fontSize: 11,
-              fontWeight: 700,
-              padding: "7px 10px",
-              cursor: c2bFloorsBusy ? "wait" : "pointer",
-              transition: "all 0.2s",
-              letterSpacing: 0.2,
+              width: "100%", background: c2bFloorsBusy ? "rgba(168,85,247,0.3)" : "rgba(168,85,247,0.18)",
+              border: "1px solid rgba(168,85,247,0.5)", borderRadius: 6, color: "#c084fc",
+              fontSize: 11, fontWeight: 700, padding: "7px 10px",
+              cursor: c2bFloorsBusy ? "wait" : "pointer", transition: "all 0.2s", letterSpacing: 0.2,
             }}
           >
             {c2bFloorsBusy ? "⏳ Reading surfaces…" : "↑ Import Floor Levels from C2B"}
           </button>
           {c2bFloorsMsg && (
-            <div style={{
-              marginTop: 5,
-              fontSize: 11,
-              color: c2bFloorsMsg.startsWith("⚠") ? "#ef4444" : "#00c850",
-              lineHeight: 1.4,
-            }}>{c2bFloorsMsg}</div>
+            <div style={{ marginTop: 5, fontSize: 11, color: c2bFloorsMsg.startsWith("⚠") ? "#ef4444" : "#00c850", lineHeight: 1.4 }}>
+              {c2bFloorsMsg}
+            </div>
           )}
         </div>
 
-        {/* Wall detection */}
+        {/* Step 2 — Wall detector */}
         <div>
           <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4, fontWeight: 600 }}>
             Step 2 — Run Cloud2BIM wall detector
           </div>
-          <div style={{ display: "flex", gap: 6, marginBottom: 6, alignItems: "center" }}>
+
+          {/* Floor selector */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 8, alignItems: "center" }}>
             <span style={{ fontSize: 11, color: "var(--text-3)", flexShrink: 0 }}>Floor</span>
             <select
               id="c2b-floor-select"
               value={c2bFloor}
               onChange={(e) => setC2bFloor(Number(e.target.value))}
               style={{
-                flex: 1,
-                background: "var(--surface-2, #111827)",
-                border: "1px solid var(--border, #1e2d4a)",
-                borderRadius: 5,
-                color: "var(--text-1)",
-                fontSize: 11,
-                padding: "4px 6px",
-                cursor: "pointer",
+                flex: 1, background: "var(--surface-2, #111827)",
+                border: "1px solid var(--border, #1e2d4a)", borderRadius: 5,
+                color: "var(--text-1)", fontSize: 11, padding: "4px 6px", cursor: "pointer",
               }}
             >
               {(modelInfo?.floor_levels ?? [0, 1, 2]).map((_, i) => (
@@ -590,42 +662,232 @@ export default function Sidebar({
               ))}
             </select>
           </div>
+
+          {/* ── Wall Parameters collapsible ── */}
+          <button
+            onClick={() => setShowWallParams((v) => !v)}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+              background: showWallParams ? "rgba(6,182,212,0.08)" : "rgba(255,255,255,0.03)",
+              border: `1px solid ${showWallParams ? "rgba(6,182,212,0.25)" : "rgba(255,255,255,0.08)"}`,
+              borderRadius: 6, color: showWallParams ? "#67e8f9" : "var(--text-2)",
+              fontSize: 11, fontWeight: 600, padding: "6px 10px", cursor: "pointer",
+              transition: "all 0.2s", marginBottom: 4,
+            }}
+          >
+            <span>⚙ Wall Parameters</span>
+            <span style={{ fontSize: 10, opacity: 0.7 }}>{showWallParams ? "▲" : "▼"}</span>
+          </button>
+
+          {showWallParams && (
+            <div style={{
+              background: "rgba(0,0,0,0.25)", border: "1px solid rgba(6,182,212,0.12)",
+              borderRadius: 8, padding: "10px 12px", marginBottom: 6,
+              display: "flex", flexDirection: "column", gap: 10,
+            }}>
+
+              {/* Grid Size */}
+              <ParamSlider
+                label="Grid Resolution"
+                hint="Finer = more detail, slower"
+                value={gridSize}
+                min={0.01} max={0.10} step={0.005}
+                unit="m"
+                defaultVal={0.02}
+                onChange={setGridSize}
+                accent="#67e8f9"
+              />
+
+              {/* Density Threshold */}
+              <ParamSlider
+                label="Density Threshold"
+                hint="Lower = catch more walls (& noise)"
+                value={thresholdFrac}
+                min={0.001} max={0.05} step={0.001}
+                unit=""
+                precision={3}
+                defaultVal={0.01}
+                onChange={setThresholdFrac}
+                accent="#67e8f9"
+              />
+
+              {/* Min Wall Length */}
+              <ParamSlider
+                label="Min Wall Length"
+                hint="Drop segments shorter than this"
+                value={minWallM}
+                min={0.10} max={2.0} step={0.05}
+                unit="m"
+                defaultVal={0.40}
+                onChange={setMinWallM}
+                accent="#67e8f9"
+              />
+
+              {/* Max Wall Thickness */}
+              <ParamSlider
+                label="Max Wall Thickness"
+                hint="Face-pair grouping tolerance"
+                value={maxWallThickness}
+                min={0.10} max={1.5} step={0.05}
+                unit="m"
+                defaultVal={0.75}
+                onChange={setMaxWallThickness}
+                accent="#67e8f9"
+              />
+
+              {/* DP Tolerance */}
+              <ParamSlider
+                label="Simplification (DP)"
+                hint="Douglas-Peucker tolerance"
+                value={dpTolerance}
+                min={0.01} max={0.20} step={0.005}
+                unit="m"
+                precision={3}
+                defaultVal={0.04}
+                onChange={setDpTolerance}
+                accent="#67e8f9"
+              />
+
+              {/* Snap to axis */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <div>
+                  <div style={{ fontSize: 11, color: "var(--text-2)", fontWeight: 600 }}>Manhattan Snap</div>
+                  <div style={{ fontSize: 10, color: "var(--text-3)" }}>Force H/V alignment</div>
+                </div>
+                <Toggle checked={snapToAxis} onChange={setSnapToAxis} />
+              </div>
+
+              {/* Reset all */}
+              <button
+                onClick={() => { setGridSize(0.02); setThresholdFrac(0.01); setMinWallM(0.40); setMaxWallThickness(0.75); setDpTolerance(0.04); setSnapToAxis(true); }}
+                style={{
+                  fontSize: 10, color: "var(--text-3)", background: "none",
+                  border: "1px solid rgba(255,255,255,0.08)", borderRadius: 4, padding: "3px 8px",
+                  cursor: "pointer", alignSelf: "flex-end", transition: "all 0.15s",
+                }}
+              >↩ Reset defaults</button>
+            </div>
+          )}
+
+          {/* ── Room Parameters collapsible ── */}
+          <button
+            onClick={() => setShowRoomParams((v) => !v)}
+            style={{
+              width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between",
+              background: showRoomParams ? "rgba(52,211,153,0.08)" : "rgba(255,255,255,0.03)",
+              border: `1px solid ${showRoomParams ? "rgba(52,211,153,0.25)" : "rgba(255,255,255,0.08)"}`,
+              borderRadius: 6, color: showRoomParams ? "#34d399" : "var(--text-2)",
+              fontSize: 11, fontWeight: 600, padding: "6px 10px", cursor: "pointer",
+              transition: "all 0.2s", marginBottom: 8,
+            }}
+          >
+            <span>⚙ Room Parameters</span>
+            <span style={{ fontSize: 10, opacity: 0.7 }}>{showRoomParams ? "▲" : "▼"}</span>
+          </button>
+
+          {showRoomParams && (
+            <div style={{
+              background: "rgba(0,0,0,0.25)", border: "1px solid rgba(52,211,153,0.12)",
+              borderRadius: 8, padding: "10px 12px", marginBottom: 8,
+              display: "flex", flexDirection: "column", gap: 10,
+            }}>
+
+              <ParamSlider
+                label="Wall Draw Thickness"
+                hint="Half-width for room flood-fill"
+                value={wallThicknessM}
+                min={0.05} max={0.50} step={0.025}
+                unit="m"
+                defaultVal={0.20}
+                onChange={setWallThicknessM}
+                accent="#34d399"
+              />
+
+              <ParamSlider
+                label="Endpoint Extension"
+                hint="Extend to seal T-junctions"
+                value={extendM}
+                min={0.10} max={1.0} step={0.025}
+                unit="m"
+                defaultVal={0.45}
+                onChange={setExtendM}
+                accent="#34d399"
+              />
+
+              <ParamSlider
+                label="Min Segment"
+                hint="Ignore walls shorter than this"
+                value={minSegM}
+                min={0.10} max={1.0} step={0.05}
+                unit="m"
+                defaultVal={0.40}
+                onChange={setMinSegM}
+                accent="#34d399"
+              />
+
+              <ParamSlider
+                label="Min Room Area"
+                hint="Filter out tiny noise regions"
+                value={minRoomM2}
+                min={0.1} max={10} step={0.1}
+                unit="m²"
+                defaultVal={0.80}
+                onChange={setMinRoomM2}
+                accent="#34d399"
+              />
+
+              <ParamSlider
+                label="Min Room Width"
+                hint="Reject corridor-thin regions"
+                value={minRoomWidthM}
+                min={0.10} max={2.0} step={0.05}
+                unit="m"
+                defaultVal={0.60}
+                onChange={setMinRoomWidthM}
+                accent="#34d399"
+              />
+
+              <button
+                onClick={() => { setWallThicknessM(0.20); setExtendM(0.45); setMinSegM(0.40); setMinRoomM2(0.80); setMinRoomWidthM(0.60); }}
+                style={{
+                  fontSize: 10, color: "var(--text-3)", background: "none",
+                  border: "1px solid rgba(255,255,255,0.08)", borderRadius: 4, padding: "3px 8px",
+                  cursor: "pointer", alignSelf: "flex-end", transition: "all 0.15s",
+                }}
+              >↩ Reset defaults</button>
+            </div>
+          )}
+
+          {/* Detect Walls button */}
           <button
             id="c2b-walls-btn"
             onClick={handleC2bWalls}
             disabled={c2bWallBusy || !c2bStatus?.n_surfaces}
             style={{
               width: "100%",
-              background: c2bWallBusy
-                ? "rgba(6,182,212,0.3)"
-                : "rgba(6,182,212,0.18)",
-              border: "1px solid rgba(6,182,212,0.5)",
-              borderRadius: 6,
-              color: "#67e8f9",
-              fontSize: 11,
-              fontWeight: 700,
-              padding: "7px 10px",
-              cursor: c2bWallBusy ? "wait" : "pointer",
-              transition: "all 0.2s",
-              letterSpacing: 0.2,
+              background: c2bWallBusy ? "rgba(6,182,212,0.3)" : "rgba(6,182,212,0.18)",
+              border: "1px solid rgba(6,182,212,0.5)", borderRadius: 6, color: "#67e8f9",
+              fontSize: 11, fontWeight: 700, padding: "8px 10px",
+              cursor: c2bWallBusy ? "wait" : "pointer", transition: "all 0.2s", letterSpacing: 0.2,
             }}
           >
-            {c2bWallBusy ? "⏳ Detecting walls…" : "🧱 Detect Walls (Cloud2BIM algo)"}
+            {c2bWallBusy ? "⏳ Detecting walls…" : "🧱 Detect Walls + Rooms"}
           </button>
           {c2bWallMsg && (
             <div style={{
-              marginTop: 5,
-              fontSize: 11,
-              color: c2bWallMsg.startsWith("⚠") ? "#ef4444" : "#00c850",
-              lineHeight: 1.4,
+              marginTop: 5, fontSize: 11,
+              color: c2bWallMsg.startsWith("⚠") ? "#ef4444" : "#00c850", lineHeight: 1.4,
             }}>{c2bWallMsg}</div>
           )}
-          <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 5, lineHeight: 1.4 }}>
-            Contour tracing + Douglas-Peucker +<br/>parallel face-pair grouping
-          </div>
+          {c2bWallMsg && !c2bWallMsg.startsWith("⚠") && (
+            <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 3, lineHeight: 1.4 }}>
+              Canvas viewer refreshed automatically ✓
+            </div>
+          )}
         </div>
       </div>
 
     </aside>
   );
 }
+

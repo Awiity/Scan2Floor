@@ -40,6 +40,11 @@ export default function App() {
   const [cloudReloadKey, setCloudReloadKey] = useState(null);
   const handleReprocessDone = () => setCloudReloadKey(String(Date.now()));
 
+  /* ---------- floor-plan data version --------- */
+  // Bumped whenever wall detection finishes so FloorPlanViewer re-fetches.
+  const [floorDataVersion, setFloorDataVersion] = useState(0);
+  const handleWallsDetected = () => setFloorDataVersion((v) => v + 1);
+
   /* ---------- camera ref -------------- */
   const controlsRef = useRef();
 
@@ -111,6 +116,7 @@ export default function App() {
           activeFloor={activeFloor}
           setActiveFloor={setActiveFloor}
           onReprocessDone={handleReprocessDone}
+          onWallsDetected={handleWallsDetected}
         />
 
         <div className="viewport">
@@ -220,6 +226,7 @@ export default function App() {
           <div className="fpv-panel">
             <FloorPlanViewer
               modelInfo={modelInfo}
+              dataVersion={floorDataVersion}
               onClose={() => setShowFloorPlanViewer(false)}
             />
           </div>
