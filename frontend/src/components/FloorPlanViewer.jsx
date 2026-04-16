@@ -459,6 +459,14 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
   const [openingsData,  setOpeningsData]  = useState(null);
   const [loadState,     setLoadState]     = useState("idle");
 
+  // Keep selected floor in bounds if number of floors changes
+  useEffect(() => {
+    const numFloors = modelInfo?.floor_levels?.length || 1;
+    if (selectedFloor >= numFloors) {
+      setSelectedFloor(0);
+    }
+  }, [modelInfo?.floor_levels, selectedFloor]);
+
   // ── Edit state ──────────────────────────────────────────────────────────────
   // editedLines: [{pts: [[x1,z1],[x2,z2]], source: 'algo'|'user'}]
   const [editedLines,  setEditedLines]  = useState([]);

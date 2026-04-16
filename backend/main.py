@@ -155,16 +155,22 @@ def _run_reprocess_bg(xyz_path: str) -> None:
             "log": [f"Clearing stale outputs and reprocessing: {xyz_path}"],
         })
 
-    # Delete stale processed files so /api/status transitions to 'processing'
-    stale = ["pointcloud.bin", "info.json"]
-    for name in stale:
-        p = os.path.join(PROCESSED_DIR, name)
-        try:
-            if os.path.exists(p):
+    # Delete all stale processed files to start with a truly clean slate
+    import glob
+    stale_patterns = [
+        "pointcloud.bin", "info.json",
+        "*.npy", "*.json", "*.dxf", "*.svg", "*.png", "*.jpg"
+    ]
+    for pat in stale_patterns:
+        for p in glob.glob(os.path.join(PROCESSED_DIR, pat)):
+            # preserve the xyz path configuration
+            if os.path.basename(p) == "xyz_path.json":
+                continue
+            try:
                 os.remove(p)
-        except Exception as exc:
-            with _reprocess_lock:
-                _reprocess_status["log"].append(f"[warn] could not delete {name}: {exc}")
+            except Exception as exc:
+                with _reprocess_lock:
+                    _reprocess_status["log"].append(f"[warn] could not delete {os.path.basename(p)}: {exc}")
 
     script = os.path.join(BASE_DIR, "pipeline", "preprocess_xyz.py")
     try:

@@ -80,6 +80,14 @@ export default function Sidebar({
   const [c2bWallMsg,     setC2bWallMsg]     = useState("");
   const [c2bFloor,       setC2bFloor]       = useState(0);
 
+  // Keep c2bFloor in bounds if the number of floors changes (e.g., new scan loaded)
+  useEffect(() => {
+    const numFloors = modelInfo?.floor_levels?.length || 1;
+    if (c2bFloor >= numFloors) {
+      setC2bFloor(0);
+    }
+  }, [modelInfo?.floor_levels, c2bFloor]);
+
   // ── Wall detection parameters ────────────────────────────────────────
   const [showWallParams,    setShowWallParams]   = useState(false);
   const [gridSize,          setGridSize]         = useState(0.02);
@@ -129,6 +137,14 @@ export default function Sidebar({
       setC2bFloorsMsg("⚠ Network error");
     } finally {
       setC2bFloorsBusy(false);
+    }
+  };
+
+  const handleExtractSlices = async () => {
+    try {
+      await fetch("/api/preprocess-walls", { method: "POST" });
+    } catch {
+      setC2bFloorsMsg("⚠ Network error during slice extraction request");
     }
   };
 
@@ -636,6 +652,26 @@ export default function Sidebar({
               {c2bFloorsMsg}
             </div>
           )}
+        </div>
+
+        {/* Step 1.5 — Wall Slices */}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4, fontWeight: 600 }}>
+            Step 1.5 — Extract Wall Slices
+          </div>
+          <button
+            id="c2b-slices-btn"
+            onClick={handleExtractSlices}
+            disabled={modelInfo?.preprocess_walls_running}
+            style={{
+              width: "100%", background: modelInfo?.preprocess_walls_running ? "rgba(251,146,60,0.3)" : "rgba(251,146,60,0.18)",
+              border: "1px solid rgba(251,146,60,0.5)", borderRadius: 6, color: "#fb923c",
+              fontSize: 11, fontWeight: 700, padding: "7px 10px",
+              cursor: modelInfo?.preprocess_walls_running ? "wait" : "pointer", transition: "all 0.2s", letterSpacing: 0.2,
+            }}
+          >
+            {modelInfo?.preprocess_walls_running ? "⏳ Extracting Slices…" : "✂️ Run Slice Extraction"}
+          </button>
         </div>
 
         {/* Step 2 — Wall detector */}
