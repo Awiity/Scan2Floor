@@ -93,7 +93,8 @@ export default function App() {
             className={`status-dot ${backendStatus === "ready" ? "ready" : backendStatus === "error" ? "error" : "loading"}`}
           />
           {backendStatus === "ready" && "Point cloud ready"}
-          {backendStatus === "processing" && "Processing point cloud…"}
+          {backendStatus === "processing" && "Preprocessing…"}
+          {backendStatus === "idle" && "No data — run pipeline"}
           {backendStatus === "connecting" && "Connecting…"}
           {backendStatus === "error" && "Backend offline"}
         </div>
@@ -194,10 +195,21 @@ export default function App() {
             />
           )}
 
-          {/* Processing banner */}
+          {/* Processing banner — only when a job is actively running */}
           {backendStatus === "processing" && (
             <div className="processing-banner">
               ⏳ Point cloud is being preprocessed — check back shortly
+            </div>
+          )}
+
+          {/* Idle banner — no data yet, nothing running */}
+          {backendStatus === "idle" && (
+            <div className="processing-banner" style={{
+              background: "rgba(6,182,212,0.08)",
+              borderColor: "rgba(6,182,212,0.3)",
+              color: "#67e8f9",
+            }}>
+              📂 No point cloud loaded — select a .xyz file in the sidebar and click <strong>Rerun Full Preprocess Pipeline</strong>
             </div>
           )}
 

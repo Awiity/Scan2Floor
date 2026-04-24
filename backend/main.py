@@ -17,18 +17,35 @@ from pipeline.opening_detection import detect_openings_for_floor
 from pipeline.room_detection import detect_rooms_for_floor
 from pipeline.wall_detection_c2b import detect_walls_c2b_for_floor
 from pipeline.floor_from_c2b import update_floor_levels_from_c2b
+import pipeline.run_pipeline as _pipeline
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROCESSED_DIR = os.path.join(BASE_DIR, "processed")
-MATTERPAK_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "..", "data", "matterpak"))
-_DEFAULT_XYZ_PATH = os.path.abspath(
-    os.path.join(BASE_DIR, "..", "..", "data", "matterpak", "cloud.xyz")
+
+# ── Path configuration ─────────────────────────────────────────────────────────
+# All paths can be overridden by environment variables so the Docker image
+# works out-of-the-box without hard-coded host paths.
+PROCESSED_DIR = os.environ.get(
+    "PROCESSED_DIR", os.path.join(BASE_DIR, "processed")
 )
-# Cloud2BIM output directory (pre-computed from cloud.xyz)
-_C2B_OUTPUT_DIR = os.path.abspath(
-    os.path.join(BASE_DIR, "..", "..", "Cloud2BIM-1.03", "output_xyz")
+MATTERPAK_DIR = os.environ.get(
+    "DATA_DIR",
+    os.path.abspath(os.path.join(BASE_DIR, "..", "..", "data", "matterpak")),
 )
-_XYZ_CONFIG_PATH = os.path.join(BASE_DIR, "processed", "xyz_path.json")
+# C2B_DIR: where Cloud2BIM horiz_surface_*.xyz files live.
+# Default is the internal pipeline output (no host mount required).
+# Override with C2B_DIR env var to point at a pre-computed host folder.
+_C2B_OUTPUT_DIR = os.environ.get(
+    "C2B_DIR",
+    os.path.join(PROCESSED_DIR, "c2b_output"),
+)
+# SCAN_ROOTS: comma-separated list of directories to search for .xyz files
+_SCAN_ROOTS = [
+    r.strip()
+    for r in os.environ.get("SCAN_ROOTS", "/data").split(",")
+    if r.strip()
+]
+_DEFAULT_XYZ_PATH = os.path.join(MATTERPAK_DIR, "cloud.xyz")
+_XYZ_CONFIG_PATH = os.path.join(PROCESSED_DIR, "xyz_path.json")
 
 
 def _get_xyz_path() -> str:
@@ -106,34 +123,10 @@ def set_xyz_path(payload: XYZPathPayload):
     return {"status": "ok", "xyz_path": p, "exists": os.path.isfile(p)}
 
 
-@app.get("/api/browse-xyz")
-def browse_xyz():
-    """
-    Open a native Windows file-picker dialog and return the selected .xyz path.
-    Uses a tiny tkinter subprocess so it never blocks the FastAPI event loop.
-    """
-    tk_script = (
-        "import tkinter as tk; "
-        "from tkinter import filedialog; "
-        "root = tk.Tk(); root.withdraw(); root.wm_attributes('-topmost', True); "
-        "p = filedialog.askopenfilename("
-        "    title='Select point cloud file',"
-        "    filetypes=[('XYZ point cloud', '*.xyz'), ('All files', '*.*')]"
-        "); print(p, end='')"
-    )
-    try:
-        result = subprocess.run(
-            [sys.executable, "-c", tk_script],
-            capture_output=True, text=True, timeout=120
-        )
-        chosen = result.stdout.strip()
-        if not chosen:
-            return {"cancelled": True, "xyz_path": None}
-        return {"cancelled": False, "xyz_path": chosen, "exists": os.path.isfile(chosen)}
-    except subprocess.TimeoutExpired:
-        return JSONResponse({"error": "File dialog timed out"}, status_code=408)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+# NOTE: The native Windows tkinter file-picker (browse-xyz) has been removed.
+# In the Docker deployment the backend runs headless inside a container and
+# cannot open a GUI dialog. Users set the XYZ path via POST /api/xyz-path,
+# typing the container-internal mount path (e.g. /data/matterpak/cloud.xyz).
 
 
 # ── Full Reprocess Pipeline ──────────────────────────────────────────────────
@@ -281,7 +274,11 @@ def status():
         info["preprocess_walls_running"] = _preprocess_status["running"]
 
         return {"status": "ready", "info": info}
-    return {"status": "processing", "info": None}
+
+    # No pointcloud.bin / info.json — distinguish between actively running vs idle
+    with _reprocess_lock:
+        is_running = _reprocess_status["running"]
+    return {"status": "processing" if is_running else "idle", "info": None}
 
 
 @app.get("/api/pointcloud")
@@ -652,6 +649,120 @@ def colorplans():
     }
 
 
+# ── Scan File Browser ────────────────────────────────────────────────────────
+
+
+@app.get("/api/scan/browse")
+def scan_browse():
+    """
+    List all .xyz files found under SCAN_ROOTS directories.
+    Returns grouped by parent directory so the UI can render a file tree.
+    """
+    import glob as _glob
+
+    groups = []
+    for root in _SCAN_ROOTS:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, _dirs, filenames in os.walk(root):
+            xyz_files = sorted(f for f in filenames if f.lower().endswith(".xyz"))
+            if not xyz_files:
+                continue
+            entries = []
+            for fname in xyz_files:
+                fpath = os.path.join(dirpath, fname)
+                try:
+                    size_mb = round(os.path.getsize(fpath) / 1_048_576, 1)
+                except Exception:
+                    size_mb = -1
+                entries.append({"name": fname, "path": fpath, "size_mb": size_mb})
+            groups.append({"dir": dirpath, "files": entries})
+
+    return {
+        "roots": _SCAN_ROOTS,
+        "groups": groups,
+        "total": sum(len(g["files"]) for g in groups),
+    }
+
+
+# ── Unified Pipeline ──────────────────────────────────────────────────────────
+
+
+class PipelineRunPayload(BaseModel):
+    xyz_path:       str
+    run_c2b:        bool  = True
+    run_slices:     bool  = True
+    detect_floors:  list[int] | None = None
+    # wall detection overrides (all optional)
+    grid_size:          float = 0.02
+    snap_to_axis:       bool  = True
+    min_wall_m:         float = 0.40
+    max_wall_thickness: float = 0.75
+    dp_tolerance:       float = 0.04
+    threshold_frac:     float = 0.01
+
+
+@app.post("/api/pipeline/run")
+def pipeline_run(payload: PipelineRunPayload):
+    """
+    Start the unified 5-stage pipeline in the background:
+      1. Preprocess XYZ   → pointcloud.bin + info.json
+      2. Cloud2BIM C2B    → horiz_surface_N.xyz
+      3. Import C2B Floors → update floor_levels in info.json
+      4. Extract Slices   → wall_slice_floor_N.npy
+      5. Detect Walls & Rooms → walls_floor_N.json + DXF
+    Poll /api/pipeline/status for progress.
+    """
+    p = payload.xyz_path.strip()
+    if not p.lower().endswith(".xyz"):
+        raise HTTPException(status_code=400, detail="Path must end with .xyz")
+    if not os.path.exists(p):
+        raise HTTPException(
+            status_code=404,
+            detail=f".xyz file not found: {p}",
+        )
+
+    # Persist the path so other endpoints can pick it up
+    _set_xyz_path(p)
+
+    wall_cfg = {
+        "grid_size":          payload.grid_size,
+        "snap_to_axis":       payload.snap_to_axis,
+        "min_wall_m":         payload.min_wall_m,
+        "max_wall_thickness": payload.max_wall_thickness,
+        "dp_tolerance":       payload.dp_tolerance,
+        "threshold_frac":     payload.threshold_frac,
+    }
+
+    started = _pipeline.start_pipeline(
+        xyz_path=p,
+        run_c2b=payload.run_c2b,
+        run_slices=payload.run_slices,
+        detect_floors=payload.detect_floors,
+        wall_cfg=wall_cfg,
+    )
+
+    if not started:
+        return JSONResponse({"status": "already_running",
+                             "message": "Pipeline is already running."})
+
+    return JSONResponse({"status": "started", "xyz_path": p,
+                         "message": "Pipeline started. Poll /api/pipeline/status."})
+
+
+@app.get("/api/pipeline/status")
+def pipeline_status():
+    """Poll the current status of the unified pipeline."""
+    return _pipeline.get_status()
+
+
+@app.post("/api/pipeline/cancel")
+def pipeline_cancel():
+    """Not yet implemented — placeholder so the UI button can exist."""
+    return {"status": "not_supported",
+            "message": "Pipeline cancellation is not supported; wait for current stage to finish."}
+
+
 # ── Cloud2BIM Integration ─────────────────────────────────────────────────────
 
 
@@ -784,3 +895,12 @@ def c2b_generate_walls(params: C2BWallParams):
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+
+
+# ── Serve React frontend ──────────────────────────────────────────────────────
+# Mount the compiled Vite bundle as the root static site.
+# IMPORTANT: this mount must come LAST — FastAPI routes registered above it
+# take precedence, so /api/* and /model/* are never captured by the catch-all.
+_DIST_DIR = os.path.join(BASE_DIR, "dist")
+if os.path.isdir(_DIST_DIR):
+    app.mount("/", StaticFiles(directory=_DIST_DIR, html=True), name="static")

@@ -71,7 +71,7 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
     Returns: result dict  { floor_idx, n_rooms, rooms }
     """
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    processed_dir = os.path.join(base_dir, "processed")
+    processed_dir = os.environ.get("PROCESSED_DIR", os.path.join(base_dir, "processed"))
 
     wall_path = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
     if not os.path.exists(wall_path):

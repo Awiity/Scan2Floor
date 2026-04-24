@@ -1,0 +1,26 @@
+# Backend build context — exclude files that don't belong in the image
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Local pipeline outputs (these come from the named volume at runtime)
+processed/
+
+# Temporary / scratch scripts
+tmp_*.py
+
+# Windows launcher scripts (not needed inside the container)
+*.bat
+
+# Editor / OS artefacts
+.vscode/
+*.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore

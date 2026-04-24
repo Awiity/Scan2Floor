@@ -37,6 +37,13 @@ import os
 import cv2
 import numpy as np
 
+# ── Optional GPU acceleration via CuPy ───────────────────────────────────────
+try:
+    import cupy as cp
+    _GPU = True
+except ImportError:
+    _GPU = False
+
 # ── Geometry helpers (previously in wall_detection.py) ────────────────────
 
 def snap_lines_to_manhattan(lines, angle_tolerance: float = 10.0):
@@ -332,7 +339,7 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     list[[[x1,z1],[x2,z2]]]   wall centre-line segments in metres.
     """
     base_dir      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    processed_dir = os.path.join(base_dir, "processed")
+    processed_dir = os.environ.get("PROCESSED_DIR", os.path.join(base_dir, "processed"))
     info_path     = os.path.join(processed_dir, "info.json")
 
     with open(info_path) as fh:
@@ -403,10 +410,23 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     px = np.clip(np.floor((xz[:, 0] - x_min) / grid_size).astype(np.int32), 0, width  - 1)
     py = np.clip(np.floor((xz[:, 1] - z_min) / grid_size).astype(np.int32), 0, height - 1)
 
-    grid = np.zeros((height, width), dtype=np.float32)
-    np.add.at(grid, (py, px), 1.0)
+    # ── Density grid — GPU bincount vs CPU scatter ───────────────────────────
+    # np.add.at is a serial scatter; cp.bincount is a single parallel GPU kernel.
+    if _GPU:
+        try:
+            flat = py.astype(np.int64) * width + px.astype(np.int64)
+            counts = cp.asnumpy(
+                cp.bincount(cp.asarray(flat), minlength=height * width)
+            )
+            grid = counts.reshape(height, width).astype(np.float32)
+        except Exception:
+            grid = np.zeros((height, width), dtype=np.float32)
+            np.add.at(grid, (py, px), 1.0)
+    else:
+        grid = np.zeros((height, width), dtype=np.float32)
+        np.add.at(grid, (py, px), 1.0)
 
-    print(f"[c2b floor {floor_idx}] grid {width}×{height}  gs={grid_size*100:.0f} cm")
+    print(f"[c2b floor {floor_idx}] grid {width}×{height}  gs={grid_size*100:.0f} cm  gpu={_GPU}")
 
     # ── Threshold → binary ────────────────────────────────────────────────
     max_density = grid.max()

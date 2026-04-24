@@ -1,0 +1,7 @@
+# GPU-only additions to requirements.txt
+# Install via: pip install -r requirements.gpu.txt
+#
+# cupy-cuda12x: CuPy built against CUDA 12.x
+# Forward-compatible with CUDA 13.0 drivers (RTX 4060 Laptop).
+# If NVIDIA releases cupy-cuda13x, replace the line below.
+cupy-cuda12x

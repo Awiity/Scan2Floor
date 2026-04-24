@@ -1,0 +1,37 @@
+# ── Scan2Floor Backend — GPU-Accelerated Image ────────────────────────────────
+# Base: NVIDIA CUDA 12.6 runtime (forward-compatible with CUDA 13.0 driver)
+# RTX 4060 Laptop (sm_89) is fully supported by CUDA 12.x.
+# cupy-cuda12x wheels run on CUDA 13.0 drivers via CUDA forward compatibility.
+FROM nvidia/cuda:12.6.3-runtime-ubuntu22.04
+
+# Prevent interactive prompts during apt installs
+ENV DEBIAN_FRONTEND=noninteractive
+
+WORKDIR /app
+
+# System libraries: Python 3.11, OpenCV headless deps, Open3D deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies (CPU base) + CuPy for CUDA 12.x
+COPY requirements.txt requirements.gpu.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r requirements.gpu.txt
+
+# Copy application source
+COPY . .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

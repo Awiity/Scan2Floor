@@ -38,9 +38,9 @@ if hasattr(sys.stdout, "reconfigure"):
 # ── Path resolution ──────────────────────────────────────────────────────────
 _THIS_FILE   = Path(__file__).resolve()
 BASE_DIR     = _THIS_FILE.parent.parent          # …/scan2floor/backend
-PROCESSED_DIR = BASE_DIR / "processed"
+PROCESSED_DIR = Path(os.environ.get("PROCESSED_DIR", str(BASE_DIR / "processed")))
 _XYZ_CONFIG  = PROCESSED_DIR / "xyz_path.json"
-_DEFAULT_XYZ = BASE_DIR.parent.parent / "data" / "matterpak" / "cloud.xyz"
+_DEFAULT_XYZ = Path(os.environ.get("DATA_DIR", str(BASE_DIR.parent.parent / "data" / "matterpak"))) / "cloud.xyz"
 
 
 def _resolve_xyz(cli_path: str | None) -> Path:
@@ -193,11 +193,14 @@ def main() -> None:
 
     if _HAS_PANDAS:
         import pandas as pd
+        # Use the C engine (sep=" ") — it is 20-50× faster than
+        # engine="python" with sep=r"\s+" on large files (114 M pts).
+        # Matterport XYZ files are reliably single-space delimited.
         reader = pd.read_csv(
-            str(xyz_path), header=None, sep=r"\s+",
+            str(xyz_path), header=None, sep=" ",
             usecols=[0, 1, 2], names=["xr", "yr", "zr"],
             chunksize=CHUNK, dtype=np.float64,
-            engine="python", on_bad_lines="skip",
+            engine="c", on_bad_lines="skip",
         )
         for chunk in reader:
             sum_x     += float(chunk["xr"].sum())
@@ -234,10 +237,10 @@ def main() -> None:
 
     if _HAS_PANDAS:
         reader2 = pd.read_csv(
-            str(xyz_path), header=None, sep=r"\s+",
+            str(xyz_path), header=None, sep=" ",
             usecols=[0, 1, 2], names=["xr", "yr", "zr"],
             chunksize=CHUNK, dtype=np.float32,
-            engine="python", on_bad_lines="skip",
+            engine="c", on_bad_lines="skip",
         )
         for chunk in reader2:
             x_raw = chunk["xr"].values

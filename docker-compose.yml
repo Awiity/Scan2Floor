@@ -1,0 +1,78 @@
+# Scan2Floor — Docker Compose Stack
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage (from the scan2floor/ directory):
+#   docker compose up --build -d      # first run (builds image)
+#   docker compose up -d              # subsequent starts
+#   docker compose down               # stop
+#   docker compose logs -f            # live logs
+#
+# The app will be reachable at:
+#   http://localhost:8000             (local machine)
+#   http://<your-LAN-IP>:8000        (any machine on the same network)
+#
+# ── Mounting scans on a DIFFERENT PC ─────────────────────────────────────────
+# Add one volume entry per scan location. Inside the container each folder
+# will appear under /data/<foldername> and will be auto-discovered by the UI.
+#
+# Examples:
+#   - D:/scans/project_A:/data/project_A:ro
+#   - E:/archive/hotel_scan:/data/hotel_scan:ro
+#   - //NAS/scans/building_2024:/data/building_2024:ro
+#
+# The SCAN_ROOTS=/data env var tells the backend where to walk for .xyz files.
+# If you mount scans outside /data, add the root to SCAN_ROOTS (comma-separated):
+#   SCAN_ROOTS=/data,/mnt/extra_scans
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  scan2floor:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: scan2floor
+    ports:
+      - "8000:8000"
+    volumes:
+      # ── Writable: all generated pipeline outputs ──────────────────────────
+      # Named Docker volume so processed data (pointcloud.bin, wall slices,
+      # Cloud2BIM outputs, etc.) survives container restarts and rebuilds.
+      - processed_data:/processed
+
+      # ── Read-only scan data ───────────────────────────────────────────────
+      # Add one line per scan location. Use :ro (read-only) for safety.
+      # Inside the container each folder appears under /data/<foldername>.
+      #
+      # FORMAT:  - <host_path>:/data/<folder_name>:ro
+      #
+      - C:/Users/AWIT/Desktop/WORK/data/matterpak:/data/matterpak:ro
+      #
+      # ── Add more scan mounts here (copy the line above and change paths):
+      # - D:/scans/building_2:/data/building_2:ro
+      # - E:/archive/scan_2024:/data/scan_2024:ro
+
+    environment:
+      # Where the backend writes all pipeline outputs (matches volume above)
+      - PROCESSED_DIR=/processed
+      # Default scan folder — used as fallback if no path is set in the UI
+      - DATA_DIR=/data/matterpak
+      # C2B_DIR: Cloud2BIM output location.
+      # Defaults to /processed/c2b_output (written by the built-in pipeline).
+      # Override to point at pre-computed horiz_surface_*.xyz files instead:
+      # - C2B_DIR=/c2b/output_xyz
+      - C2B_DIR=/processed/c2b_output
+      # SCAN_ROOTS: comma-separated dirs the file browser will walk.
+      # Add extra roots if you mount scans outside /data.
+      - SCAN_ROOTS=/data
+
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/status')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  # Named volume — data is preserved across `docker compose up/down` cycles.
+  # To reset all pipeline outputs: docker volume rm scan2floor_processed_data
+  processed_data:

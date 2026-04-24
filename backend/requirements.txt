@@ -1,9 +1,11 @@
 fastapi
 uvicorn[standard]
+python-multipart
 numpy
 aiofiles
 pandas
 scipy
 matplotlib
 open3d
-opencv-python
+opencv-python-headless
+ezdxf

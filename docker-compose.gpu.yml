@@ -1,0 +1,32 @@
+# GPU override for docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# Usage (from the scan2floor/ directory):
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d
+#
+# Or just double-click docker-build-gpu.bat
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  scan2floor:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.gpu   # ← CUDA 12.6 + CuPy base
+
+    # Grant the container access to the host NVIDIA GPU.
+    # Requires NVIDIA Container Toolkit installed in WSL2.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    environment:
+      # Inherited from docker-compose.yml plus GPU flag for logging
+      - PROCESSED_DIR=/processed
+      - DATA_DIR=/data/matterpak
+      - C2B_DIR=/processed/c2b_output
+      - SCAN_ROOTS=/data
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
