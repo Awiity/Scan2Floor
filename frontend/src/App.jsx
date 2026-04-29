@@ -13,7 +13,7 @@ import LoadingOverlay from "./components/LoadingOverlay";
 import FloorPlanPanel from "./components/FloorPlanPanel";
 import FloorPlanViewer from "./components/FloorPlanViewer";
 
-const POLL_MS = 4000;
+const POLL_MS = 7 * 1000;
 
 export default function App() {
   /* ---------- server status ---------- */
