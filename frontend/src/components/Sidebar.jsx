@@ -62,6 +62,7 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
   // Pipeline
   const [pipeStatus, setPipeStatus] = useState(null);
   const [pipeRunning,setPipeRunning]= useState(false);
+  const [pipeCancelling,setPipeCancelling] = useState(false);
   const [pipeError,  setPipeError]  = useState("");
   const [showLog,    setShowLog]    = useState(false);
   const pollRef = useRef(null);
@@ -74,7 +75,13 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
       try {
         const d = await fetch("/api/pipeline/status").then(r=>r.json());
         setPipeStatus(d); setPipeRunning(d.running);
-        if(!d.running){ stopPoll(); if(d.done&&!d.error){onReprocessDone?.();onWallsDetected?.();} if(d.error) setPipeError(d.error); }
+        if(!d.running){
+          stopPoll();
+          setPipeCancelling(false);
+          if(d.cancelled) { setPipeError("\u26a0 Cancelled"); }
+          else if(d.done&&!d.error){ onReprocessDone?.(); onWallsDetected?.(); }
+          else if(d.error) setPipeError(d.error);
+        }
       } catch {}
     },2000);
   };
@@ -86,12 +93,21 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
 
   const runPipeline = async () => {
     if(!effectivePath||pipeRunning) return;
-    setPipeError(""); setPipeStatus(null);
+    setPipeError(""); setPipeStatus(null); setPipeCancelling(false);
     try {
       const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac})}).then(r=>r.json());
       if(d.status==="started"||d.status==="already_running"){ setPipeRunning(true); startPoll(); }
       else if(d.detail) setPipeError(d.detail);
     } catch { setPipeError("Network error"); }
+  };
+
+  const cancelPipeline = async () => {
+    if(!pipeRunning||pipeCancelling) return;
+    setPipeCancelling(true);
+    try {
+      await fetch("/api/pipeline/cancel", { method: "POST" });
+      // Keep polling — the status will flip running→false when the thread stops
+    } catch { setPipeCancelling(false); }
   };
 
   // Params
@@ -138,6 +154,7 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
   const currentStage= pipeStatus?.stage ?? 0;
   const pipeLog     = pipeStatus?.log ?? [];
   const pipeDone    = pipeStatus?.done ?? false;
+  const pipeCancelled = pipeStatus?.cancelled ?? false;
 
   const btnStyle = (clr, disabled) => ({
     width:"100%", border:`1px solid ${clr}88`, borderRadius:6, color:clr,
@@ -219,8 +236,9 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
                 </div>
               );
             })}
-            {pipeDone&&!pipeRunning&&<div style={{marginTop:6,fontSize:11,color:"#00c850",fontWeight:700,textAlign:"center"}}>✓ Pipeline complete!</div>}
-            {pipeError&&<div style={{marginTop:6,fontSize:11,color:"#ef4444",lineHeight:1.4}}>{pipeError}</div>}
+            {pipeDone&&!pipeRunning&&!pipeCancelled&&<div style={{marginTop:6,fontSize:11,color:"#00c850",fontWeight:700,textAlign:"center"}}>✓ Pipeline complete!</div>}
+            {pipeCancelled&&!pipeRunning&&<div style={{marginTop:6,fontSize:11,color:"#fb923c",fontWeight:700,textAlign:"center"}}>⚠ Cancelled — partial results may be available</div>}
+            {pipeError&&!pipeCancelled&&<div style={{marginTop:6,fontSize:11,color:"#ef4444",lineHeight:1.4}}>{pipeError}</div>}
             <button onClick={()=>setShowLog(v=>!v)} style={{marginTop:6,fontSize:10,color:"var(--text-3)",background:"none",border:"none",cursor:"pointer",padding:0}}>{showLog?"▲ Hide log":"▼ Show log"}</button>
             {showLog&&pipeLog.length>0&&(
               <div style={{marginTop:4,fontSize:10,fontFamily:"monospace",background:"rgba(0,0,0,0.4)",borderRadius:4,padding:"4px 6px",maxHeight:80,overflow:"auto",color:"var(--text-3)",lineHeight:1.5}}>
@@ -230,10 +248,29 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
           </div>
         )}
 
-        {/* Run button */}
-        <button id="pipeline-run-btn" onClick={runPipeline} disabled={!effectivePath||pipeRunning} style={btnStyle(pipeRunning?"#fb923c":pipeDone&&!pipeError?"#00c850":"#67e8f9", !effectivePath||pipeRunning)}>
-          {pipeRunning?`⏳ Running… Stage ${currentStage}/${STAGE_NAMES.length}`:pipeDone&&!pipeError?"✓ Pipeline done — rerun?":"▶ Run Full Pipeline"}
-        </button>
+        {/* Run / Cancel buttons */}
+        <div style={{display:"flex",gap:6}}>
+          <button id="pipeline-run-btn" onClick={runPipeline} disabled={!effectivePath||pipeRunning} style={{...btnStyle(pipeRunning?"#fb923c":pipeDone&&!pipeError&&!pipeCancelled?"#00c850":"#67e8f9", !effectivePath||pipeRunning), flex:1}}>
+            {pipeRunning&&!pipeCancelling?`⏳ Running… Stage ${currentStage}/${STAGE_NAMES.length}`:pipeDone&&!pipeError&&!pipeCancelled?"✓ Pipeline done — rerun?":"▶ Run Full Pipeline"}
+          </button>
+          {pipeRunning&&(
+            <button
+              id="pipeline-cancel-btn"
+              onClick={cancelPipeline}
+              disabled={pipeCancelling}
+              title="Cancel the running pipeline"
+              style={{
+                border:"1px solid #fb923c88", borderRadius:6,
+                color: pipeCancelling ? "#fb923c88" : "#fb923c",
+                background:"rgba(251,146,60,0.12)", fontSize:11, fontWeight:700,
+                padding:"7px 11px", cursor:pipeCancelling?"not-allowed":"pointer",
+                transition:"all 0.2s", whiteSpace:"nowrap",
+              }}
+            >
+              {pipeCancelling ? "⏳ Cancelling…" : "✕ Cancel"}
+            </button>
+          )}
+        </div>
         {!effectivePath&&<div style={{fontSize:10,color:"var(--text-3)",marginTop:4,textAlign:"center"}}>Select or enter a scan file above</div>}
 
         {/* Detection params */}

@@ -758,9 +758,22 @@ def pipeline_status():
 
 @app.post("/api/pipeline/cancel")
 def pipeline_cancel():
-    """Not yet implemented — placeholder so the UI button can exist."""
-    return {"status": "not_supported",
-            "message": "Pipeline cancellation is not supported; wait for current stage to finish."}
+    """
+    Request cancellation of the currently running pipeline.
+    The background thread will stop at the next safe checkpoint (between
+    stages, or mid-subprocess on the next stdout line read).
+    Returns immediately; poll /api/pipeline/status to confirm running → False.
+    """
+    sent = _pipeline.cancel_pipeline()
+    if sent:
+        return JSONResponse({
+            "status": "cancelling",
+            "message": "Cancel signal sent. Poll /api/pipeline/status until running is false.",
+        })
+    return JSONResponse({
+        "status": "not_running",
+        "message": "No pipeline is currently running.",
+    })
 
 
 # ── Cloud2BIM Integration ─────────────────────────────────────────────────────

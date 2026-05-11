@@ -10,6 +10,7 @@ Runs all pipeline stages sequentially in a background thread:
   Stage 5 — Detect Walls & Rooms: walls_floor_N.json + DXF per floor
 
 Status is published to a shared dict polled by /api/pipeline/status.
+Cancellation is coordinated via a threading.Event (_cancel_event).
 """
 
 from __future__ import annotations
@@ -30,6 +31,10 @@ BASE_DIR      = _THIS_FILE.parent.parent
 PROCESSED_DIR = Path(os.environ.get("PROCESSED_DIR", str(BASE_DIR / "processed")))
 C2B_OUT_DIR   = PROCESSED_DIR / "c2b_output"
 
+# ── Cancellation event ────────────────────────────────────────────────────────
+# Set by cancel_pipeline(); checked at every stage boundary and subprocess loop.
+_cancel_event = threading.Event()
+
 # ── Shared status dict (thread-safe via _lock) ────────────────────────────────
 _lock = threading.Lock()
 
@@ -44,6 +49,7 @@ STAGES = [
 status: dict[str, Any] = {
     "running":     False,
     "done":        False,
+    "cancelled":   False,
     "error":       None,
     "stage":       0,          # 1-indexed current stage (0 = not started)
     "stage_name":  "",
@@ -83,7 +89,11 @@ def _stage_done(n: int) -> None:
 
 
 def _run_subprocess(args: list[str], cwd: str | None = None) -> bool:
-    """Run a child process, stream its stdout to _emit, return True on success."""
+    """
+    Run a child process, stream its stdout to _emit, return True on success.
+    Monitors _cancel_event: if set while the process is running, the child is
+    terminated (SIGTERM then SIGKILL after 3 s) and False is returned.
+    """
     try:
         proc = subprocess.Popen(
             args,
@@ -95,8 +105,19 @@ def _run_subprocess(args: list[str], cwd: str | None = None) -> bool:
             errors="replace",
         )
         for line in proc.stdout:
+            if _cancel_event.is_set():
+                _emit("  ⚠ Cancellation requested — killing subprocess…")
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                return False
             _emit(line.rstrip())
         proc.wait()
+        if _cancel_event.is_set():
+            return False
         return proc.returncode == 0
     except Exception as exc:
         _emit(f"  ✗ subprocess error: {exc}")
@@ -121,6 +142,7 @@ def run_pipeline(
         status.update({
             "running":     True,
             "done":        False,
+            "cancelled":   False,
             "error":       None,
             "stage":       0,
             "stage_name":  "Initialising",
@@ -141,6 +163,20 @@ def run_pipeline(
             status["error"]       = msg
             status["finished_at"] = time.time()
             status["elapsed_s"]   = round(time.time() - t0, 1)
+
+    def _check_cancel() -> bool:
+        """Return True (and update status) if cancellation was requested."""
+        if _cancel_event.is_set():
+            elapsed = round(time.time() - t0, 1)
+            _emit("\n⚠ PIPELINE CANCELLED by user request")
+            with _lock:
+                status["running"]     = False
+                status["cancelled"]   = True
+                status["error"]       = "Cancelled by user"
+                status["finished_at"] = time.time()
+                status["elapsed_s"]   = elapsed
+            return True
+        return False
 
     try:
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -168,17 +204,20 @@ def run_pipeline(
                 pass
 
         # ── Stage 1: Preprocess XYZ ───────────────────────────────────────
+        if _check_cancel(): return
         _set_stage(1)
         script1 = str(BASE_DIR / "pipeline" / "preprocess_xyz.py")
         ok = _run_subprocess(
             [sys.executable, script1, "--xyz", xyz_path],
             cwd=str(BASE_DIR),
         )
+        if _check_cancel(): return
         if not ok:
             return _fail("preprocess_xyz.py failed")
         _stage_done(1)
 
         # ── Stage 2: Cloud2BIM slab detection ─────────────────────────────
+        if _check_cancel(): return
         if run_c2b:
             _set_stage(2)
             script2 = str(BASE_DIR / "pipeline" / "run_c2b.py")
@@ -188,6 +227,7 @@ def run_pipeline(
                  "--out-dir", str(C2B_OUT_DIR)],
                 cwd=str(BASE_DIR),
             )
+            if _check_cancel(): return
             if not ok:
                 _emit("  ⚠ Cloud2BIM slab detection failed — using histogram floor levels from Stage 1")
             else:
@@ -198,6 +238,7 @@ def run_pipeline(
                 status["stages_done"].append(2)
 
         # ── Stage 3: Import C2B floor levels ──────────────────────────────
+        if _check_cancel(): return
         _set_stage(3)
         info_path = PROCESSED_DIR / "info.json"
         if not info_path.exists():
@@ -222,6 +263,7 @@ def run_pipeline(
         _stage_done(3)
 
         # ── Stage 4: Extract wall slices ──────────────────────────────────
+        if _check_cancel(): return
         if run_slices:
             _set_stage(4)
             script4 = str(BASE_DIR / "pipeline" / "preprocess_walls.py")
@@ -229,6 +271,7 @@ def run_pipeline(
                 [sys.executable, script4, "--xyz", xyz_path],
                 cwd=str(BASE_DIR),
             )
+            if _check_cancel(): return
             if not ok:
                 return _fail("preprocess_walls.py failed")
             _stage_done(4)
@@ -238,6 +281,7 @@ def run_pipeline(
                 status["stages_done"].append(4)
 
         # ── Stage 5: Detect walls & rooms per floor ───────────────────────
+        if _check_cancel(): return
         _set_stage(5)
         with open(info_path) as fh:
             info = json.load(fh)
@@ -276,6 +320,9 @@ def run_pipeline(
             }
 
             for fi in floors_to_run:
+                # Check cancellation before each floor so partial results are
+                # still usable when the user only wanted to stop early.
+                if _check_cancel(): return
                 _emit(f"\n  --- Floor {fi} ---")
                 try:
                     lines = detect_walls_c2b_for_floor(fi, cfg)
@@ -326,6 +373,9 @@ def start_pipeline(xyz_path: str, **kwargs) -> bool:
         if status["running"]:
             return False
 
+    # Clear any leftover cancel signal from a previous run
+    _cancel_event.clear()
+
     t = threading.Thread(
         target=run_pipeline,
         args=(xyz_path,),
@@ -334,6 +384,25 @@ def start_pipeline(xyz_path: str, **kwargs) -> bool:
     )
     t.start()
     return True
+
+
+def cancel_pipeline() -> bool:
+    """
+    Request cancellation of the currently running pipeline.
+    Returns True if the pipeline was running (signal sent),
+    False if nothing was running.
+    """
+    with _lock:
+        if not status["running"]:
+            return False
+    _cancel_event.set()
+    _emit("  ⚠ Cancel signal sent — waiting for current operation to stop…")
+    return True
+
+
+def is_cancelled() -> bool:
+    """Return True if a cancel was requested (event is set)."""
+    return _cancel_event.is_set()
 
 
 def get_status() -> dict:
