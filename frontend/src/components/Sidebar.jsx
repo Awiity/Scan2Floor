@@ -132,6 +132,19 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
   const [advMsg,   setAdvMsg]  = useState("");
   useEffect(()=>{ const n=modelInfo?.floor_levels?.length||1; if(advFloor>=n) setAdvFloor(0); },[modelInfo?.floor_levels,advFloor]);
 
+  // Opening quality — fetched after pipeline completes or active floor changes
+  const [openingQuality, setOpeningQuality] = useState(null);
+  useEffect(() => {
+    if (activeFloor == null) return;
+    fetch(`/api/openings/${activeFloor}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (d && d.openings !== undefined) setOpeningQuality(d);
+        else setOpeningQuality(null);
+      })
+      .catch(() => setOpeningQuality(null));
+  }, [activeFloor, pipeStatus?.done]);  // re-fetch when pipeline finishes
+
   const runSingleFloor = async()=>{
     setAdvBusy(true); setAdvMsg("");
     try {
@@ -344,9 +357,33 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
         <div className="stat-row">
           <span className="stat-label">Wall slices</span>
           <span className="stat-value" style={{color:modelInfo?.wall_slices_ready?"#00c850":modelInfo?.preprocess_walls_running?"#ffa000":"var(--text-3)",fontWeight:600}}>
-            {modelInfo?.preprocess_walls_running?"⏳ Extracting…":modelInfo?.wall_slices_ready?"✓ Dense":"⚠ Not ready"}
+            {modelInfo?.preprocess_walls_running?"⧗ Extracting…":modelInfo?.wall_slices_ready?"✓ Dense":"⚠ Not ready"}
           </span>
         </div>
+        {/* Openings stats — only shown once data has been fetched */}
+        {openingQuality && (
+          <>
+            <div className="stat-row">
+              <span className="stat-label">Openings</span>
+              <span className="stat-value" style={{color:"#00c850",fontWeight:600}}>
+                {openingQuality.n_doors}D · {openingQuality.n_windows}W
+              </span>
+            </div>
+            <div className="stat-row">
+              <span className="stat-label">Quality</span>
+              <span className="stat-value" style={{
+                color: openingQuality.n_low_confidence > 0 ? "#fbbf24" : "#00c850",
+                fontWeight: 600,
+              }}>
+                {openingQuality.n_low_confidence > 0
+                  ? `⚠ ${openingQuality.n_low_confidence} low-conf`
+                  : openingQuality.n_doors + openingQuality.n_windows > 0
+                    ? "✓ All verified"
+                    : "—"}
+              </span>
+            </div>
+          </>
+        )}
       </div>
 
       {/* ── Advanced ── */}

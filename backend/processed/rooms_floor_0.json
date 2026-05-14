@@ -1,31 +1,19 @@
 {
   "floor_idx": 0,
   "grid_size": 0.02,
-  "n_rooms": 2,
+  "n_rooms": 1,
   "rooms": [
     {
       "id": 1,
-      "area_m2": 583.562,
+      "area_m2": 583.95,
       "bbox": {
         "x_min": -19.735,
         "z_min": -7.765,
         "x_max": 20.045,
         "z_max": 7.255
       },
-      "centroid_x": 0.2085,
-      "centroid_z": -0.1635
-    },
-    {
-      "id": 2,
-      "area_m2": 22.382,
-      "bbox": {
-        "x_min": -20.455,
-        "z_min": 7.655,
-        "x_max": 12.565,
-        "z_max": 8.355
-      },
-      "centroid_x": -4.1394,
-      "centroid_z": 8.0251
+      "centroid_x": 0.2168,
+      "centroid_z": -0.1587
     }
   ]
 }

@@ -1,8 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="900" style="background:#070b18">
 <rect x="35.0" y="552.7" width="830.4" height="313.5" fill="#7c3aed" fill-opacity="0.18" stroke="#7c3aed" stroke-width="0.8" stroke-dasharray="5,3"/>
-<text x="451.3" y="707.6" text-anchor="middle" dominant-baseline="middle" fill="#7c3aed" font-size="11" font-family="sans-serif" font-weight="bold">R1 584m²</text>
-<rect x="20.0" y="529.7" width="689.3" height="14.6" fill="#2563eb" fill-opacity="0.18" stroke="#2563eb" stroke-width="0.8" stroke-dasharray="5,3"/>
-<text x="360.6" y="536.6" text-anchor="middle" dominant-baseline="middle" fill="#2563eb" font-size="11" font-family="sans-serif" font-weight="bold">R2 22m²</text>
+<text x="451.5" y="707.5" text-anchor="middle" dominant-baseline="middle" fill="#7c3aed" font-size="11" font-family="sans-serif" font-weight="bold">R1 584m²</text>
 <line x1="84.7" y1="869.6" x2="57.1" y2="869.6" stroke="#00d4ff" stroke-width="1.5"/>
 <line x1="565.2" y1="548.1" x2="697.6" y2="548.1" stroke="#00d4ff" stroke-width="1.5"/>
 <line x1="855.8" y1="867.1" x2="803.6" y2="867.1" stroke="#00d4ff" stroke-width="1.5"/>
@@ -29,14 +27,12 @@
 <line x1="427.0" y1="548.9" x2="473.0" y2="548.9" stroke="#00d4ff" stroke-width="1.5"/>
 <line x1="473.4" y1="547.7" x2="498.0" y2="547.7" stroke="#00d4ff" stroke-width="1.5"/>
 <line x1="507.2" y1="548.5" x2="564.8" y2="548.5" stroke="#00d4ff" stroke-width="1.5"/>
-<line x1="708.8" y1="547.3" x2="713.4" y2="539.8" stroke="#00d4ff" stroke-width="1.5"/>
-<line x1="715.5" y1="539.8" x2="717.2" y2="548.1" stroke="#00d4ff" stroke-width="1.5"/>
 <line x1="717.2" y1="548.1" x2="867.1" y2="548.1" stroke="#00d4ff" stroke-width="1.5"/>
 <line x1="870.0" y1="552.3" x2="870.0" y2="664.2" stroke="#00d4ff" stroke-width="1.5"/>
 <line x1="867.9" y1="665.0" x2="867.9" y2="749.3" stroke="#00d4ff" stroke-width="1.5"/>
 <line x1="870.0" y1="749.8" x2="870.0" y2="862.9" stroke="#00d4ff" stroke-width="1.5"/>
-<line x1="33.3" y1="783.8" x2="33.3" y2="772.3" stroke="#e879f9" stroke-width="2.5"/>
-<line x1="30.8" y1="783.8" x2="30.8" y2="772.3" stroke="#e879f9" stroke-width="2.5"/>
+<line x1="33.3" y1="782.7" x2="33.3" y2="772.3" stroke="#e879f9" stroke-width="2.5"/>
+<line x1="30.8" y1="782.7" x2="30.8" y2="772.3" stroke="#e879f9" stroke-width="2.5"/>
 <line x1="379.9" y1="550.2" x2="416.4" y2="550.2" stroke="#e879f9" stroke-width="2.5"/>
 <line x1="379.9" y1="547.7" x2="416.4" y2="547.7" stroke="#e879f9" stroke-width="2.5"/>
 <line x1="868.7" y1="763.3" x2="868.7" y2="791.5" stroke="#e879f9" stroke-width="2.5"/>

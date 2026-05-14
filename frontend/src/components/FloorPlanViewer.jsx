@@ -193,20 +193,33 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
   }
 }
 
+// Low-confidence threshold must match backend LOW_CONFIDENCE_THRESHOLD
+const LOW_CONF_THRESHOLD = 0.45;
+
 function drawDoor(ctx, op, cam) {
-  const [cx, cy] = toCanvas(op.x, op.z, cam), [hx, hy] = toCanvas(op.hinge_x, op.hinge_z, cam);
-  const radius = Math.hypot(cx - hx, cy - hy);
+  const lowConf = (op.confidence ?? 1) < LOW_CONF_THRESHOLD;
+  const colour  = lowConf ? "#fbbf24" : C.door;   // amber vs green
+  const lw      = Math.max(1, cam.scale * 0.08);
+  const [cx, cy] = toCanvas(op.x, op.z, cam);
+  const [hx, hy] = toCanvas(op.hinge_x, op.hinge_z, cam);
+  const radius   = Math.hypot(cx - hx, cy - hy);
   ctx.save();
-  ctx.strokeStyle = C.door; ctx.lineWidth = Math.max(1, cam.scale * 0.08);
+  ctx.strokeStyle = colour;
+  ctx.lineWidth   = lw;
+  if (lowConf) ctx.setLineDash([5, 4]);
+  ctx.shadowColor = colour; ctx.shadowBlur = lowConf ? 3 : 6;
   ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(cx, cy); ctx.stroke();
   const a0 = Math.atan2(cy - hy, cx - hx);
   ctx.beginPath(); ctx.arc(hx, hy, radius, a0, a0 + Math.PI / 2); ctx.stroke();
-  ctx.fillStyle = C.door;
+  ctx.setLineDash([]);
+  ctx.fillStyle = colour;
   ctx.beginPath(); ctx.arc(hx, hy, Math.max(2, cam.scale * 0.06), 0, Math.PI * 2); ctx.fill();
   ctx.restore();
 }
 
 function drawWindow(ctx, op, cam) {
+  const lowConf  = (op.confidence ?? 1) < LOW_CONF_THRESHOLD;
+  const colour   = lowConf ? "#fbbf24" : C.window;  // amber vs indigo
   const [cx1, cz1] = toCanvas(op.wall_x1, op.wall_z1, cam);
   const [cx2, cz2] = toCanvas(op.wall_x2, op.wall_z2, cam);
   const dx = cx2 - cx1, dz = cz2 - cz1;
@@ -214,15 +227,22 @@ function drawWindow(ctx, op, cam) {
   const wx1 = cx1 + dx * t1, wy1 = cz1 + dz * t1;
   const wx2 = cx1 + dx * t2, wy2 = cz1 + dz * t2;
   ctx.save();
-  ctx.strokeStyle = C.window; ctx.lineWidth = Math.max(1.5, cam.scale * 0.12);
-  ctx.setLineDash([4, 3]);
+  ctx.strokeStyle = colour;
+  ctx.lineWidth   = Math.max(1.5, cam.scale * 0.12);
+  ctx.setLineDash(lowConf ? [3, 4] : [4, 3]);
+  ctx.shadowColor = colour; ctx.shadowBlur = lowConf ? 2 : 4;
   ctx.beginPath(); ctx.moveTo(wx1, wy1); ctx.lineTo(wx2, wy2); ctx.stroke();
   ctx.restore();
 }
 
 function drawOpenings(ctx, openings, cam) {
   if (!openings?.length) return;
-  for (const op of openings) {
+  // Draw high-confidence openings first so low-conf amber sits on top
+  const sorted = [...openings].sort((a, b) =>
+    ((b.confidence ?? 1) >= LOW_CONF_THRESHOLD ? 1 : 0) -
+    ((a.confidence ?? 1) >= LOW_CONF_THRESHOLD ? 1 : 0)
+  );
+  for (const op of sorted) {
     if (op.type === "door")   drawDoor(ctx, op, cam);
     if (op.type === "window") drawWindow(ctx, op, cam);
   }
@@ -385,7 +405,7 @@ function ModeHint({ mode, addStep }) {
 
 // ── Legend ─────────────────────────────────────────────────────────────────────
 
-function Legend({ wallCount, doorCount, windowCount, roomCount, userCount }) {
+function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, lowConfCount }) {
   const items = [
     { color: C.wall,     label: `Algo walls (${wallCount - userCount})` },
     ...(userCount > 0 ? [{ color: C.wallUser, label: `Added walls (${userCount})` }] : []),
@@ -398,7 +418,7 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount }) {
       position: "absolute", bottom: 10, right: 10,
       background: "rgba(7,11,24,0.82)", backdropFilter: "blur(8px)",
       border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8,
-      padding: "8px 12px", display: "flex", flexDirection: "column", gap: 5, minWidth: 140,
+      padding: "8px 12px", display: "flex", flexDirection: "column", gap: 5, minWidth: 160,
     }}>
       {items.map(({ color, label, fill }) => (
         <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -409,6 +429,12 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount }) {
           <span style={{ fontSize: 10.5, color: "rgba(200,220,255,0.7)", fontFamily: "Inter,sans-serif" }}>{label}</span>
         </div>
       ))}
+      {lowConfCount > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 5, marginTop: 2 }}>
+          <div style={{ width: 14, height: 2.5, background: "#fbbf24", borderRadius: 2, backgroundImage: "repeating-linear-gradient(90deg,#fbbf24 0 4px,transparent 4px 7px)" }} />
+          <span style={{ fontSize: 10.5, color: "#fbbf24", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>⚠ {lowConfCount} low-confidence</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -787,6 +813,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
   const openings     = openingsData?.openings ?? [];
   const doorCount    = openings.filter(o => o.type === "door").length;
   const windowCount  = openings.filter(o => o.type === "window").length;
+  const lowConfCount = openings.filter(o => (o.confidence ?? 1) < LOW_CONF_THRESHOLD).length;
+  const nWallsAnalysed     = openingsData?.n_walls_analysed ?? null;
+  const nWallsWithOpenings = openingsData?.n_walls_with_openings ?? null;
 
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
@@ -827,7 +856,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
         </div>
       </div>
 
-      {/* ── Floor tabs ──────────────────────────────────────────────────────── */}
+      {/* ── Floor tabs + quality bar ─────────────────────────────────────────── */}
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         gap: 8, padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)",
@@ -849,6 +878,30 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
           >↓ DXF</a>
         </div>
       </div>
+
+      {/* ── Opening quality summary bar ──────────────────────────────────────── */}
+      {loadState === "ready" && openingsData && (
+        <div style={{
+          display: "flex", alignItems: "center", gap: 10,
+          padding: "4px 14px", flexShrink: 0,
+          background: lowConfCount > 0 ? "rgba(251,191,36,0.06)" : "rgba(0,200,80,0.04)",
+          borderBottom: `1px solid ${ lowConfCount > 0 ? "rgba(251,191,36,0.18)" : "rgba(0,200,80,0.12)"}`,
+          fontSize: 10.5, fontFamily: "JetBrains Mono, monospace",
+        }}>
+          <span style={{ color: "rgba(200,220,255,0.45)" }}>
+            {nWallsAnalysed != null ? `${nWallsAnalysed} walls analysed` : ""}
+            {nWallsWithOpenings != null ? ` · ${nWallsWithOpenings} with openings` : ""}
+          </span>
+          <span style={{ marginLeft: "auto",
+            color: lowConfCount > 0 ? "#fbbf24" : "#00c850",
+            fontWeight: 600,
+          }}>
+            {lowConfCount > 0
+              ? `⚠ ${lowConfCount} low-confidence opening${lowConfCount > 1 ? "s" : ""} (shown in amber)`
+              : openings.length > 0 ? "✓ All openings verified" : "ℹ No openings detected"}
+          </span>
+        </div>
+      )}
 
       {/* ── Edit Toolbar ─────────────────────────────────────────────────────── */}
       <EditToolbar
@@ -938,7 +991,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
 
         {/* Legend */}
         {loadState === "ready" && wallCount > 0 && (
-          <Legend wallCount={wallCount} doorCount={doorCount} windowCount={windowCount} roomCount={roomCount} userCount={userCount} />
+          <Legend wallCount={wallCount} doorCount={doorCount} windowCount={windowCount} roomCount={roomCount} userCount={userCount} lowConfCount={lowConfCount} />
         )}
 
         {/* Mode hint bar */}

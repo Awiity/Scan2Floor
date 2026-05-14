@@ -13,8 +13,29 @@ Algorithm (per wall segment):
        WINDOW — gap spans ~0.7 m – 2.0 m with sill points below, width ≥ 0.5 m
   5. Merge adjacent gap columns into single opening objects
 
+Confidence scoring (per opening, 0.0 – 1.0):
+  Each opening is assigned a confidence score derived from three signals:
+
+    Signal A — Point density in slab (weight 0.35)
+      Ratio of occupied cells to wall-area cells, clipped to [0, 1].
+      Dense slabs give more reliable gap detection.
+
+    Signal B — Gap column uniformity (weight 0.35)
+      Low std-dev of column-wise gap-row counts → clean, consistent opening.
+      High std-dev suggests the "gap" is really sensor noise.
+
+    Signal C — Wall coverage (weight 0.30)
+      Fraction of u-columns that contain ≥1 point anywhere in the height band.
+      Walls covered < COVERAGE_GUARD_FRAC get a hard penalty.
+
+  Low confidence threshold: confidence < LOW_CONFIDENCE_THRESHOLD (0.45)
+
 Output: openings_floor_<N>.json
-  { floor_idx, n_doors, n_windows, openings: [ { type, width, x, z, … } ] }
+  {
+    floor_idx, n_doors, n_windows,
+    n_walls_analysed, n_walls_with_openings, n_low_confidence,
+    openings: [ { type, width, confidence, x, z, … } ]
+  }
 """
 
 import json
@@ -22,6 +43,21 @@ import os
 import struct
 
 import numpy as np
+
+# ── Tunable constants ────────────────────────────────────────────────────────
+
+# Confidence weight for each signal (must sum to 1.0)
+WEIGHT_DENSITY   = 0.35   # Signal A: point density inside slab
+WEIGHT_UNIFORMITY = 0.35  # Signal B: gap column uniformity
+WEIGHT_COVERAGE  = 0.30   # Signal C: wall column coverage
+
+# Walls where fewer than this fraction of u-columns have any points at all
+# are considered too sparse for reliable detection; their openings are penalised.
+COVERAGE_GUARD_FRAC = 0.30
+
+# Openings below this score are flagged as low-confidence in the summary.
+LOW_CONFIDENCE_THRESHOLD = 0.45
+
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -103,6 +139,85 @@ def _merge_gaps(gaps: list[tuple], min_sep_m: float = 0.05) -> list[tuple]:
     return merged
 
 
+def _compute_confidence(
+    grid: np.ndarray,
+    occupied: np.ndarray,
+    n_u: int,
+    n_v: int,
+    gap_col_indices: list[int],
+    gap_type: str,
+    door_chk_bot: int,
+    door_top: int,
+    win_bot: int,
+    win_top: int,
+) -> float:
+    """
+    Compute a 0.0–1.0 confidence score for any openings found on this wall.
+
+    Parameters
+    ----------
+    grid        : (n_v, n_u) int32 — raw point counts per cell
+    occupied    : (n_v, n_u) bool  — grid >= 2
+    n_u, n_v    : grid dimensions
+    gap_col_indices : list of column indices that were part of a detected gap
+    gap_type    : 'door' or 'window'
+    door_chk_bot, door_top, win_bot, win_top : zone row boundaries
+    """
+    if n_u == 0 or n_v == 0:
+        return 0.0
+
+    # ── Signal A: Point density in slab ──────────────────────────────────────
+    total_cells = n_u * n_v
+    occupied_cells = int(np.sum(occupied))
+    # We expect walls to be somewhat dense (20–80%); too sparse = unreliable.
+    density_ratio = occupied_cells / max(total_cells, 1)
+    # Map to [0,1]: score peaks at 40 % density, falls off at extremes
+    # Using a triangle: 0→0, 0.2→0.6, 0.4→1.0, 0.8→0.5, 1.0→0.0
+    if density_ratio <= 0.0:
+        sig_a = 0.0
+    elif density_ratio <= 0.40:
+        sig_a = min(1.0, density_ratio / 0.40)
+    else:
+        sig_a = max(0.0, 1.0 - (density_ratio - 0.40) / 0.60)
+
+    # ── Signal B: Gap column uniformity ──────────────────────────────────────
+    # Count empty rows per gap column in the relevant zone.
+    if gap_type == "door":
+        zone_slice = slice(door_chk_bot, door_top)
+    else:
+        zone_slice = slice(win_bot, win_top)
+
+    if gap_col_indices:
+        gap_zone = occupied[zone_slice, :][:, gap_col_indices]  # zone rows × gap cols
+        zone_h = gap_zone.shape[0]
+        if zone_h > 0:
+            # Number of empty cells per gap column
+            empty_per_col = zone_h - gap_zone.sum(axis=0)
+            # Uniformity: low std-dev → all columns have similar gaps → clean opening
+            if len(empty_per_col) > 1:
+                cv = float(np.std(empty_per_col)) / max(float(np.mean(empty_per_col)), 1.0)
+                sig_b = max(0.0, 1.0 - cv)        # cv=0 → 1.0, cv≥1 → 0.0
+            else:
+                sig_b = 1.0  # single-column gap, can't compute variance
+        else:
+            sig_b = 0.5
+    else:
+        sig_b = 0.5  # no gap cols sampled
+
+    # ── Signal C: Wall column coverage ───────────────────────────────────────
+    # Fraction of u-columns that have at least one point anywhere in height.
+    col_has_any = occupied.any(axis=0)            # (n_u,) bool
+    coverage = float(col_has_any.sum()) / max(n_u, 1)
+    # Hard penalty if wall is too sparse
+    if coverage < COVERAGE_GUARD_FRAC:
+        sig_c = coverage / COVERAGE_GUARD_FRAC * 0.3   # cap at 0.3
+    else:
+        sig_c = min(1.0, (coverage - COVERAGE_GUARD_FRAC) / (1.0 - COVERAGE_GUARD_FRAC))
+
+    score = WEIGHT_DENSITY * sig_a + WEIGHT_UNIFORMITY * sig_b + WEIGHT_COVERAGE * sig_c
+    return round(float(np.clip(score, 0.0, 1.0)), 3)
+
+
 # ── Per-wall analysis ────────────────────────────────────────────────────────
 
 
@@ -117,7 +232,7 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
     floor_y    : floor world-Y value
     config     : detection config dict
 
-    Returns list of opening dicts.
+    Returns list of opening dicts (each includes a 'confidence' key).
     """
     wall_thickness = config.get("wall_thickness", 0.25)  # slab half-width
     min_door_w = config.get("min_door_width", 0.70)
@@ -168,10 +283,11 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
     win_top = min(n_v, int(2.05 / bin_m))  # window band  0.65 – 2.05 m
 
     # ── Column-by-column gap scan ────────────────────────────────────────────
-    raw_gaps: list[tuple] = []  # (u_start_m, u_end_m, type)
+    raw_gaps: list[tuple] = []  # (u_start_m, u_end_m, type, [col_indices])
     in_gap = False
     gap_u0 = 0
     gap_type = "door"
+    gap_cols: list[int] = []
 
     for u in range(n_u):
         col = occupied[:, u]
@@ -191,18 +307,34 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
             in_gap = True
             gap_u0 = u
             gap_type = otype
+            gap_cols = [u]
+        elif opening and in_gap:
+            gap_cols.append(u)
         elif not opening and in_gap:
-            raw_gaps.append((gap_u0 * bin_m, u * bin_m, gap_type))
+            raw_gaps.append((gap_u0 * bin_m, u * bin_m, gap_type, list(gap_cols)))
             in_gap = False
+            gap_cols = []
 
     if in_gap:
-        raw_gaps.append((gap_u0 * bin_m, n_u * bin_m, gap_type))
+        raw_gaps.append((gap_u0 * bin_m, n_u * bin_m, gap_type, list(gap_cols)))
 
-    merged = _merge_gaps(raw_gaps)
+    # Merge adjacent gaps (strip the col-index list before merging, re-attach after)
+    raw_gaps_simple = [(s, e, t) for s, e, t, _ in raw_gaps]
+    merged_simple = _merge_gaps(raw_gaps_simple)
+
+    # Rebuild col lists for merged gaps — approximate by collecting all raw gap
+    # col-index lists whose u-ranges overlap the merged span.
+    merged: list[tuple] = []
+    for m_s, m_e, m_t in merged_simple:
+        all_cols: list[int] = []
+        for s, e, t, cols in raw_gaps:
+            if t == m_t and e > m_s and s < m_e:
+                all_cols.extend(cols)
+        merged.append((m_s, m_e, m_t, sorted(set(all_cols))))
 
     # ── Build output objects ─────────────────────────────────────────────────
     results = []
-    for u_s, u_e, gtype in merged:
+    for u_s, u_e, gtype, gap_col_indices in merged:
         width = u_e - u_s
         min_w = min_door_w if gtype == "door" else min_win_w
         if width < min_w:
@@ -217,10 +349,24 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
         hx = x1 + hinge_frac * (x2 - x1)
         hz = z1 + hinge_frac * (z2 - z1)
 
+        confidence = _compute_confidence(
+            grid=grid,
+            occupied=occupied,
+            n_u=n_u,
+            n_v=n_v,
+            gap_col_indices=gap_col_indices,
+            gap_type=gtype,
+            door_chk_bot=door_chk_bot,
+            door_top=door_top,
+            win_bot=win_bot,
+            win_top=win_top,
+        )
+
         results.append(
             {
                 "type": gtype,
                 "width": round(width, 3),
+                "confidence": confidence,
                 "u_start": round(u_s, 3),
                 "u_end": round(u_e, 3),
                 "x": round(ox, 4),
@@ -247,11 +393,15 @@ def detect_openings_for_floor(floor_idx: int, config: dict) -> dict:
 
     Reads  : processed/walls_floor_<N>.json  +  processed/info.json
     Writes : processed/openings_floor_<N>.json
-    Returns: full result dict  { floor_idx, n_doors, n_windows, openings }
+    Returns: full result dict with confidence stats:
+             { floor_idx, n_doors, n_windows,
+               n_walls_analysed, n_walls_with_openings, n_low_confidence,
+               openings }
     """
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    processed_dir = os.path.join(base_dir, "processed")
-    bin_path = os.path.join(processed_dir, "pointcloud.bin")
+    processed_dir = os.environ.get(
+        "PROCESSED_DIR", os.path.join(base_dir, "processed")
+    )
     info_path = os.path.join(processed_dir, "info.json")
     wall_path = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
 
@@ -277,17 +427,37 @@ def detect_openings_for_floor(floor_idx: int, config: dict) -> dict:
     print(f"[openings floor {floor_idx}] source: {src_label}")
 
     all_openings: list[dict] = []
+    n_walls_with_openings = 0
+
     for wall_idx, seg in enumerate(walls):
         ops = _analyse_wall(seg, floor_pts, floor_y, config)
-        for op in ops:
-            op["wall_idx"] = wall_idx
+        if ops:
+            n_walls_with_openings += 1
+            for op in ops:
+                op["wall_idx"] = wall_idx
         all_openings.extend(ops)
 
+    n_doors    = sum(1 for o in all_openings if o["type"] == "door")
+    n_windows  = sum(1 for o in all_openings if o["type"] == "window")
+    n_low_conf = sum(
+        1 for o in all_openings if o["confidence"] < LOW_CONFIDENCE_THRESHOLD
+    )
+
+    print(
+        f"[openings floor {floor_idx}] "
+        f"{n_doors} doors  {n_windows} windows  "
+        f"({n_low_conf} low-confidence, threshold={LOW_CONFIDENCE_THRESHOLD})"
+    )
+
     result = {
-        "floor_idx": floor_idx,
-        "n_doors": sum(1 for o in all_openings if o["type"] == "door"),
-        "n_windows": sum(1 for o in all_openings if o["type"] == "window"),
-        "openings": all_openings,
+        "floor_idx":             floor_idx,
+        "n_doors":               n_doors,
+        "n_windows":             n_windows,
+        "n_walls_analysed":      len(walls),
+        "n_walls_with_openings": n_walls_with_openings,
+        "n_low_confidence":      n_low_conf,
+        "low_confidence_threshold": LOW_CONFIDENCE_THRESHOLD,
+        "openings":              all_openings,
     }
 
     out_path = os.path.join(processed_dir, f"openings_floor_{floor_idx}.json")
