@@ -31,7 +31,7 @@ services:
       dockerfile: Dockerfile
     container_name: scan2floor
     ports:
-      - "8000:8000"
+      - "9000:8000"
     volumes:
       # ── Writable: all generated pipeline outputs ──────────────────────────
       # Named Docker volume so processed data (pointcloud.bin, wall slices,
@@ -44,7 +44,7 @@ services:
       #
       # FORMAT:  - <host_path>:/data/<folder_name>:ro
       #
-      - C:/Users/AWIT/Desktop/WORK/data/matterpak:/data/matterpak:ro
+      - ./data/matterpak:/data/matterpak:ro
       #
       # ── Add more scan mounts here (copy the line above and change paths):
       # - D:/scans/building_2:/data/building_2:ro
