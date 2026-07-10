@@ -97,79 +97,6 @@ def _add_window_symbol(msp, opening: dict):
         )
 
 
-def split_walls_by_openings(lines: list, openings: list) -> list:
-    """
-    Split wall segments based on overlapping door/window openings along their length.
-    Each opening references its wall segment via "wall_idx" and position range ["u_start", "u_end"].
-    """
-    from collections import defaultdict
-    openings_by_wall = defaultdict(list)
-    for op in openings:
-        w_idx = op.get("wall_idx")
-        if w_idx is not None:
-            openings_by_wall[w_idx].append(op)
-
-    split_lines = []
-    for i, seg in enumerate(lines):
-        if i not in openings_by_wall:
-            split_lines.append(seg)
-            continue
-        
-        p1, p2 = seg
-        x1, z1 = p1
-        x2, z2 = p2
-        dx = x2 - x1
-        dz = z2 - z1
-        wall_len = math.hypot(dx, dz)
-        if wall_len < 1e-6:
-            split_lines.append(seg)
-            continue
-            
-        ux = dx / wall_len
-        uz = dz / wall_len
-        
-        # Collect and sort opening spans along the wall length
-        spans = []
-        for op in openings_by_wall[i]:
-            u_start = max(0.0, float(op.get("u_start", 0.0)))
-            u_end = min(wall_len, float(op.get("u_end", 0.0)))
-            if u_start < u_end:
-                spans.append((u_start, u_end))
-                
-        if not spans:
-            split_lines.append(seg)
-            continue
-            
-        spans.sort(key=lambda s: s[0])
-        
-        # Merge overlapping/adjacent spans to avoid tiny sub-segments
-        merged_spans = []
-        cur_start, cur_end = spans[0]
-        for s_start, s_end in spans[1:]:
-            if s_start <= cur_end:
-                cur_end = max(cur_end, s_end)
-            else:
-                merged_spans.append((cur_start, cur_end))
-                cur_start, cur_end = s_start, s_end
-        merged_spans.append((cur_start, cur_end))
-        
-        u_curr = 0.0
-        for s_start, s_end in merged_spans:
-            if s_start > u_curr + 1e-4:
-                # Add sub-segment from u_curr to s_start
-                sub_p1 = [x1 + ux * u_curr, z1 + uz * u_curr]
-                sub_p2 = [x1 + ux * s_start, z1 + uz * s_start]
-                split_lines.append([sub_p1, sub_p2])
-            u_curr = s_end
-            
-        if u_curr < wall_len - 1e-4:
-            sub_p1 = [x1 + ux * u_curr, z1 + uz * u_curr]
-            sub_p2 = [x2, z2]
-            split_lines.append([sub_p1, sub_p2])
-            
-    return split_lines
-
-
 # ── Main export ──────────────────────────────────────────────────────────────
 
 def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
@@ -203,8 +130,6 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
             room_data = json.load(f)
         rooms = room_data.get("rooms", [])
 
-    split_lines = split_walls_by_openings(lines, openings)
-
     # ── DXF document ─────────────────────────────────────────────────────────
     doc = ezdxf.new(dxfversion="R2010")
     doc.header["$INSUNITS"]   = 6   # metres
@@ -221,7 +146,7 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
     doc.layers.add(LAYER_ROOM,   color=6,  lineweight=13)   # magenta, dashed
 
     # Wall segments
-    for seg in split_lines:
+    for seg in lines:
         p1, p2 = seg
         msp.add_line((p1[0], p1[1]), (p2[0], p2[1]),
                      dxfattribs={"layer": LAYER_WALL})
@@ -276,7 +201,7 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
 
     # Companion SVG
     svg_path = os.path.join(processed_dir, f"floor_{floor_idx}.svg")
-    _write_svg(svg_path, split_lines, openings, rooms)
+    _write_svg(svg_path, lines, openings, rooms)
 
     return dxf_path
 

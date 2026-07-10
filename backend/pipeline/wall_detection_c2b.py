@@ -320,124 +320,6 @@ def _save_segs_png(base: np.ndarray, segs_m, x_min, z_min, gs, path, colour=(0, 
 # Public API
 # ═════════════════════════════════════════════════════════════════════════════
 
-def zhang_suen_thinning(img: np.ndarray) -> np.ndarray:
-    """
-    Vectorized Zhang-Suen thinning algorithm.
-    Input img is a binary numpy array of 0s and 255s.
-    Returns thinned image (0 and 255).
-    """
-    grid = (img > 0).astype(np.uint8)
-    changed = True
-    iterations = 0
-    
-    while changed:
-        iterations += 1
-        changed = False
-        
-        # Sub-iteration 1
-        grid_pad = np.pad(grid, 1, mode='constant', constant_values=0)
-        P2 = grid_pad[0:-2, 1:-1]
-        P3 = grid_pad[0:-2, 2:]
-        P4 = grid_pad[1:-1, 2:]
-        P5 = grid_pad[2:, 2:]
-        P6 = grid_pad[2:, 1:-1]
-        P7 = grid_pad[2:, 0:-2]
-        P8 = grid_pad[1:-1, 0:-2]
-        P9 = grid_pad[0:-2, 0:-2]
-        
-        B = P2 + P3 + P4 + P5 + P6 + P7 + P8 + P9
-        # Calculate transitions: count 0->1 transitions in clockwise order
-        A = ((P2 == 0) & (P3 == 1)).astype(np.uint8) + \
-            ((P3 == 0) & (P4 == 1)).astype(np.uint8) + \
-            ((P4 == 0) & (P5 == 1)).astype(np.uint8) + \
-            ((P5 == 0) & (P6 == 1)).astype(np.uint8) + \
-            ((P6 == 0) & (P7 == 1)).astype(np.uint8) + \
-            ((P7 == 0) & (P8 == 1)).astype(np.uint8) + \
-            ((P8 == 0) & (P9 == 1)).astype(np.uint8) + \
-            ((P9 == 0) & (P2 == 1)).astype(np.uint8)
-            
-        cond1 = (B >= 2) & (B <= 6)
-        cond2 = (A == 1)
-        cond3 = (P2 * P4 * P6 == 0)
-        cond4 = (P4 * P6 * P8 == 0)
-        
-        to_delete = cond1 & cond2 & cond3 & cond4 & (grid == 1)
-        if np.any(to_delete):
-            grid[to_delete] = 0
-            changed = True
-            
-        # Sub-iteration 2
-        grid_pad = np.pad(grid, 1, mode='constant', constant_values=0)
-        P2 = grid_pad[0:-2, 1:-1]
-        P3 = grid_pad[0:-2, 2:]
-        P4 = grid_pad[1:-1, 2:]
-        P5 = grid_pad[2:, 2:]
-        P6 = grid_pad[2:, 1:-1]
-        P7 = grid_pad[2:, 0:-2]
-        P8 = grid_pad[1:-1, 0:-2]
-        P9 = grid_pad[0:-2, 0:-2]
-        
-        B = P2 + P3 + P4 + P5 + P6 + P7 + P8 + P9
-        A = ((P2 == 0) & (P3 == 1)).astype(np.uint8) + \
-            ((P3 == 0) & (P4 == 1)).astype(np.uint8) + \
-            ((P4 == 0) & (P5 == 1)).astype(np.uint8) + \
-            ((P5 == 0) & (P6 == 1)).astype(np.uint8) + \
-            ((P6 == 0) & (P7 == 1)).astype(np.uint8) + \
-            ((P7 == 0) & (P8 == 1)).astype(np.uint8) + \
-            ((P8 == 0) & (P9 == 1)).astype(np.uint8) + \
-            ((P9 == 0) & (P2 == 1)).astype(np.uint8)
-            
-        cond1 = (B >= 2) & (B <= 6)
-        cond2 = (A == 1)
-        cond3_2 = (P2 * P4 * P8 == 0)
-        cond4_2 = (P2 * P6 * P8 == 0)
-        
-        to_delete_2 = cond1 & cond2 & cond3_2 & cond4_2 & (grid == 1)
-        if np.any(to_delete_2):
-            grid[to_delete_2] = 0
-            changed = True
-            
-        if iterations > 200:
-            break
-            
-    return grid * 255
-
-
-def _is_end_cap(seg: list, wall_axes: list, max_wall_thick: float) -> bool:
-    """
-    Check if a segment is a short end-cap of a thicker wall.
-    An end-cap is perpendicular to a paired wall and has its midpoint
-    close to one of the endpoints of the wall axis.
-    """
-    s_p1, s_p2 = seg[0], seg[1]
-    s_mid = ((s_p1[0] + s_p2[0]) / 2.0, (s_p1[1] + s_p2[1]) / 2.0)
-    
-    # Calculate angle of the segment
-    s_dx = s_p2[0] - s_p1[0]
-    s_dy = s_p2[1] - s_p1[1]
-    s_angle = math.atan2(s_dy, s_dx)
-    
-    for axis in wall_axes:
-        a_p1, a_p2 = axis[0], axis[1]
-        
-        # Midpoint of end-cap must be close to one of the endpoints of the wall midline
-        d_start = math.hypot(s_mid[0] - a_p1[0], s_mid[1] - a_p1[1])
-        d_end   = math.hypot(s_mid[0] - a_p2[0], s_mid[1] - a_p2[1])
-        
-        # End cap should lie near one of the wall endpoints
-        if d_start <= max_wall_thick or d_end <= max_wall_thick:
-            # Check if nearly perpendicular
-            a_dx = a_p2[0] - a_p1[0]
-            a_dy = a_p2[1] - a_p1[1]
-            a_angle = math.atan2(a_dy, a_dx)
-            
-            angle_diff = abs(s_angle - a_angle) % math.pi
-            # Perpendicular is pi/2. Allow 25 degrees tolerance (0.436 radians)
-            if abs(angle_diff - math.pi / 2.0) < math.radians(25.0):
-                return True
-    return False
-
-
 def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     """
     Cloud2BIM-style wall detection for one floor.
@@ -473,16 +355,13 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     floor_y = float(levels[floor_idx])
 
     # ── Unpack config ─────────────────────────────────────────────────────
-    grid_size         = float(config.get("grid_size",          0.05))
+    grid_size         = float(config.get("grid_size",          0.02))
     min_wall_m        = float(config.get("min_wall_m",         0.40))
     max_wall_thick    = float(config.get("max_wall_thickness",  0.75))
     snap_to_axis      = bool(config.get("snap_to_axis",        True))
     dp_tol_m          = float(config.get("dp_tolerance",       0.04))
     save_debug        = bool(config.get("save_debug",          True))
     threshold_frac    = float(config.get("threshold_frac",     0.01))
-    static_threshold  = config.get("static_threshold",         None)
-    if static_threshold is not None:
-        static_threshold = float(static_threshold)
 
     # ── Load wall-slice points ────────────────────────────────────────────
     slice_path = os.path.join(processed_dir, f"wall_slice_floor_{floor_idx}.npy")
@@ -550,23 +429,16 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     print(f"[c2b floor {floor_idx}] grid {width}×{height}  gs={grid_size*100:.0f} cm  gpu={_GPU}")
 
     # ── Threshold → binary ────────────────────────────────────────────────
-    if static_threshold is not None:
-        threshold = static_threshold
-    else:
-        max_density = grid.max()
-        threshold   = max(1.0, threshold_frac * max_density)
-    binary = ((grid >= threshold).astype(np.uint8) * 255)
+    max_density = grid.max()
+    threshold   = max(1.0, threshold_frac * max_density)
+    binary = ((grid > threshold).astype(np.uint8) * 255)
 
-    # ── Morphological close (physical size ~10cm) ────────
-    k_size = max(3, int(round(0.10 / grid_size)) | 1)  # ensure odd, >= 3
-    k_close = cv2.getStructuringElement(cv2.MORPH_RECT, (k_size, k_size))
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k_close)
-
-    # ── Thinning (Medial Axis Skeletonization) ────────────────────────────
-    thinned = zhang_suen_thinning(closed)
+    # ── Morphological close (5×5) – Cloud2BIM uses closing((5,5)) ────────
+    k5 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k5)
 
     # ── Find contours ─────────────────────────────────────────────────────
-    contours, _ = cv2.findContours(thinned, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     print(f"[c2b floor {floor_idx}] contours: {len(contours)}")
 
     # ── Douglas-Peucker approximation → line segments ─────────────────────
@@ -641,10 +513,6 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     # Singles with no matching face are added as-is (outer walls, single-face scans)
     for seg in singles:
         if _dist(seg[0], seg[1]) >= min_wall_m:
-            # Filter out perpendicular end-caps that touch the endpoints of main walls
-            if _is_end_cap(seg, wall_axes, max_wall_thick):
-                print(f"[c2b floor {floor_idx}] filtering out end-cap segment: {seg}")
-                continue
             wall_axes.append(seg)
             wall_thicknesses.append(0.0)
 
@@ -682,10 +550,9 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
         _save_png(grid, f"{dbg}_1_density.png")
         _save_png(binary, f"{dbg}_2_binary.png")
         _save_png(closed, f"{dbg}_3_closed.png")
-        _save_png(thinned, f"{dbg}_3.5_thinned.png")
-        _save_segs_png(thinned, segs_merged, x_min, z_min, grid_size,
+        _save_segs_png(closed, segs_merged, x_min, z_min, grid_size,
                         f"{dbg}_4_merged_segs.png", colour=(0, 200, 0))
-        _save_segs_png(thinned, wall_axes, x_min, z_min, grid_size,
+        _save_segs_png(closed, wall_axes, x_min, z_min, grid_size,
                         f"{dbg}_5_wall_axes.png", colour=(0, 0, 255))
         print(f"[c2b floor {floor_idx}] debug PNGs: {dbg}_1-5_*.png")
 

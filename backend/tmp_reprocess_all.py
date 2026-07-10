@@ -4,9 +4,6 @@ Run from backend/ directory:
     python tmp_reprocess_all.py
 """
 import sys
-# Force UTF-8 output on Windows (CP1252 console can't encode characters)
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 sys.path.insert(0, '.')
 
 from pipeline.wall_detection_c2b import detect_walls_c2b_for_floor
@@ -22,12 +19,12 @@ with open(os.path.join(PROCESSED_DIR, "info.json")) as fh:
 n_floors = len(info.get("floor_levels", []))
 
 wall_cfg = {
-    "grid_size"         : 0.05,
+    "grid_size"         : 0.02,
     "snap_to_axis"      : True,
     "min_wall_m"        : 0.40,
     "max_wall_thickness": 0.75,
     "dp_tolerance"      : 0.04,
-    "static_threshold"  : 2.0,
+    "threshold_frac"    : 0.01,
     "save_debug"        : True,
 }
 
@@ -49,19 +46,19 @@ room_cfg = {
 }
 
 print(f"\n{'='*60}")
-print(f"  Reprocessing {n_floors} floor(s) - Cloud2BIM algorithm")
+print(f"  Reprocessing {n_floors} floor(s) — Cloud2BIM algorithm")
 print(f"{'='*60}\n")
 
 for fi in range(n_floors):
-    print(f"\n{'-'*60}")
+    print(f"\n{'─'*60}")
     print(f"  FLOOR {fi}")
-    print(f"{'-'*60}")
+    print(f"{'─'*60}")
 
-    # 1 - Walls (C2B)
+    # 1 – Walls (C2B)
     walls = detect_walls_c2b_for_floor(fi, wall_cfg)
-    print(f"  -> {len(walls)} wall segments")
+    print(f"  → {len(walls)} wall segments")
 
-    # 2 - Openings
+    # 2 – Openings
     op = detect_openings_for_floor(fi, opening_cfg)
     print(f"  → {op['n_doors']} doors  {op['n_windows']} windows")
 
