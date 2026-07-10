@@ -101,6 +101,17 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
     } catch { setPipeError("Network error"); }
   };
 
+  // Resume from the stage after the last completed one
+  const resumePipeline = async (fromStage) => {
+    if(!effectivePath||pipeRunning) return;
+    setPipeError(""); setPipeCancelling(false);
+    try {
+      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,resume_from_stage:fromStage,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac})}).then(r=>r.json());
+      if(d.status==="started"||d.status==="already_running"){ setPipeRunning(true); startPoll(); }
+      else if(d.detail) setPipeError(d.detail);
+    } catch { setPipeError("Network error"); }
+  };
+
   const cancelPipeline = async () => {
     if(!pipeRunning||pipeCancelling) return;
     setPipeCancelling(true);
@@ -163,11 +174,16 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
     </label>
   );
 
-  const stagesDone  = pipeStatus?.stages_done ?? [];
-  const currentStage= pipeStatus?.stage ?? 0;
-  const pipeLog     = pipeStatus?.log ?? [];
-  const pipeDone    = pipeStatus?.done ?? false;
+  const stagesDone    = pipeStatus?.stages_done ?? [];
+  const currentStage  = pipeStatus?.stage ?? 0;
+  const pipeLog       = pipeStatus?.log ?? [];
+  const pipeDone      = pipeStatus?.done ?? false;
   const pipeCancelled = pipeStatus?.cancelled ?? false;
+  // Next stage to run on resume (first incomplete stage after highest done stage)
+  const lastDoneStage = stagesDone.length > 0 ? Math.max(...stagesDone) : 0;
+  const resumeStage   = pipeCancelled && lastDoneStage > 0 && lastDoneStage < 5
+    ? lastDoneStage + 1
+    : null;
 
   const btnStyle = (clr, disabled) => ({
     width:"100%", border:`1px solid ${clr}88`, borderRadius:6, color:clr,
@@ -261,8 +277,8 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
           </div>
         )}
 
-        {/* Run / Cancel buttons */}
-        <div style={{display:"flex",gap:6}}>
+        {/* Run / Cancel / Resume buttons */}
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           <button id="pipeline-run-btn" onClick={runPipeline} disabled={!effectivePath||pipeRunning} style={{...btnStyle(pipeRunning?"#fb923c":pipeDone&&!pipeError&&!pipeCancelled?"#00c850":"#67e8f9", !effectivePath||pipeRunning), flex:1}}>
             {pipeRunning&&!pipeCancelling?`⏳ Running… Stage ${currentStage}/${STAGE_NAMES.length}`:pipeDone&&!pipeError&&!pipeCancelled?"✓ Pipeline done — rerun?":"▶ Run Full Pipeline"}
           </button>
@@ -284,6 +300,24 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
             </button>
           )}
         </div>
+        {/* Resume button — shown after cancellation when partial stages completed */}
+        {resumeStage && !pipeRunning && (
+          <button
+            id="pipeline-resume-btn"
+            onClick={() => resumePipeline(resumeStage)}
+            disabled={!effectivePath}
+            title={`Skip stages 1–${resumeStage - 1} and continue from stage ${resumeStage}: ${STAGE_NAMES[resumeStage - 1]}`}
+            style={{
+              ...btnStyle("#fb923c", !effectivePath),
+              marginTop: 4,
+              background: "rgba(251,146,60,0.10)",
+              display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
+            }}
+          >
+            <span style={{fontSize:12}}>⏭</span>
+            <span>Resume from Stage {resumeStage}: {STAGE_NAMES[resumeStage - 1]}</span>
+          </button>
+        )}
         {!effectivePath&&<div style={{fontSize:10,color:"var(--text-3)",marginTop:4,textAlign:"center"}}>Select or enter a scan file above</div>}
 
         {/* Detection params */}
