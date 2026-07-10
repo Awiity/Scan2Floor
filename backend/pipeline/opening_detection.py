@@ -334,10 +334,32 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
 
     # ── Build output objects ─────────────────────────────────────────────────
     results = []
+    margin_cols = max(1, int(0.10 / bin_m))  # 10 cm edge margin
+
     for u_s, u_e, gtype, gap_col_indices in merged:
         width = u_e - u_s
         min_w = min_door_w if gtype == "door" else min_win_w
         if width < min_w:
+            continue
+
+        if not gap_col_indices:
+            continue
+
+        gap_cols_grid = occupied[:, gap_col_indices]
+
+        # ── Check for lintel (points above opening) ─────────────────────────
+        has_lintel = False
+        if gtype == "door":
+            has_lintel = bool(np.any(gap_cols_grid[door_top:, :]))
+        else:
+            has_lintel = bool(np.any(gap_cols_grid[win_top:, :]))
+
+        # ── Check if gap touches the ends of the wall segment ───────────────
+        touches_start = (min(gap_col_indices) <= margin_cols)
+        touches_end = (max(gap_col_indices) >= n_u - 1 - margin_cols)
+
+        # Reject open-ended gaps that lack a lintel (likely segment overshoot)
+        if (touches_start or touches_end) and not has_lintel:
             continue
 
         frac = ((u_s + u_e) / 2) / wall_len
@@ -361,6 +383,10 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
             win_bot=win_bot,
             win_top=win_top,
         )
+
+        # Penalise internal gaps that lack a lintel (could be empty space)
+        if not has_lintel:
+            confidence = round(confidence * 0.6, 3)
 
         results.append(
             {

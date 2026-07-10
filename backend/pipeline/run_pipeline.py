@@ -347,12 +347,13 @@ def run_pipeline(
             from pipeline.dxf_export         import export_floor_dxf
 
             cfg = {
-                "grid_size":          0.02,
+                "grid_size":          0.05,
                 "snap_to_axis":       True,
                 "min_wall_m":         0.40,
                 "max_wall_thickness": 0.75,
                 "dp_tolerance":       0.04,
                 "threshold_frac":     0.01,
+                "static_threshold":   2.0,
                 "save_debug":         True,
                 **(wall_cfg or {}),
             }
