@@ -1,32 +1,38 @@
 {
   "centroid_xy": [
-    14.367137478155646,
-    -2.6646541890392794
+    20.255881151121557,
+    8.567745662671243
   ],
   "bounds": {
-    "x_min": -19.980850219726562,
-    "x_max": 20.326000213623047,
-    "y_min": -0.6295740008354187,
-    "y_max": 7.1748881340026855,
-    "z_min": -8.133544921875,
-    "z_max": 8.315746307373047
+    "x_min": -23.600149154663086,
+    "x_max": 20.90654182434082,
+    "y_min": -3.012485980987549,
+    "y_max": 5.499979019165039,
+    "z_min": -22.61894989013672,
+    "z_max": 17.218055725097656
   },
   "floor_levels": [
-    0.06
+    -1.491,
+    1.132
   ],
-  "total_points": 24780268,
-  "sampled_points": 247803,
+  "total_points": 70254681,
+  "sampled_points": 702547,
   "sample_rate": 100,
-  "source_xyz": "C:\\Users\\AWIT\\Desktop\\WORK\\data\\matterpak_2\\cloud.xyz",
+  "source_xyz": "C:\\Users\\AWIT\\Desktop\\WORK\\data\\matterpak\\cloud.xyz",
   "floor_levels_source": "cloud2bim_horiz_surfaces",
   "slab_pairs_c2b": [
     [
-      0.05999999865889549,
-      0.05999999865889549
+      -1.4910000562667847,
+      -1.4910000562667847
+    ],
+    [
+      1.1319999694824219,
+      1.1319999694824219
     ]
   ],
   "wall_slices": {
-    "wall_slice_floor_0": 333700
+    "wall_slice_floor_0": 1065061,
+    "wall_slice_floor_1": 805828
   },
   "wall_slice_voxel_m": 0.05
 }

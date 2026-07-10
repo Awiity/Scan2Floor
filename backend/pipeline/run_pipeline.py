@@ -125,16 +125,20 @@ def _run_subprocess(args: list[str], cwd: str | None = None) -> bool:
 
 
 def run_pipeline(
-    xyz_path:       str,
-    run_c2b:        bool  = True,
-    run_slices:     bool  = True,
-    detect_floors:  list[int] | None = None,   # None → all floors
-    wall_cfg:       dict  | None = None,
+    xyz_path:          str,
+    run_c2b:           bool      = True,
+    run_slices:        bool      = True,
+    detect_floors:     list[int] | None = None,   # None → all floors
+    wall_cfg:          dict      | None = None,
+    resume_from_stage: int       = 1,              # 1 = full run, N = skip stages <N
 ) -> None:
     """
     Execute the full pipeline.  Call this in a daemon thread.
     `detect_floors` restricts wall detection to specific floor indices.
     `wall_cfg` is passed to detect_walls_c2b_for_floor (optional overrides).
+    `resume_from_stage` allows resuming after a cancellation without re-running
+    earlier stages:  1 = full fresh run, 4 = skip stages 1-3 (keep existing
+    pointcloud.bin / info.json / c2b outputs), 5 = keep wall slices too.
     """
     global status
 
@@ -150,8 +154,10 @@ def run_pipeline(
             "started_at":  time.time(),
             "finished_at": None,
             "elapsed_s":   None,
-            "log":         [f"Pipeline started for: {xyz_path}"],
+            "log":         [f"Pipeline started for: {xyz_path}" +
+                            (f" (resuming from stage {resume_from_stage})" if resume_from_stage > 1 else "")],
             "xyz_path":    xyz_path,
+            "resume_from": resume_from_stage,
         })
 
     t0 = time.time()
@@ -181,44 +187,77 @@ def run_pipeline(
     try:
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-        # ── Clear stale outputs ───────────────────────────────────────────
-        _emit("\n[init] Clearing stale pipeline outputs…")
-        preserve = {"xyz_path.json"}
-        stale_globs = ["pointcloud.bin", "info.json", "*.npy", "walls_floor_*.json",
-                       "openings_floor_*.json", "rooms_floor_*.json",
-                       "*.dxf", "*.svg", "debug_c2b_*"]
-        for pat in stale_globs:
-            for p in glob.glob(str(PROCESSED_DIR / pat)):
-                if os.path.basename(p) in preserve:
-                    continue
+        # ── Selective wipe: only clear outputs from stages we will re-run ──
+        if resume_from_stage <= 1:
+            # Full fresh run — wipe everything except the persisted XYZ path
+            _emit("\n[init] Full run — clearing all stale pipeline outputs…")
+            preserve = {"xyz_path.json"}
+            stale_globs = ["pointcloud.bin", "info.json", "*.npy",
+                           "walls_floor_*.json", "openings_floor_*.json",
+                           "rooms_floor_*.json", "*.dxf", "*.svg", "debug_c2b_*"]
+            for pat in stale_globs:
+                for p in glob.glob(str(PROCESSED_DIR / pat)):
+                    if os.path.basename(p) in preserve:
+                        continue
+                    try:
+                        os.remove(p)
+                    except Exception as e:
+                        _emit(f"  [warn] could not remove {os.path.basename(p)}: {e}")
+            for p in glob.glob(str(C2B_OUT_DIR / "horiz_surface_*.xyz")):
                 try:
                     os.remove(p)
-                except Exception as e:
-                    _emit(f"  [warn] could not remove {os.path.basename(p)}: {e}")
+                except Exception:
+                    pass
+        else:
+            # Resuming — only wipe outputs produced by the stages we will re-run
+            _emit(f"\n[init] Resuming from stage {resume_from_stage} — preserving earlier outputs…")
+            # Stage 5 outputs (wall/opening/room JSON + DXF/SVG) are always re-generated
+            downstream_globs = ["walls_floor_*.json", "openings_floor_*.json",
+                                 "rooms_floor_*.json", "*.dxf", "*.svg"]
+            # If re-running from stage 4 or earlier, also wipe the wall slices
+            if resume_from_stage <= 4:
+                downstream_globs.append("*.npy")
+            # If re-running from stage 3 or earlier, also wipe C2B surfaces
+            if resume_from_stage <= 3:
+                for p in glob.glob(str(C2B_OUT_DIR / "horiz_surface_*.xyz")):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            # If re-running from stage 2 or earlier, also wipe pointcloud + info
+            if resume_from_stage <= 2:
+                downstream_globs += ["pointcloud.bin", "info.json"]
+            preserve = {"xyz_path.json"}
+            for pat in downstream_globs:
+                for p in glob.glob(str(PROCESSED_DIR / pat)):
+                    if os.path.basename(p) in preserve:
+                        continue
+                    try:
+                        os.remove(p)
+                    except Exception as e:
+                        _emit(f"  [warn] could not remove {os.path.basename(p)}: {e}")
 
-        # Also clear old C2B output so we always have fresh surfaces
-        for p in glob.glob(str(C2B_OUT_DIR / "horiz_surface_*.xyz")):
-            try:
-                os.remove(p)
-            except Exception:
-                pass
+        # ── Stage 1: Preprocess XYZ ───────────────────────────────────────────────
+        if _check_cancel(): return
+        if resume_from_stage <= 1:
+            _set_stage(1)
+            script1 = str(BASE_DIR / "pipeline" / "preprocess_xyz.py")
+            ok = _run_subprocess(
+                [sys.executable, script1, "--xyz", xyz_path],
+                cwd=str(BASE_DIR),
+            )
+            if _check_cancel(): return
+            if not ok:
+                return _fail("preprocess_xyz.py failed")
+            _stage_done(1)
+        else:
+            _emit("[skip] Stage 1 (preprocess XYZ) — using existing pointcloud.bin + info.json")
+            with _lock:
+                status["stages_done"].append(1)
 
-        # ── Stage 1: Preprocess XYZ ───────────────────────────────────────
+        # ── Stage 2: Cloud2BIM slab detection ────────────────────────────────────────
         if _check_cancel(): return
-        _set_stage(1)
-        script1 = str(BASE_DIR / "pipeline" / "preprocess_xyz.py")
-        ok = _run_subprocess(
-            [sys.executable, script1, "--xyz", xyz_path],
-            cwd=str(BASE_DIR),
-        )
-        if _check_cancel(): return
-        if not ok:
-            return _fail("preprocess_xyz.py failed")
-        _stage_done(1)
-
-        # ── Stage 2: Cloud2BIM slab detection ─────────────────────────────
-        if _check_cancel(): return
-        if run_c2b:
+        if resume_from_stage <= 2 and run_c2b:
             _set_stage(2)
             script2 = str(BASE_DIR / "pipeline" / "run_c2b.py")
             ok = _run_subprocess(
@@ -233,38 +272,44 @@ def run_pipeline(
             else:
                 _stage_done(2)
         else:
-            _emit("[skip] Stage 2 (Cloud2BIM) skipped by caller")
+            reason = "skipped by caller" if not run_c2b else f"resuming from stage {resume_from_stage}"
+            _emit(f"[skip] Stage 2 (Cloud2BIM) — {reason}")
             with _lock:
                 status["stages_done"].append(2)
 
         # ── Stage 3: Import C2B floor levels ──────────────────────────────
         if _check_cancel(): return
-        _set_stage(3)
-        info_path = PROCESSED_DIR / "info.json"
-        if not info_path.exists():
-            return _fail("info.json not found after Stage 1")
+        if resume_from_stage <= 3:
+            _set_stage(3)
+            info_path = PROCESSED_DIR / "info.json"
+            if not info_path.exists():
+                return _fail("info.json not found after Stage 1")
 
-        if C2B_OUT_DIR.is_dir() and list(C2B_OUT_DIR.glob("horiz_surface_*.xyz")):
-            try:
-                from pipeline.floor_from_c2b import update_floor_levels_from_c2b
-                result = update_floor_levels_from_c2b(
-                    c2b_output_dir=str(C2B_OUT_DIR),
-                    processed_dir=str(PROCESSED_DIR),
-                )
-                if result.get("status") == "ok":
-                    _emit(f"  ✓ Floor levels: {result.get('new_floor_levels')}")
-                else:
-                    _emit(f"  ⚠ {result.get('message', 'C2B floor import issue')}")
-            except Exception as exc:
-                _emit(f"  ⚠ floor_from_c2b failed: {exc} — keeping Stage 1 levels")
+            if C2B_OUT_DIR.is_dir() and list(C2B_OUT_DIR.glob("horiz_surface_*.xyz")):
+                try:
+                    from pipeline.floor_from_c2b import update_floor_levels_from_c2b
+                    result = update_floor_levels_from_c2b(
+                        c2b_output_dir=str(C2B_OUT_DIR),
+                        processed_dir=str(PROCESSED_DIR),
+                    )
+                    if result.get("status") == "ok":
+                        _emit(f"  ✓ Floor levels: {result.get('new_floor_levels')}")
+                    else:
+                        _emit(f"  ⚠ {result.get('message', 'C2B floor import issue')}")
+                except Exception as exc:
+                    _emit(f"  ⚠ floor_from_c2b failed: {exc} — keeping Stage 1 levels")
+            else:
+                _emit("  ⚠ No horiz_surface_*.xyz found — keeping histogram floor levels")
+
+            _stage_done(3)
         else:
-            _emit("  ⚠ No horiz_surface_*.xyz found — keeping histogram floor levels")
+            _emit(f"[skip] Stage 3 (Import C2B) — resuming from stage {resume_from_stage}")
+            with _lock:
+                status["stages_done"].append(3)
 
-        _stage_done(3)
-
-        # ── Stage 4: Extract wall slices ──────────────────────────────────
+        # ── Stage 4: Extract wall slices ──────────────────────────────────────────────
         if _check_cancel(): return
-        if run_slices:
+        if resume_from_stage <= 4 and run_slices:
             _set_stage(4)
             script4 = str(BASE_DIR / "pipeline" / "preprocess_walls.py")
             ok = _run_subprocess(
@@ -276,13 +321,15 @@ def run_pipeline(
                 return _fail("preprocess_walls.py failed")
             _stage_done(4)
         else:
-            _emit("[skip] Stage 4 (wall slices) skipped")
+            reason = "skipped by caller" if not run_slices else f"resuming from stage {resume_from_stage}"
+            _emit(f"[skip] Stage 4 (wall slices) — {reason}")
             with _lock:
                 status["stages_done"].append(4)
 
         # ── Stage 5: Detect walls & rooms per floor ───────────────────────
         if _check_cancel(): return
         _set_stage(5)
+        info_path = PROCESSED_DIR / "info.json"   # re-assign in case stage 3 was skipped
         with open(info_path) as fh:
             info = json.load(fh)
         n_floors = len(info.get("floor_levels", []))

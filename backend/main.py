@@ -299,8 +299,10 @@ def pointcloud():
 def info():
     path = os.path.join(PROCESSED_DIR, "info.json")
     if not os.path.exists(path):
-        subprocess.Popen(["python", "pipeline/preprocess_o3d.py"], cwd=BASE_DIR)
-        return JSONResponse({"status": "processing"})
+        raise HTTPException(
+            status_code=404,
+            detail="info.json not found — run the pipeline first (POST /api/pipeline/run).",
+        )
     with open(path) as f:
         return json.load(f)
 
@@ -334,6 +336,8 @@ def _run_preprocess_walls_bg(xyz_path: str) -> None:
             stderr=subprocess.STDOUT,
             text=True,
             cwd=BASE_DIR,
+            encoding="utf-8",
+            errors="replace",
         )
         log_lines = []
         for line in proc.stdout:
@@ -689,10 +693,11 @@ def scan_browse():
 
 
 class PipelineRunPayload(BaseModel):
-    xyz_path:       str
-    run_c2b:        bool  = True
-    run_slices:     bool  = True
-    detect_floors:  list[int] | None = None
+    xyz_path:          str
+    run_c2b:           bool      = True
+    run_slices:        bool      = True
+    detect_floors:     list[int] | None = None
+    resume_from_stage: int       = 1    # 1=full run, 2-5=skip earlier stages
     # wall detection overrides (all optional)
     grid_size:          float = 0.02
     snap_to_axis:       bool  = True
@@ -740,6 +745,7 @@ def pipeline_run(payload: PipelineRunPayload):
         run_slices=payload.run_slices,
         detect_floors=payload.detect_floors,
         wall_cfg=wall_cfg,
+        resume_from_stage=max(1, payload.resume_from_stage),
     )
 
     if not started:
@@ -826,7 +832,7 @@ def c2b_update_floors():
     if not os.path.exists(info_path):
         raise HTTPException(
             status_code=404,
-            detail="info.json not found. Run preprocess_o3d.py first.",
+            detail="info.json not found — run the pipeline first (POST /api/pipeline/run).",
         )
 
     try:

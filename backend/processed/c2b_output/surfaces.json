@@ -2,11 +2,18 @@
   "surfaces": [
     {
       "file": "C:\\Users\\AWIT\\Desktop\\WORK\\scan2floor\\backend\\processed\\c2b_output\\horiz_surface_1.xyz",
-      "n_points": 4825106,
-      "median_z": 0.060068000108003616,
-      "z_lo": -0.18818699121475224,
-      "z_hi": 0.2618130087852477
+      "n_points": 3607856,
+      "median_z": -1.4907619953155518,
+      "z_lo": -1.5159308910369873,
+      "z_hi": -1.3659308910369874
+    },
+    {
+      "file": "C:\\Users\\AWIT\\Desktop\\WORK\\scan2floor\\backend\\processed\\c2b_output\\horiz_surface_2.xyz",
+      "n_points": 12262922,
+      "median_z": 1.1323460340499878,
+      "z_lo": 0.8840691089630126,
+      "z_hi": 1.4840691089630127
     }
   ],
-  "n_surfaces": 1
+  "n_surfaces": 2
 }
