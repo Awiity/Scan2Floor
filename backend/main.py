@@ -693,11 +693,10 @@ def scan_browse():
 
 
 class PipelineRunPayload(BaseModel):
-    xyz_path:          str
-    run_c2b:           bool      = True
-    run_slices:        bool      = True
-    detect_floors:     list[int] | None = None
-    resume_from_stage: int       = 1    # 1=full run, 2-5=skip earlier stages
+    xyz_path:       str
+    run_c2b:        bool  = True
+    run_slices:     bool  = True
+    detect_floors:  list[int] | None = None
     # wall detection overrides (all optional)
     grid_size:          float = 0.02
     snap_to_axis:       bool  = True
@@ -745,7 +744,6 @@ def pipeline_run(payload: PipelineRunPayload):
         run_slices=payload.run_slices,
         detect_floors=payload.detect_floors,
         wall_cfg=wall_cfg,
-        resume_from_stage=max(1, payload.resume_from_stage),
     )
 
     if not started:
