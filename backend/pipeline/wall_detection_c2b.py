@@ -428,8 +428,44 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
 
     print(f"[c2b floor {floor_idx}] grid {width}×{height}  gs={grid_size*100:.0f} cm  gpu={_GPU}")
 
+    # ── Vertical span filtering (remove stairs and furniture) ─────────────
+    # A true wall spans vertically across the entire height band.
+    # Stair steps and furniture have a small Y (height) range at any XZ position.
+    flat_cpu = py.astype(np.int64) * width + px.astype(np.int64)
+    y_vals = pts_band[:, 1]
+
+    min_y = np.full(height * width, 1e5, dtype=np.float32)
+    max_y = np.full(height * width, -1e5, dtype=np.float32)
+
+    np.minimum.at(min_y, flat_cpu, y_vals)
+    np.maximum.at(max_y, flat_cpu, y_vals)
+
+    min_y_2d = min_y.reshape(height, width)
+    max_y_2d = max_y.reshape(height, width)
+
+    # Use a 9x9 kernel (18cm x 18cm) to aggregate the vertical span locally.
+    # This ensures sparse LiDAR scans of true walls pass the span test,
+    # because nearby points at different heights will be combined.
+    k9 = np.ones((9, 9), dtype=np.uint8)
+    max_y_dilated = cv2.dilate(max_y_2d, k9)
+    min_y_eroded = -cv2.dilate(-min_y_2d, k9)
+
+    span = max_y_dilated - min_y_eroded
+    min_vertical_span = 0.33 * (y_hi - y_lo)  # Must span at least 33% of the slice height
+    
+    # Identify pixels where the local neighborhood's span is sufficient
+    valid_mask = span >= min_vertical_span
+    
+    # Zero out density for invalid pixels (stairs/furniture)
+    grid[~valid_mask] = 0.0
+
     # ── Threshold → binary ────────────────────────────────────────────────
-    max_density = grid.max()
+    nonzero_grid = grid[grid > 0]
+    if len(nonzero_grid) == 0:
+        max_density = 0.0
+    else:
+        max_density = np.percentile(nonzero_grid, 95)
+    
     threshold   = max(1.0, threshold_frac * max_density)
     binary = ((grid > threshold).astype(np.uint8) * 255)
 

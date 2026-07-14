@@ -2,7 +2,7 @@
   "floor_idx": 0,
   "n_doors": 0,
   "n_windows": 4,
-  "n_walls_analysed": 32,
+  "n_walls_analysed": 30,
   "n_walls_with_openings": 3,
   "n_low_confidence": 0,
   "low_confidence_threshold": 0.45,
@@ -27,18 +27,18 @@
     {
       "type": "window",
       "width": 1.75,
-      "confidence": 0.752,
-      "u_start": 3.9,
-      "u_end": 5.65,
-      "x": -2.34,
+      "confidence": 0.753,
+      "u_start": 3.95,
+      "u_end": 5.7,
+      "x": -2.33,
       "z": 7.435,
-      "hinge_x": -3.215,
+      "hinge_x": -3.205,
       "hinge_z": 7.435,
-      "wall_x1": -7.115000381469727,
+      "wall_x1": -7.155000381469726,
       "wall_z1": 7.4350000000000005,
       "wall_x2": -1.1950003814697254,
       "wall_z2": 7.4350000000000005,
-      "wall_len": 5.92,
+      "wall_len": 5.96,
       "wall_idx": 22
     },
     {
@@ -56,7 +56,7 @@
       "wall_x2": 20.264999618530275,
       "wall_z2": -7.605,
       "wall_len": 5.42,
-      "wall_idx": 31
+      "wall_idx": 29
     },
     {
       "type": "window",
@@ -73,7 +73,7 @@
       "wall_x2": 20.264999618530275,
       "wall_z2": -7.605,
       "wall_len": 5.42,
-      "wall_idx": 31
+      "wall_idx": 29
     }
   ]
 }
