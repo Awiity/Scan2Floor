@@ -75,10 +75,14 @@ INFO_PATH = PROCESSED_DIR / "info.json"
 
 # ── Tuning constants ─────────────────────────────────────────────────────────
 VOXEL = 0.05  # 5 cm — matches default grid_size in wall_detection.py
-BAND_BELOW = 0.05  # metres below detected floor level to include
-BAND_ABOVE = 2.65  # metres above floor level to include
+BAND_BELOW = 0.50  # metres below detected floor level to include (was 0.05)
+BAND_ABOVE = 3.20  # metres above floor level to include  (was 2.65)
 CHUNK_LINES = 2_000_000  # pandas chunk size — trades RAM for parse speed
 DEDUP_EVERY = 4  # run dedup after every N chunks (lower = less VRAM pressure)
+
+# Floor heightmap constants
+HEIGHTMAP_CELL = 0.50  # 50 cm cells for the local floor elevation map
+HEIGHTMAP_FLOOR_PCT = 10  # percentile of Y values used as local floor elevation
 
 # Bit-packing constants for 1D int64 voxel encoding
 # 21 bits per axis covers ±2^20 ≈ ±1 M voxels = ±52 km at 5 cm — well beyond any building.
@@ -327,14 +331,115 @@ def main() -> None:
         slice_info[f"wall_slice_floor_{fi}"] = n_pts
         print(f"  {n_pts:>8,} unique voxels  ->  {out_path.name}")
 
+        # ── Build local floor heightmap ───────────────────────────────────────
+        # For each 50cm×50cm XZ cell, compute the 10th-percentile Y value.
+        # This gives the local floor elevation, robust to furniture/noise.
+        print(f"Floor {fi}: computing local floor heightmap...", end="", flush=True)
+        floor_y = floor_levels[fi]
+
+        x_vals = pts[:, 0]
+        z_vals = pts[:, 2]
+        y_vals = pts[:, 1]
+
+        # Only use points near the actual floor surface for heightmap
+        # (within 40cm above the global floor level)
+        floor_mask = (y_vals >= floor_y - BAND_BELOW) & (y_vals <= floor_y + 0.40)
+        if floor_mask.sum() < 50:
+            # Fallback: use bottom 20% of all points in the slice
+            y_sorted = np.sort(y_vals)
+            y_cutoff = y_sorted[int(len(y_sorted) * 0.20)]
+            floor_mask = y_vals <= y_cutoff
+
+        fx = x_vals[floor_mask]
+        fz = z_vals[floor_mask]
+        fy = y_vals[floor_mask]
+
+        hm_x_min, hm_x_max = float(x_vals.min()), float(x_vals.max())
+        hm_z_min, hm_z_max = float(z_vals.min()), float(z_vals.max())
+        hm_cols = max(1, int(np.ceil((hm_x_max - hm_x_min) / HEIGHTMAP_CELL)))
+        hm_rows = max(1, int(np.ceil((hm_z_max - hm_z_min) / HEIGHTMAP_CELL)))
+
+        # Assign each floor-region point to a cell
+        cx_idx = np.clip(
+            np.floor((fx - hm_x_min) / HEIGHTMAP_CELL).astype(np.int32),
+            0, hm_cols - 1,
+        )
+        cz_idx = np.clip(
+            np.floor((fz - hm_z_min) / HEIGHTMAP_CELL).astype(np.int32),
+            0, hm_rows - 1,
+        )
+        cell_id = cz_idx.astype(np.int64) * hm_cols + cx_idx.astype(np.int64)
+
+        # Compute percentile-based floor elevation per cell
+        heightmap = np.full(hm_rows * hm_cols, np.nan, dtype=np.float32)
+        for cid in np.unique(cell_id):
+            cell_mask = cell_id == cid
+            cell_y = fy[cell_mask]
+            if len(cell_y) >= 3:
+                heightmap[cid] = np.percentile(cell_y, HEIGHTMAP_FLOOR_PCT)
+            elif len(cell_y) > 0:
+                heightmap[cid] = float(cell_y.min())
+
+        heightmap_2d = heightmap.reshape(hm_rows, hm_cols)
+
+        # Fill NaN cells by nearest-neighbour interpolation from valid cells
+        valid = ~np.isnan(heightmap_2d)
+        if valid.any() and not valid.all():
+            from scipy.ndimage import distance_transform_edt
+            # distance_transform_edt with return_indices gives nearest valid index
+            _, nearest_idx = distance_transform_edt(~valid, return_indices=True)
+            heightmap_2d = heightmap_2d[nearest_idx[0], nearest_idx[1]]
+        elif not valid.any():
+            # No valid cells at all — fall back to global floor_y
+            heightmap_2d[:] = floor_y
+
+        # Light Gaussian smooth to handle scan noise (sigma = 1 cell = 50cm)
+        try:
+            from scipy.ndimage import gaussian_filter
+            heightmap_2d = gaussian_filter(heightmap_2d, sigma=1.0)
+        except ImportError:
+            pass  # Skip smoothing if scipy unavailable
+
+        # Save heightmap
+        hm_path = PROCESSED_DIR / f"floor_heightmap_{fi}.npy"
+        np.save(str(hm_path), heightmap_2d)
+
+        hm_meta = {
+            "x_min": round(hm_x_min, 4),
+            "z_min": round(hm_z_min, 4),
+            "x_max": round(hm_x_max, 4),
+            "z_max": round(hm_z_max, 4),
+            "cell_size": HEIGHTMAP_CELL,
+            "rows": hm_rows,
+            "cols": hm_cols,
+            "min_elev": round(float(np.nanmin(heightmap_2d)), 4),
+            "max_elev": round(float(np.nanmax(heightmap_2d)), 4),
+            "variation_m": round(
+                float(np.nanmax(heightmap_2d) - np.nanmin(heightmap_2d)), 4
+            ),
+        }
+        slice_info[f"floor_heightmap_{fi}"] = hm_meta
+        print(
+            f"  {hm_rows}×{hm_cols} cells  "
+            f"elev=[{hm_meta['min_elev']:+.3f}, {hm_meta['max_elev']:+.3f}]  "
+            f"Δ={hm_meta['variation_m']:.3f} m  ->  {hm_path.name}"
+        )
+
     # ── Persist slice metadata to info.json ───────────────────────────────────
     with open(INFO_PATH) as fh:
         info = json.load(fh)
     info["wall_slices"] = slice_info
     info["wall_slice_voxel_m"] = VOXEL
+    def _json_default(obj):
+        if isinstance(obj, (np.floating, np.integer)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
     with open(INFO_PATH, "w") as fh:
-        json.dump(info, fh, indent=2)
-    print(f"\nUpdated {INFO_PATH.name} with wall_slices metadata.")
+        json.dump(info, fh, indent=2, default=_json_default)
+    print(f"\nUpdated {INFO_PATH.name} with wall_slices + heightmap metadata.")
 
     total_elapsed = time.time() - t0
     print(f"\nAll done in {total_elapsed:.1f} s  ({total_elapsed / 60:.1f} min).")

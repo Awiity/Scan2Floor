@@ -256,6 +256,13 @@ def _analyse_wall(seg, floor_pts: np.ndarray, floor_y: float, config: dict) -> l
     if len(pts_slab) < 5:
         return []
 
+    # ── Upper height check: structural wall guard ────────────────────────────
+    # A true wall segment containing doors/windows must extend to upper heights (>= floor_y + 1.6m).
+    # Non-structural segments (car bonnets/roofs) only reach ~1.2m-1.5m and should not spawn door arcs.
+    v_raw_all = pts_slab[:, 1] - floor_y
+    if float(np.max(v_raw_all)) < 1.60:
+        return []
+
     # ── Build 2D occupancy grid ───────────────────────────────────────────────
     n_u = max(1, int(np.ceil(wall_len / bin_m)))
     height_range = 2.5
@@ -449,19 +456,26 @@ def detect_openings_for_floor(floor_idx: int, config: dict) -> dict:
         f"({n_low_conf} low-confidence, threshold={LOW_CONFIDENCE_THRESHOLD})"
     )
 
+    def _json_default(obj):
+        if isinstance(obj, (np.floating, np.integer)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
     result = {
-        "floor_idx":             floor_idx,
-        "n_doors":               n_doors,
-        "n_windows":             n_windows,
+        "floor_idx":             int(floor_idx),
+        "n_doors":               int(n_doors),
+        "n_windows":             int(n_windows),
         "n_walls_analysed":      len(walls),
-        "n_walls_with_openings": n_walls_with_openings,
-        "n_low_confidence":      n_low_conf,
-        "low_confidence_threshold": LOW_CONFIDENCE_THRESHOLD,
+        "n_walls_with_openings": int(n_walls_with_openings),
+        "n_low_confidence":      int(n_low_conf),
+        "low_confidence_threshold": float(LOW_CONFIDENCE_THRESHOLD),
         "openings":              all_openings,
     }
 
     out_path = os.path.join(processed_dir, f"openings_floor_{floor_idx}.json")
     with open(out_path, "w") as f:
-        json.dump(result, f, indent=2)
+        json.dump(result, f, indent=2, default=_json_default)
 
     return result

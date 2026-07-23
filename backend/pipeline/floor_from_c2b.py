@@ -54,6 +54,8 @@ _INFO_PATH  = _PROCESSED / "info.json"
 _MAX_SLAB_GAP = 1.0
 # Min Z gap between consecutive storeys
 _MIN_STOREY_GAP = 1.5
+# Bin size for mode calculation (robust against sloped floors)
+_MODE_BIN = 0.02
 
 
 def _read_horiz_surface(path: Path) -> Optional[np.ndarray]:
@@ -168,16 +170,31 @@ def update_floor_levels_from_c2b(
 
     print(f"\n[floor_from_c2b] Found {len(xyz_files)} surface files in {c2b_dir}")
 
-    # ── Compute median Z per file ─────────────────────────────────────────────
+    # ── Compute representative Z per file ─────────────────────────────────────
+    # Use the MODE (most common 2cm bin) instead of median — more robust when
+    # floors slope or have rooms at different elevations.  Also track the full
+    # Z range of each surface for downstream adaptive band selection.
     surface_z: list[float] = []
+    surface_z_ranges: list[list[float]] = []   # [[z_min, z_max], …]
     for fpath in xyz_files:
         z_arr = _read_horiz_surface(fpath)
         if z_arr is None or len(z_arr) < 10:
             print(f"  [SKIP] {fpath.name} — too few points")
             continue
-        med = float(np.median(z_arr))
-        print(f"  {fpath.name:30s}  n={len(z_arr):>9,}  median_z={med:+.4f} m")
-        surface_z.append(med)
+        # Mode via histogram — pick the centre of the densest 2cm bin
+        z_lo, z_hi = float(z_arr.min()), float(z_arr.max())
+        n_bins = max(1, int(np.ceil((z_hi - z_lo) / _MODE_BIN)))
+        hist, edges = np.histogram(z_arr, bins=n_bins)
+        peak_bin = int(np.argmax(hist))
+        mode_z = float(edges[peak_bin] + _MODE_BIN / 2)
+        median_z = float(np.median(z_arr))
+        print(
+            f"  {fpath.name:30s}  n={len(z_arr):>9,}  "
+            f"mode_z={mode_z:+.4f}  median_z={median_z:+.4f}  "
+            f"range=[{z_lo:+.4f}, {z_hi:+.4f}]  Δ={z_hi - z_lo:.3f} m"
+        )
+        surface_z.append(mode_z)
+        surface_z_ranges.append([round(z_lo, 4), round(z_hi, 4)])
 
     if not surface_z:
         return {
@@ -185,8 +202,11 @@ def update_floor_levels_from_c2b(
             "message": "Could not read any usable horiz_surface_*.xyz file.",
         }
 
-    surface_z.sort()
-    print(f"\n  Sorted surface Z values: {[f'{v:+.4f}' for v in surface_z]}")
+    # Sort surfaces and ranges together
+    order = list(np.argsort(surface_z))
+    surface_z = [surface_z[i] for i in order]
+    surface_z_ranges = [surface_z_ranges[i] for i in order]
+    print(f"\n  Sorted surface Z values (mode): {[f'{v:+.4f}' for v in surface_z]}")
 
     # ── Pair surfaces into slab bottom/top ────────────────────────────────────
     slab_pairs = _pair_surfaces(surface_z)
@@ -217,9 +237,43 @@ def update_floor_levels_from_c2b(
     info["floor_levels"] = floor_levels
     info["floor_levels_source"] = "cloud2bim_horiz_surfaces"
     info["slab_pairs_c2b"] = slab_pairs
+    info["surface_z_ranges"] = surface_z_ranges  # per-surface [z_min, z_max]
+
+    # Compute per-floor Z variation range from slab pairs + surface ranges
+    floor_z_variations: list[dict] = []
+    for fl in floor_levels:
+        # Find the surface ranges that contributed to this floor level
+        matching_ranges = []
+        for pair in slab_pairs:
+            if abs(pair[0] - fl) < 0.01:  # this pair's bottom matches the floor
+                # Find the original surface range for this Z value
+                for sz, sr in zip(surface_z, surface_z_ranges):
+                    if abs(sz - pair[0]) < 0.05:
+                        matching_ranges.append(sr)
+        if matching_ranges:
+            z_min = min(r[0] for r in matching_ranges)
+            z_max = max(r[1] for r in matching_ranges)
+        else:
+            z_min = fl - 0.10
+            z_max = fl + 0.10
+        floor_z_variations.append({
+            "floor_y": fl,
+            "z_min": round(z_min, 4),
+            "z_max": round(z_max, 4),
+            "variation_m": round(z_max - z_min, 4),
+        })
+    info["floor_z_variations"] = floor_z_variations
+    print(f"\n  Floor Z variations: {floor_z_variations}")
+
+    def _json_default(obj):
+        if isinstance(obj, (np.floating, np.integer)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
     with open(info_file, "w") as fh:
-        json.dump(info, fh, indent=2)
+        json.dump(info, fh, indent=2, default=_json_default)
 
     print(f"\n  Updated {info_file.name}  old={old_levels}  new={floor_levels}")
 

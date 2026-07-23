@@ -195,9 +195,36 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
         )
         cv2.line(canvas, ext_pt1, ext_pt2, color=255, thickness=thickness_draw)
 
+    # ── Point cloud occupancy mask for outdoor void rejection ──────────────────
+    pc_occupancy = None
+    slice_path = os.path.join(processed_dir, f"wall_slice_floor_{floor_idx}.npy")
+    if os.path.exists(slice_path):
+        try:
+            pc_pts = np.load(slice_path)   # (M, 3) float32
+            if len(pc_pts) > 0:
+                px_pc = np.clip(np.round((pc_pts[:, 0] - x_min_r) / grid_size).astype(np.int32), 0, width - 1)
+                py_pc = np.clip(np.round((z_max_r - pc_pts[:, 2]) / grid_size).astype(np.int32), 0, height - 1)
+                pc_img = np.zeros((height, width), dtype=np.uint8)
+                pc_img[py_pc, px_pc] = 255
+                # Dilate by 1.2 meters to cover room interior footprints near scanned walls/floors
+                rad_px = max(3, int(round(1.20 / grid_size)))
+                k_pc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rad_px * 2 + 1, rad_px * 2 + 1))
+                pc_occupancy = cv2.dilate(pc_img, k_pc) > 0
+                print(f"[rooms floor {floor_idx}] built point cloud occupancy mask ({len(pc_pts):,} pts, rad={rad_px}px)")
+        except Exception as exc:
+            print(f"[rooms floor {floor_idx}] failed to build pc occupancy: {exc}")
+
     # ── Progressive gap-closing strategy ─────────────────────────────────────
     # Multiple passes with increasing kernel size heal scan dropout gaps from
-    # small (10 cm) to large (50 cm) without over-inflating thin corridors.
+    # small (10 cm) to large (75 cm) without over-inflating thin corridors.
+    default_passes_extended = [
+        (_k(0.10), 2),   # seal 10 cm gaps
+        (_k(0.25), 2),   # seal 25 cm gaps
+        (_k(0.50), 1),   # seal 50 cm gaps
+        (_k(0.75), 1),   # seal 75 cm gaps (door/window dropout gaps)
+    ]
+    close_passes = config.get("close_passes", default_passes_extended)
+
     for (k_size, iters) in close_passes:
         k_size = k_size | 1          # ensure odd
         k = cv2.getStructuringElement(cv2.MORPH_RECT, (k_size, k_size))
@@ -227,9 +254,7 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
     min_area_px = max(1, int(min_room_m2 / (grid_size ** 2)))
     max_area_px = int(max_room_m2 / (grid_size ** 2))
 
-    # ── Identify exterior as the LARGEST border-touching component ────────────
-    # (not ALL border components — interior alcoves near the wall boundary
-    # should still be counted as rooms)
+    # ── Identify exterior as border-touching components ───────────────────────
     border_labels: set[int] = set()
     for row in (label_img[0, :], label_img[-1, :]):
         border_labels.update(row.tolist())
@@ -249,11 +274,27 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
 
     for lbl in range(1, n_labels):
         if lbl == exterior_label:
-            continue   # the exterior open space
+            continue   # primary exterior open space
 
         area_px = int(stats[lbl, cv2.CC_STAT_AREA])
         if area_px < min_area_px or area_px > max_area_px:
             continue
+
+        # Secondary border component filter (reject outdoor voids touching borders)
+        if lbl in border_labels and area_px > max(min_area_px, int(4.0 / (grid_size ** 2))):
+            continue
+
+        # Point cloud coverage check: reject un-scanned outdoor ghost voids
+        if pc_occupancy is not None:
+            comp_mask = (label_img == lbl)
+            scanned_ratio = float(pc_occupancy[comp_mask].mean())
+            if scanned_ratio < 0.12:  # Less than 12% of region area has point cloud coverage
+                area_m2_val = round(area_px * grid_size ** 2, 1)
+                print(
+                    f"[rooms floor {floor_idx}] rejected ghost room label {lbl} "
+                    f"({area_m2_val} m2): un-scanned void (coverage={scanned_ratio*100:.1f}%)"
+                )
+                continue
 
         bx = int(stats[lbl, cv2.CC_STAT_LEFT])
         bz = int(stats[lbl, cv2.CC_STAT_TOP])
@@ -263,9 +304,6 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
         # Aspect-ratio guard: skip regions thinner than min_room_width_m
         # These are typically gaps between parking spots, wall-interior
         # scan slivers, staircase steps, etc.
-        if min(bw, bh) < min_dim_px:
-            continue
-
         area_m2 = round(area_px * grid_size ** 2, 3)
 
         # Back-project pixel bbox → world coords (Y is flipped)
@@ -311,16 +349,33 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
             os.path.join(processed_dir, f"debug_floor{floor_idx}_rooms.png"),
         )
 
+    def _json_default(obj):
+        if isinstance(obj, (np.floating, np.integer)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+    clean_rooms = []
+    for r in rooms:
+        clean_rooms.append({
+            "id": int(r["id"]),
+            "area_m2": float(r["area_m2"]),
+            "bbox": {k: float(v) for k, v in r["bbox"].items()},
+            "centroid_x": float(r["centroid_x"]),
+            "centroid_z": float(r["centroid_z"]),
+        })
+
     # ── Save JSON ─────────────────────────────────────────────────────────────
     result = {
-        "floor_idx": floor_idx,
-        "grid_size": grid_size,
-        "n_rooms":   len(rooms),
-        "rooms":     rooms,
+        "floor_idx": int(floor_idx),
+        "grid_size": float(grid_size),
+        "n_rooms":   len(clean_rooms),
+        "rooms":     clean_rooms,
     }
     out_path = os.path.join(processed_dir, f"rooms_floor_{floor_idx}.json")
     with open(out_path, "w") as fh:
-        json.dump(result, fh, indent=2)
+        json.dump(result, fh, indent=2, default=_json_default)
 
     return result
 
@@ -331,10 +386,17 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
 
 
 def _empty_result(floor_idx: int, processed_dir: str, grid_size: float) -> dict:
-    result = {"floor_idx": floor_idx, "grid_size": grid_size, "n_rooms": 0, "rooms": []}
+    def _json_default(obj):
+        if isinstance(obj, (np.floating, np.integer)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+    result = {"floor_idx": int(floor_idx), "grid_size": float(grid_size), "n_rooms": 0, "rooms": []}
     out_path = os.path.join(processed_dir, f"rooms_floor_{floor_idx}.json")
     with open(out_path, "w") as fh:
-        json.dump(result, fh, indent=2)
+        json.dump(result, fh, indent=2, default=_json_default)
     return result
 
 

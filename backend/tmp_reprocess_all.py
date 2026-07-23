@@ -46,32 +46,32 @@ room_cfg = {
 }
 
 print(f"\n{'='*60}")
-print(f"  Reprocessing {n_floors} floor(s) — Cloud2BIM algorithm")
+print(f"  Reprocessing {n_floors} floor(s) - Cloud2BIM algorithm")
 print(f"{'='*60}\n")
 
 for fi in range(n_floors):
-    print(f"\n{'─'*60}")
+    print(f"\n{'-'*60}")
     print(f"  FLOOR {fi}")
-    print(f"{'─'*60}")
+    print(f"{'-'*60}")
 
-    # 1 – Walls (C2B)
+    # 1 - Walls (C2B)
     walls = detect_walls_c2b_for_floor(fi, wall_cfg)
-    print(f"  → {len(walls)} wall segments")
+    print(f"  -> {len(walls)} wall segments")
 
-    # 2 – Openings
+    # 2 - Openings
     op = detect_openings_for_floor(fi, opening_cfg)
-    print(f"  → {op['n_doors']} doors  {op['n_windows']} windows")
+    print(f"  -> {op['n_doors']} doors  {op['n_windows']} windows")
 
-    # 3 – Rooms
+    # 3 - Rooms
     rm = detect_rooms_for_floor(fi, room_cfg)
-    print(f"  → {rm['n_rooms']} rooms")
+    print(f"  -> {rm['n_rooms']} rooms")
     for r in rm['rooms']:
-        print(f"      R{r['id']:02d}  {r['area_m2']:7.1f} m²  "
+        print(f"      R{r['id']:02d}  {r['area_m2']:7.1f} m2  "
               f"centroid ({r['centroid_x']:.2f}, {r['centroid_z']:.2f})")
 
-    # 4 – Export DXF + SVG
+    # 4 - Export DXF + SVG
     dxf = export_floor_dxf(fi, PROCESSED_DIR)
-    print(f"  → DXF: {os.path.basename(dxf)}")
+    print(f"  -> DXF: {os.path.basename(dxf)}")
 
 print(f"\n{'='*60}")
 print("  All floors done.")

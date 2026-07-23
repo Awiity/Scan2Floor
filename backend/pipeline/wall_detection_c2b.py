@@ -44,6 +44,13 @@ try:
 except ImportError:
     _GPU = False
 
+def _json_default(obj):
+    if isinstance(obj, (np.floating, np.integer)):
+        return obj.item()
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
 # ── Geometry helpers (previously in wall_detection.py) ────────────────────
 
 def snap_lines_to_manhattan(lines, angle_tolerance: float = 10.0):
@@ -375,21 +382,67 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     print(f"\n[c2b floor {floor_idx}] loaded slice: {len(pts):,} pts")
     print(f"[c2b floor {floor_idx}] floor_y = {floor_y:+.3f} m")
 
-    # ── Height band — Cloud2BIM uses 85–120 % of storey height ───────────
-    # Estimate storey height from adjacent floor levels or fall back to 3 m.
+    # ── Estimate storey height ────────────────────────────────────────────
     if floor_idx + 1 < len(levels):
         storey_h = float(levels[floor_idx + 1]) - floor_y
     else:
         storey_h = 3.0
     storey_h = max(storey_h, 2.0)   # guard
 
-    z_pct_lo, z_pct_hi = 0.30, 0.90   # keep generous range (Cloud2BIM: 0.85–1.20 relative)
-    y_lo = floor_y + z_pct_lo * storey_h
-    y_hi = floor_y + z_pct_hi * storey_h
+    # ── Adaptive height band using local floor heightmap ──────────────────
+    # Instead of a rigid global band, look up each point's local floor
+    # elevation and compute a per-point band relative to that.
+    z_pct_lo, z_pct_hi = 0.30, 0.90
 
-    mask = (pts[:, 1] >= y_lo) & (pts[:, 1] < y_hi)
-    pts_band = pts[mask]
-    print(f"[c2b floor {floor_idx}] band [{y_lo:.2f} … {y_hi:.2f}]: {len(pts_band):,} pts")
+    hm_path = os.path.join(processed_dir, f"floor_heightmap_{floor_idx}.npy")
+    hm_meta = info.get("wall_slices", {}).get(f"floor_heightmap_{floor_idx}")
+
+    if os.path.exists(hm_path) and hm_meta:
+        # Load heightmap and compute per-point local floor elevation
+        heightmap = np.load(hm_path)  # (rows, cols) float32
+        hm_x_min = float(hm_meta["x_min"])
+        hm_z_min = float(hm_meta["z_min"])
+        hm_cell  = float(hm_meta["cell_size"])
+        hm_rows  = int(hm_meta["rows"])
+        hm_cols  = int(hm_meta["cols"])
+
+        # Map each point's XZ to a heightmap cell
+        cx_idx = np.clip(
+            np.floor((pts[:, 0] - hm_x_min) / hm_cell).astype(np.int32),
+            0, hm_cols - 1,
+        )
+        cz_idx = np.clip(
+            np.floor((pts[:, 2] - hm_z_min) / hm_cell).astype(np.int32),
+            0, hm_rows - 1,
+        )
+        local_floor = heightmap[cz_idx, cx_idx]  # per-point local floor elevation
+
+        # Per-point adaptive band
+        y_lo_per_pt = local_floor + z_pct_lo * storey_h
+        y_hi_per_pt = local_floor + z_pct_hi * storey_h
+        mask = (pts[:, 1] >= y_lo_per_pt) & (pts[:, 1] < y_hi_per_pt)
+        pts_band = pts[mask]
+
+        elev_min = float(np.nanmin(local_floor))
+        elev_max = float(np.nanmax(local_floor))
+        print(
+            f"[c2b floor {floor_idx}] adaptive band: "
+            f"local_floor=[{elev_min:+.3f}, {elev_max:+.3f}]  "
+            f"Δ={elev_max - elev_min:.3f} m  "
+            f"→ {len(pts_band):,} pts"
+        )
+
+        # Keep the per-point local_floor for band points (used by vertical span filter)
+        local_floor_band = local_floor[mask]
+    else:
+        # Fallback: rigid global band (no heightmap available)
+        print(f"[c2b floor {floor_idx}] WARNING: no heightmap found — using rigid band")
+        y_lo = floor_y + z_pct_lo * storey_h
+        y_hi = floor_y + z_pct_hi * storey_h
+        mask = (pts[:, 1] >= y_lo) & (pts[:, 1] < y_hi)
+        pts_band = pts[mask]
+        local_floor_band = None
+        print(f"[c2b floor {floor_idx}] band [{y_lo:.2f} … {y_hi:.2f}]: {len(pts_band):,} pts")
 
     if len(pts_band) < 50:
         print(f"[c2b floor {floor_idx}] too few points — skipping")
@@ -451,7 +504,9 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     min_y_eroded = -cv2.dilate(-min_y_2d, k9)
 
     span = max_y_dilated - min_y_eroded
-    min_vertical_span = 0.33 * (y_hi - y_lo)  # Must span at least 33% of the slice height
+    # Band height is the same regardless of adaptive vs rigid mode
+    band_height = (z_pct_hi - z_pct_lo) * storey_h
+    min_vertical_span = 0.20 * band_height  # Must span at least 20% of the band (lowered to retain sparse corridor walls)
     
     # Identify pixels where the local neighborhood's span is sufficient
     valid_mask = span >= min_vertical_span
@@ -466,7 +521,9 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     else:
         max_density = np.percentile(nonzero_grid, 95)
     
-    threshold   = max(1.0, threshold_frac * max_density)
+    # Cap upper threshold so sparse/corridor walls aren't wiped out by high corner density
+    raw_thresh = threshold_frac * max_density
+    threshold   = max(1.0, min(raw_thresh, 3.0))
     binary = ((grid > threshold).astype(np.uint8) * 255)
 
     # ── Morphological close (5×5) – Cloud2BIM uses closing((5,5)) ────────
@@ -474,16 +531,46 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k5)
 
     # ── Find contours ─────────────────────────────────────────────────────
-    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    contours, hierarchy = cv2.findContours(closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
     print(f"[c2b floor {floor_idx}] contours: {len(contours)}")
 
-    # ── Douglas-Peucker approximation → line segments ─────────────────────
+    # ── Douglas-Peucker approximation → line segments (with smart vehicle pruning) ──
     dp_tol_px = max(1.0, dp_tol_m / grid_size)
     all_segs_px: list[tuple] = []   # list of (p1_px, p2_px) where each is (x,y) pixel
 
-    for cnt in contours:
-        if cv2.contourArea(cnt) < 4:
+    ceiling_reach_y = (floor_y + 0.55 * storey_h)
+
+    for idx, cnt in enumerate(contours):
+        area_px = cv2.contourArea(cnt)
+        if area_px < 4:
             continue
+        
+        # Vehicle contour heuristic: applies ONLY to isolated low-height loops inside large open areas
+        bx, by, bw, bh = cv2.boundingRect(cnt)
+        bw_m, bh_m = bw * grid_size, bh * grid_size
+        dim_min, dim_max = min(bw_m, bh_m), max(bw_m, bh_m)
+        area_m2 = area_px * (grid_size ** 2)
+
+        # Check maximum height reached inside this contour
+        cnt_mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.drawContours(cnt_mask, [cnt], -1, 255, -1)
+        cnt_max_y = float(max_y_dilated[cnt_mask > 0].max()) if (cnt_mask > 0).any() else 0.0
+
+        # A contour is a vehicle ONLY if it matches car dimensions AND has NO points reaching upper ceiling height
+        is_low_vehicle = (cnt_max_y < ceiling_reach_y) and (1.2 <= dim_min <= 2.6) and (2.8 <= dim_max <= 6.2) and (3.5 <= area_m2 <= 14.0)
+
+        # Check if nested inside a large open region
+        is_nested = False
+        if hierarchy is not None and len(hierarchy) > 0:
+            parent_idx = hierarchy[0][idx][3]
+            if parent_idx != -1:
+                parent_area_m2 = cv2.contourArea(contours[parent_idx]) * (grid_size ** 2)
+                is_nested = parent_area_m2 > 50.0  # inside large hall > 50 m2
+
+        if is_low_vehicle and is_nested:
+            print(f"[c2b floor {floor_idx}] pruned vehicle contour {idx}: {bw_m:.1f}×{bh_m:.1f}m ({area_m2:.1f} m2, max_y={cnt_max_y:.2f}m)")
+            continue
+
         approx = cv2.approxPolyDP(cnt, dp_tol_px, closed=True)
         approx = np.squeeze(approx, axis=1)   # (K, 2)
         if len(approx) < 2:
@@ -505,7 +592,8 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     ]
 
     # ── Filter short segments ─────────────────────────────────────────────
-    segs_m = [s for s in segs_m if _dist(s[0], s[1]) >= min_wall_m * 0.5]  # generous pre-filter
+    # Preserve short fragments (>= 0.10m) so collinear merge can reassemble full corridor walls
+    segs_m = [s for s in segs_m if _dist(s[0], s[1]) >= 0.10]
     print(f"[c2b floor {floor_idx}] after length pre-filter: {len(segs_m)}")
 
     # ── Collinear merge (reuse our robust implementation) ─────────────────
@@ -593,18 +681,24 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
         print(f"[c2b floor {floor_idx}] debug PNGs: {dbg}_1-5_*.png")
 
     # ── Save JSON (same format as wall_detection.py) ──────────────────────
-    real_lines = wall_axes   # already [[x1,z1],[x2,z2]] in metres
+    real_lines = [
+        [
+            [float(pt[0]), float(pt[1])]
+            for pt in line
+        ]
+        for line in wall_axes
+    ]
     out_path = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
     result = {
-        "floor_idx":  floor_idx,
-        "grid_size":  grid_size,
+        "floor_idx":  int(floor_idx),
+        "grid_size":  float(grid_size),
         "x_min":      float(x_min),
         "z_min":      float(z_min),
         "source":     f"cloud2bim-c2b ({len(real_lines)} walls)",
         "lines":      real_lines,
     }
     with open(out_path, "w") as fh:
-        json.dump(result, fh)
+        json.dump(result, fh, default=_json_default)
 
     return real_lines
 
@@ -615,10 +709,11 @@ def _write_empty(floor_idx: int, processed_dir: str, grid_size: float) -> None:
     out = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
     with open(out, "w") as fh:
         json.dump({
-            "floor_idx": floor_idx,
-            "grid_size": grid_size,
+            "floor_idx": int(floor_idx),
+            "grid_size": float(grid_size),
             "x_min": 0.0,
             "z_min": 0.0,
             "source": "empty-c2b",
             "lines": [],
-        }, fh)
+        }, fh, default=_json_default)
+
