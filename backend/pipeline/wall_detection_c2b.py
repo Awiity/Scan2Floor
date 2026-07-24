@@ -506,7 +506,7 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     span = max_y_dilated - min_y_eroded
     # Band height is the same regardless of adaptive vs rigid mode
     band_height = (z_pct_hi - z_pct_lo) * storey_h
-    min_vertical_span = 0.20 * band_height  # Must span at least 20% of the band (lowered to retain sparse corridor walls)
+    min_vertical_span = 0.35 * band_height  # Must span at least 35% of the band (raised to reject car-height clusters while retaining real walls)
     
     # Identify pixels where the local neighborhood's span is sufficient
     valid_mask = span >= min_vertical_span
@@ -538,14 +538,19 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     dp_tol_px = max(1.0, dp_tol_m / grid_size)
     all_segs_px: list[tuple] = []   # list of (p1_px, p2_px) where each is (x,y) pixel
 
-    ceiling_reach_y = (floor_y + 0.55 * storey_h)
+    # Ceiling reach threshold: points from real walls reach well above car roofs.
+    # Cars top out at ~1.4-1.6 m; use 50% of storey height (~1.5 m for 3 m storey).
+    ceiling_reach_y = (floor_y + 0.50 * storey_h)
 
     for idx, cnt in enumerate(contours):
         area_px = cv2.contourArea(cnt)
         if area_px < 4:
             continue
         
-        # Vehicle contour heuristic: applies ONLY to isolated low-height loops inside large open areas
+        # ── Vehicle contour heuristic ──────────────────────────────────────
+        # Prune contours that match car dimensions and don't reach ceiling
+        # height, regardless of whether they're nested inside a larger
+        # contour.  This catches cars at the scan edge and in open parking.
         bx, by, bw, bh = cv2.boundingRect(cnt)
         bw_m, bh_m = bw * grid_size, bh * grid_size
         dim_min, dim_max = min(bw_m, bh_m), max(bw_m, bh_m)
@@ -556,19 +561,26 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
         cv2.drawContours(cnt_mask, [cnt], -1, 255, -1)
         cnt_max_y = float(max_y_dilated[cnt_mask > 0].max()) if (cnt_mask > 0).any() else 0.0
 
-        # A contour is a vehicle ONLY if it matches car dimensions AND has NO points reaching upper ceiling height
-        is_low_vehicle = (cnt_max_y < ceiling_reach_y) and (1.2 <= dim_min <= 2.6) and (2.8 <= dim_max <= 6.2) and (3.5 <= area_m2 <= 14.0)
+        # Dimension check: contour bounding box fits a car footprint
+        dims_match_car = (1.2 <= dim_min <= 2.8) and (2.5 <= dim_max <= 6.5) and (3.0 <= area_m2 <= 16.0)
 
-        # Check if nested inside a large open region
-        is_nested = False
-        if hierarchy is not None and len(hierarchy) > 0:
-            parent_idx = hierarchy[0][idx][3]
-            if parent_idx != -1:
-                parent_area_m2 = cv2.contourArea(contours[parent_idx]) * (grid_size ** 2)
-                is_nested = parent_area_m2 > 50.0  # inside large hall > 50 m2
+        # Height check: contour points don't reach ceiling height
+        is_low = cnt_max_y < ceiling_reach_y
 
-        if is_low_vehicle and is_nested:
-            print(f"[c2b floor {floor_idx}] pruned vehicle contour {idx}: {bw_m:.1f}×{bh_m:.1f}m ({area_m2:.1f} m2, max_y={cnt_max_y:.2f}m)")
+        # Solidity check: cars are fairly solid blobs (area / convex hull area).
+        # Thin wall fragments or L-shaped corners have low solidity.
+        hull = cv2.convexHull(cnt)
+        hull_area = cv2.contourArea(hull)
+        solidity = (area_px / hull_area) if hull_area > 0 else 0.0
+
+        is_vehicle = is_low and dims_match_car and solidity > 0.45
+
+        if is_vehicle:
+            print(
+                f"[c2b floor {floor_idx}] pruned vehicle contour {idx}: "
+                f"{bw_m:.1f}×{bh_m:.1f}m ({area_m2:.1f} m², "
+                f"max_y={cnt_max_y:.2f}m, solidity={solidity:.2f})"
+            )
             continue
 
         approx = cv2.approxPolyDP(cnt, dp_tol_px, closed=True)
@@ -620,6 +632,42 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
 
     segs_merged = [px_line_to_m(l) for l in merged_px]
     segs_merged = [s for s in segs_merged if _dist(s[0], s[1]) >= min_wall_m * 0.5]
+
+    # ── Per-segment wall-height-reach filter ──────────────────────────────
+    # Discard segments whose underlying point cloud data doesn't reach
+    # 45% of storey height.  Real walls always reach well above this;
+    # cars and low obstacles do not.
+    wall_reach_y = floor_y + 0.45 * storey_h
+    n_before_height = len(segs_merged)
+    height_filtered = []
+    for seg in segs_merged:
+        # Convert segment endpoints back to pixel coords
+        sx1 = int((seg[0][0] - x_min) / grid_size)
+        sy1 = int((seg[0][1] - z_min) / grid_size)
+        sx2 = int((seg[1][0] - x_min) / grid_size)
+        sy2 = int((seg[1][1] - z_min) / grid_size)
+        # Sample pixels along the segment using Bresenham-style stepping
+        seg_len_px = max(1, int(max(abs(sx2 - sx1), abs(sy2 - sy1))))
+        xs = np.linspace(sx1, sx2, seg_len_px + 1).astype(int)
+        ys = np.linspace(sy1, sy2, seg_len_px + 1).astype(int)
+        xs = np.clip(xs, 0, width - 1)
+        ys = np.clip(ys, 0, height - 1)
+        # Check max Y reached along this segment (using dilated max_y)
+        seg_max_y = float(max_y_dilated[ys, xs].max())
+        if seg_max_y >= wall_reach_y:
+            height_filtered.append(seg)
+        else:
+            seg_len_m = _dist(seg[0], seg[1])
+            # Only filter segments that are relatively short — long segments
+            # (> 3m) are likely real outer walls even if height data is sparse
+            if seg_len_m > 3.0:
+                height_filtered.append(seg)
+            else:
+                pass  # silently discard short low-reaching segment
+    segs_merged = height_filtered
+    n_removed = n_before_height - len(segs_merged)
+    if n_removed > 0:
+        print(f"[c2b floor {floor_idx}] height-reach filter removed {n_removed} low segments (threshold={wall_reach_y:.2f}m)")
 
     # ── Group parallel pairs → wall axes ──────────────────────────────────
     groups, singles = _group_parallel_segments(segs_merged, max_wall_thick)

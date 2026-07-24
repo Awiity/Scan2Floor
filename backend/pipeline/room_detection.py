@@ -197,7 +197,26 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
 
     # ── Point cloud occupancy mask for outdoor void rejection ──────────────────
     pc_occupancy = None
+    ceiling_mask = None
     slice_path = os.path.join(processed_dir, f"wall_slice_floor_{floor_idx}.npy")
+
+    # Load floor level and storey height for ceiling-reach check
+    info_path = os.path.join(processed_dir, "info.json")
+    floor_y = 0.0
+    storey_h = 3.0
+    if os.path.exists(info_path):
+        try:
+            with open(info_path) as _fh:
+                _info = json.load(_fh)
+            levels = _info.get("floor_levels", [])
+            if floor_idx < len(levels):
+                floor_y = float(levels[floor_idx])
+                if floor_idx + 1 < len(levels):
+                    storey_h = float(levels[floor_idx + 1]) - floor_y
+                storey_h = max(storey_h, 2.0)
+        except Exception:
+            pass
+
     if os.path.exists(slice_path):
         try:
             pc_pts = np.load(slice_path)   # (M, 3) float32
@@ -211,6 +230,27 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
                 k_pc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rad_px * 2 + 1, rad_px * 2 + 1))
                 pc_occupancy = cv2.dilate(pc_img, k_pc) > 0
                 print(f"[rooms floor {floor_idx}] built point cloud occupancy mask ({len(pc_pts):,} pts, rad={rad_px}px)")
+
+                # ── Ceiling-height mask: real rooms have points reaching upper wall/ceiling ──
+                # Cars top out at ~1.5 m; real walls reach 60%+ of storey height.
+                ceiling_threshold_y = floor_y + 0.60 * storey_h
+                high_mask = pc_pts[:, 1] >= ceiling_threshold_y
+                if high_mask.any():
+                    high_pts = pc_pts[high_mask]
+                    hx = np.clip(np.round((high_pts[:, 0] - x_min_r) / grid_size).astype(np.int32), 0, width - 1)
+                    hz = np.clip(np.round((z_max_r - high_pts[:, 2]) / grid_size).astype(np.int32), 0, height - 1)
+                    ceil_img = np.zeros((height, width), dtype=np.uint8)
+                    ceil_img[hz, hx] = 255
+                    # Dilate by 1.0 m so nearby ceiling/wall points cover room interiors
+                    ceil_rad_px = max(3, int(round(1.00 / grid_size)))
+                    k_ceil = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ceil_rad_px * 2 + 1, ceil_rad_px * 2 + 1))
+                    ceiling_mask = cv2.dilate(ceil_img, k_ceil) > 0
+                    n_high = int(high_mask.sum())
+                    print(
+                        f"[rooms floor {floor_idx}] built ceiling mask "
+                        f"(threshold={ceiling_threshold_y:.2f}m, {n_high:,} high pts, "
+                        f"rad={ceil_rad_px}px)"
+                    )
         except Exception as exc:
             print(f"[rooms floor {floor_idx}] failed to build pc occupancy: {exc}")
 
@@ -285,14 +325,42 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
             continue
 
         # Point cloud coverage check: reject un-scanned outdoor ghost voids
+        comp_mask = (label_img == lbl)
         if pc_occupancy is not None:
-            comp_mask = (label_img == lbl)
             scanned_ratio = float(pc_occupancy[comp_mask].mean())
             if scanned_ratio < 0.12:  # Less than 12% of region area has point cloud coverage
                 area_m2_val = round(area_px * grid_size ** 2, 1)
                 print(
                     f"[rooms floor {floor_idx}] rejected ghost room label {lbl} "
                     f"({area_m2_val} m2): un-scanned void (coverage={scanned_ratio*100:.1f}%)"
+                )
+                continue
+
+        # Ceiling-height check: reject car-enclosed voids in parking areas.
+        # Real rooms have walls/ceiling reaching above 60% of storey height.
+        # Cars and parking structures are low — no ceiling-height points.
+        if ceiling_mask is not None:
+            ceiling_ratio = float(ceiling_mask[comp_mask].mean())
+            if ceiling_ratio < 0.10:  # Less than 10% of region has ceiling-reaching points
+                area_m2_val = round(area_px * grid_size ** 2, 1)
+                print(
+                    f"[rooms floor {floor_idx}] rejected car/parking room label {lbl} "
+                    f"({area_m2_val} m2): no ceiling-height points "
+                    f"(ceiling_coverage={ceiling_ratio*100:.1f}%)"
+                )
+                continue
+
+            # Small rooms (< 6 m²) require stronger ceiling evidence to avoid
+            # accepting car-gap voids as rooms.  Real small rooms (bathrooms,
+            # closets) are surrounded by full-height walls and will easily have
+            # ≥ 25% ceiling coverage.
+            area_m2_check = area_px * grid_size ** 2
+            if area_m2_check < 6.0 and ceiling_ratio < 0.25:
+                area_m2_val = round(area_m2_check, 1)
+                print(
+                    f"[rooms floor {floor_idx}] rejected small room label {lbl} "
+                    f"({area_m2_val} m2): insufficient ceiling evidence "
+                    f"(ceiling_coverage={ceiling_ratio*100:.1f}% < 25%)"
                 )
                 continue
 
