@@ -635,9 +635,9 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
 
     # ── Per-segment wall-height-reach filter ──────────────────────────────
     # Discard segments whose underlying point cloud data doesn't reach
-    # 45% of storey height.  Real walls always reach well above this;
+    # 70% of storey height.  Real walls always reach well above this;
     # cars and low obstacles do not.
-    wall_reach_y = floor_y + 0.45 * storey_h
+    wall_reach_y = floor_y + 0.70 * storey_h
     n_before_height = len(segs_merged)
     height_filtered = []
     for seg in segs_merged:
