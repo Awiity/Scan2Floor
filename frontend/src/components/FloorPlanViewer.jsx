@@ -117,23 +117,40 @@ function drawGrid(ctx, cam, w, h) {
   ctx.restore();
 }
 
-function drawRooms(ctx, rooms, cam) {
+function drawRooms(ctx, rooms, cam, highlightedRoomId) {
   if (!rooms?.length) return;
+  const hasHighlight = highlightedRoomId != null;
   ctx.save();
   for (const room of rooms) {
-    const fill = C.roomFills[room.id % C.roomFills.length];
+    const isHighlighted = room.id === highlightedRoomId;
+    const baseAlpha = isHighlighted ? 0.30 : hasHighlight ? 0.03 : 0.07;
+    const fill = C.roomFills[room.id % C.roomFills.length].replace(/[\d.]+\)$/, `${baseAlpha})`);
     const { x_min, z_min, x_max, z_max } = room.bbox;
     const [cx1, cy1] = toCanvas(x_min, z_min, cam);
     const [cx2, cy2] = toCanvas(x_max, z_max, cam);
     const rw = cx2 - cx1, rh = cy2 - cy1;
     ctx.fillStyle = fill; ctx.fillRect(cx1, cy1, rw, rh);
-    ctx.strokeStyle = C.roomBorder; ctx.lineWidth = 0.5; ctx.strokeRect(cx1, cy1, rw, rh);
+
+    if (isHighlighted) {
+      // Bright glow border for selected room
+      ctx.save();
+      ctx.strokeStyle = "rgba(0,200,224,0.6)";
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = "rgba(0,200,224,0.5)";
+      ctx.shadowBlur = 12;
+      ctx.strokeRect(cx1, cy1, rw, rh);
+      ctx.restore();
+    } else {
+      ctx.strokeStyle = C.roomBorder; ctx.lineWidth = 0.5; ctx.strokeRect(cx1, cy1, rw, rh);
+    }
+
     const fontSize = Math.max(9, Math.min(13, cam.scale * 0.7));
     if (Math.abs(rw) > fontSize * 2.5 && Math.abs(rh) > fontSize * 1.5) {
       ctx.font = `${fontSize}px "Inter", sans-serif`;
-      ctx.fillStyle = C.labelRoom; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillStyle = isHighlighted ? "rgba(0,230,255,0.9)" : C.labelRoom;
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
       const [centX, centY] = toCanvas(room.centroid_x, room.centroid_z, cam);
-      ctx.fillText(`${room.area_m2.toFixed(1)} m²`, centX, centY);
+      ctx.fillText(`R${room.id}  ${room.area_m2.toFixed(1)} m²`, centX, centY);
     }
   }
   ctx.restore();
@@ -472,7 +489,7 @@ function FloorTab({ active, label, onClick }) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose }) {
+export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor }) {
   const canvasRef = useRef(null);
   const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
   const rafRef    = useRef(null);
@@ -602,6 +619,10 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
   }, [isDirty, selectedFloor]);
 
   // ── Draw loop ───────────────────────────────────────────────────────────────
+  // Keep a ref for highlightedRoomId to avoid stale closures in scheduleDraw
+  const highlightedRoomIdRef = useRef(highlightedRoomId);
+  useEffect(() => { highlightedRoomIdRef.current = highlightedRoomId; }, [highlightedRoomId]);
+
   const scheduleDraw = useCallback(() => {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
     rafRef.current = requestAnimationFrame(() => {
@@ -612,7 +633,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
       const cam = camRef.current;
       ctx.fillStyle = C.bg; ctx.fillRect(0, 0, w, h);
       drawGrid(ctx, cam, w, h);
-      drawRooms(ctx, roomsData?.rooms, cam);
+      drawRooms(ctx, roomsData?.rooms, cam, highlightedRoomIdRef.current);
       drawEditedWalls(
         ctx, editedLinesRef.current, cam,
         hoveredLineRef.current, addStepRef.current, snapRef.current,
@@ -625,7 +646,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
   }, [roomsData, openingsData]);
 
   // redraw when data changes
-  useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, scheduleDraw]);
+  useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, highlightedRoomId, scheduleDraw]);
 
   // ── Canvas resize ───────────────────────────────────────────────────────────
   useEffect(() => {
@@ -730,6 +751,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
         setIsDirty(true);
         scheduleDraw();
       }
+      return;
     }
 
     if (mode === "delete") {
@@ -743,8 +765,25 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
         setIsDirty(true);
         scheduleDraw();
       }
+      return;
     }
-  }, [pushHistory, scheduleDraw, getWorldFromEvent]);
+
+    // In select mode, check if click falls inside a room bbox → toggle selection
+    if (mode === "select" && !dragRef.current && onSelectRoom && roomsData?.rooms?.length) {
+      const [wx, wz] = getWorldFromEvent(e);
+      for (const room of roomsData.rooms) {
+        const { x_min, z_min, x_max, z_max } = room.bbox;
+        if (wx >= x_min && wx <= x_max && wz >= z_min && wz <= z_max) {
+          onSelectRoom(highlightedRoomIdRef.current === room.id ? null : room.id);
+          return;
+        }
+      }
+      // Clicked outside any room — deselect
+      if (highlightedRoomIdRef.current != null) {
+        onSelectRoom(null);
+      }
+    }
+  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -864,7 +903,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose })
       }}>
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {floors.length > 0
-            ? floors.map((_, i) => <FloorTab key={i} active={selectedFloor === i} label={floorLabel(i)} onClick={() => switchFloor(i)} />)
+            ? floors.map((_, i) => <FloorTab key={i} active={selectedFloor === i} label={floorLabel(i)} onClick={() => { setSelectedFloor(i); onSelectFloor?.(i); }} />)
             : <span style={{ fontSize: 11, color: "var(--text-3)" }}>No floors detected</span>
           }
         </div>

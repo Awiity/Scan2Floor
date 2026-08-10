@@ -340,6 +340,7 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     dp_tolerance      float   Douglas-Peucker parameter  (default 0.04 m)
     save_debug        bool    write debug PNGs           (default True)
     threshold_frac    float   relative density threshold (default 0.01)
+    wall_reach_frac   float   min height-reach fraction  (default 0.70)
 
     Returns
     -------
@@ -369,6 +370,7 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     dp_tol_m          = float(config.get("dp_tolerance",       0.04))
     save_debug        = bool(config.get("save_debug",          True))
     threshold_frac    = float(config.get("threshold_frac",     0.01))
+    wall_reach_frac   = float(config.get("wall_reach_frac",    0.35))
 
     # ── Load wall-slice points ────────────────────────────────────────────
     slice_path = os.path.join(processed_dir, f"wall_slice_floor_{floor_idx}.npy")
@@ -637,7 +639,7 @@ def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     # Discard segments whose underlying point cloud data doesn't reach
     # 70% of storey height.  Real walls always reach well above this;
     # cars and low obstacles do not.
-    wall_reach_y = floor_y + 0.70 * storey_h
+    wall_reach_y = floor_y + wall_reach_frac * storey_h
     n_before_height = len(segs_merged)
     height_filtered = []
     for seg in segs_merged:

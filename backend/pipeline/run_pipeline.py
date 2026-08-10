@@ -39,6 +39,7 @@ _cancel_event = threading.Event()
 _lock = threading.Lock()
 
 STAGES = [
+    "Clean Point Cloud",
     "Preprocess XYZ",
     "Cloud2BIM Slab Detection",
     "Import C2B Floor Levels",
@@ -125,14 +126,18 @@ def _run_subprocess(args: list[str], cwd: str | None = None) -> bool:
 
 
 def run_pipeline(
-    xyz_path:       str,
-    run_c2b:        bool  = True,
-    run_slices:     bool  = True,
-    detect_floors:  list[int] | None = None,   # None → all floors
-    wall_cfg:       dict  | None = None,
+    xyz_path:              str,
+    run_c2b:               bool  = True,
+    run_slices:            bool  = True,
+    detect_floors:         list[int] | None = None,   # None → all floors
+    wall_cfg:              dict  | None = None,
+    enable_cleaning:       bool  = True,
+    clean_downsample_pct:  float = 20.0,
+    clean_span_min:        float = 0.65,
+    clean_span_max:        float = 1.00,
 ) -> None:
     """
-    Execute the full pipeline.  Call this in a daemon thread.
+    Execute the full 6-stage pipeline. Call this in a daemon thread.
     `detect_floors` restricts wall detection to specific floor indices.
     `wall_cfg` is passed to detect_walls_c2b_for_floor (optional overrides).
     """
@@ -203,46 +208,78 @@ def run_pipeline(
             except Exception:
                 pass
 
-        # ── Stage 1: Preprocess XYZ ───────────────────────────────────────
+        active_xyz = xyz_path
+
+        # ── Stage 1: Clean Point Cloud ─────────────────────────────────────
         if _check_cancel(): return
-        _set_stage(1)
+        if enable_cleaning:
+            _set_stage(1)
+            script_clean = str(BASE_DIR / "pipeline" / "clean_pointcloud.py")
+            cleaned_xyz = str(PROCESSED_DIR / "cloud_cleaned.xyz")
+            ok = _run_subprocess(
+                [
+                    sys.executable, script_clean,
+                    "--xyz", xyz_path,
+                    "--out", cleaned_xyz,
+                    "--downsample-pct", str(clean_downsample_pct),
+                    "--span-min", str(clean_span_min),
+                    "--span-max", str(clean_span_max),
+                ],
+                cwd=str(BASE_DIR),
+            )
+            if _check_cancel(): return
+            if not ok:
+                _emit("  ⚠ Point cloud cleaning failed — falling back to raw point cloud")
+            else:
+                if os.path.exists(cleaned_xyz):
+                    active_xyz = cleaned_xyz
+                    _emit(f"  ✓ Using cleaned point cloud: {active_xyz}")
+                _stage_done(1)
+        else:
+            _emit("[skip] Stage 1 (Point Cloud Cleaning) skipped by caller")
+            with _lock:
+                status["stages_done"].append(1)
+
+        # ── Stage 2: Preprocess XYZ ───────────────────────────────────────
+        if _check_cancel(): return
+        _set_stage(2)
         script1 = str(BASE_DIR / "pipeline" / "preprocess_xyz.py")
         ok = _run_subprocess(
-            [sys.executable, script1, "--xyz", xyz_path],
+            [sys.executable, script1, "--xyz", active_xyz],
             cwd=str(BASE_DIR),
         )
         if _check_cancel(): return
         if not ok:
             return _fail("preprocess_xyz.py failed")
-        _stage_done(1)
+        _stage_done(2)
 
-        # ── Stage 2: Cloud2BIM slab detection ─────────────────────────────
+        # ── Stage 3: Cloud2BIM slab detection ─────────────────────────────
         if _check_cancel(): return
         if run_c2b:
-            _set_stage(2)
+            _set_stage(3)
             script2 = str(BASE_DIR / "pipeline" / "run_c2b.py")
             ok = _run_subprocess(
                 [sys.executable, script2,
-                 "--xyz", xyz_path,
+                 "--xyz", active_xyz,
                  "--out-dir", str(C2B_OUT_DIR)],
                 cwd=str(BASE_DIR),
             )
             if _check_cancel(): return
             if not ok:
-                _emit("  ⚠ Cloud2BIM slab detection failed — using histogram floor levels from Stage 1")
+                _emit("  ⚠ Cloud2BIM slab detection failed — using histogram floor levels from Stage 2")
             else:
-                _stage_done(2)
+                _stage_done(3)
         else:
-            _emit("[skip] Stage 2 (Cloud2BIM) skipped by caller")
+            _emit("[skip] Stage 3 (Cloud2BIM) skipped by caller")
             with _lock:
-                status["stages_done"].append(2)
+                status["stages_done"].append(3)
 
-        # ── Stage 3: Import C2B floor levels ──────────────────────────────
+        # ── Stage 4: Import C2B floor levels ──────────────────────────────
         if _check_cancel(): return
-        _set_stage(3)
+        _set_stage(4)
         info_path = PROCESSED_DIR / "info.json"
         if not info_path.exists():
-            return _fail("info.json not found after Stage 1")
+            return _fail("info.json not found after Stage 2")
 
         if C2B_OUT_DIR.is_dir() and list(C2B_OUT_DIR.glob("horiz_surface_*.xyz")):
             try:
@@ -256,40 +293,40 @@ def run_pipeline(
                 else:
                     _emit(f"  ⚠ {result.get('message', 'C2B floor import issue')}")
             except Exception as exc:
-                _emit(f"  ⚠ floor_from_c2b failed: {exc} — keeping Stage 1 levels")
+                _emit(f"  ⚠ floor_from_c2b failed: {exc} — keeping Stage 2 levels")
         else:
             _emit("  ⚠ No horiz_surface_*.xyz found — keeping histogram floor levels")
 
-        _stage_done(3)
+        _stage_done(4)
 
-        # ── Stage 4: Extract wall slices ──────────────────────────────────
+        # ── Stage 5: Extract wall slices ──────────────────────────────────
         if _check_cancel(): return
         if run_slices:
-            _set_stage(4)
+            _set_stage(5)
             script4 = str(BASE_DIR / "pipeline" / "preprocess_walls.py")
             ok = _run_subprocess(
-                [sys.executable, script4, "--xyz", xyz_path],
+                [sys.executable, script4, "--xyz", active_xyz],
                 cwd=str(BASE_DIR),
             )
             if _check_cancel(): return
             if not ok:
                 return _fail("preprocess_walls.py failed")
-            _stage_done(4)
+            _stage_done(5)
         else:
-            _emit("[skip] Stage 4 (wall slices) skipped")
+            _emit("[skip] Stage 5 (wall slices) skipped")
             with _lock:
-                status["stages_done"].append(4)
+                status["stages_done"].append(5)
 
-        # ── Stage 5: Detect walls & rooms per floor ───────────────────────
+        # ── Stage 6: Detect walls & rooms per floor ───────────────────────
         if _check_cancel(): return
-        _set_stage(5)
+        _set_stage(6)
         with open(info_path) as fh:
             info = json.load(fh)
         n_floors = len(info.get("floor_levels", []))
 
         if n_floors == 0:
             _emit("  ⚠ No floor levels in info.json — skipping wall detection")
-            _stage_done(5)
+            _stage_done(6)
         else:
             floors_to_run = detect_floors if detect_floors is not None else list(range(n_floors))
             _emit(f"  Detecting walls for floors: {floors_to_run}")
@@ -311,7 +348,7 @@ def run_pipeline(
             }
             room_cfg = {
                 "wall_thickness_m":  0.20,
-                "extend_m":          0.45,
+                "extend_m":          0.55,
                 "min_seg_m":         0.40,
                 "min_room_m2":       0.80,
                 "max_room_m2":       800.0,
@@ -349,7 +386,7 @@ def run_pipeline(
                 except Exception as exc:
                     _emit(f"  ⚠ DXF export floor {fi}: {exc}")
 
-            _stage_done(5)
+            _stage_done(6)
 
         # ── Done ──────────────────────────────────────────────────────────
         elapsed = round(time.time() - t0, 1)

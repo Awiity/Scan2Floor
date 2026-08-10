@@ -20,7 +20,7 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
   );
 }
 
-const STAGE_NAMES = ["Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
+const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
 export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected }) {
@@ -91,11 +91,18 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
     return stopPoll;
   },[]);
 
+  // Point cloud cleaning state
+  const [showCleanPanel, setShowCleanPanel] = useState(false);
+  const [enableClean, setEnableClean] = useState(true);
+  const [cleanPct, setCleanPct] = useState(20.0);
+  const [cleanSpanMin, setCleanSpanMin] = useState(0.65);
+  const [cleanSpanMax, setCleanSpanMax] = useState(1.00);
+
   const runPipeline = async () => {
     if(!effectivePath||pipeRunning) return;
     setPipeError(""); setPipeStatus(null); setPipeCancelling(false);
     try {
-      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac})}).then(r=>r.json());
+      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,enable_cleaning:enableClean,clean_downsample_pct:cleanPct,clean_span_min:cleanSpanMin,clean_span_max:cleanSpanMax,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac})}).then(r=>r.json());
       if(d.status==="started"||d.status==="already_running"){ setPipeRunning(true); startPoll(); }
       else if(d.detail) setPipeError(d.detail);
     } catch { setPipeError("Network error"); }
@@ -106,7 +113,7 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
     if(!effectivePath||pipeRunning) return;
     setPipeError(""); setPipeCancelling(false);
     try {
-      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,resume_from_stage:fromStage,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac})}).then(r=>r.json());
+      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,resume_from_stage:fromStage,enable_cleaning:enableClean,clean_downsample_pct:cleanPct,clean_span_min:cleanSpanMin,clean_span_max:cleanSpanMax,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac})}).then(r=>r.json());
       if(d.status==="started"||d.status==="already_running"){ setPipeRunning(true); startPoll(); }
       else if(d.detail) setPipeError(d.detail);
     } catch { setPipeError("Network error"); }
@@ -129,6 +136,7 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
   const [maxWallThick,setMaxWallThick]=useState(0.75);
   const [dpTol,setDpTol]=useState(0.04);
   const [snapToAxis,setSnapToAxis]=useState(true);
+  const [wallReachFrac,setWallReachFrac]=useState(0.35);
   const [showRP,  setShowRP]  = useState(false);
   const [wallThickM,setWallThickM]=useState(0.20);
   const [extendM,setExtendM]=useState(0.45);
@@ -159,7 +167,7 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
   const runSingleFloor = async()=>{
     setAdvBusy(true); setAdvMsg("");
     try {
-      const r=await fetch("/api/c2b/walls",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({floor_idx:advFloor,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,detect_openings:true,detect_rooms:true,wall_thickness:wallThickM,extend_m:extendM,min_seg_m:minSegM,min_room_m2:minRoomM2,min_room_width_m:minRoomW})});
+      const r=await fetch("/api/c2b/walls",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({floor_idx:advFloor,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac,detect_openings:true,detect_rooms:true,wall_thickness:wallThickM,extend_m:extendM,min_seg_m:minSegM,min_room_m2:minRoomM2,min_room_width_m:minRoomW})});
       const d=await r.json();
       if(!r.ok) setAdvMsg("⚠ "+(d.detail??"Error"));
       else { setAdvMsg(`✓ ${d.lines_count} walls · ${d.n_doors}D ${d.n_windows}W · ${d.n_rooms} rooms`); onWallsDetected?.(); }
@@ -320,6 +328,28 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
         )}
         {!effectivePath&&<div style={{fontSize:10,color:"var(--text-3)",marginTop:4,textAlign:"center"}}>Select or enter a scan file above</div>}
 
+        {/* Point cloud cleaning params */}
+        <div style={{marginTop:8}}>
+          <button onClick={()=>setShowCleanPanel(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:showCleanPanel?"rgba(6,182,212,0.08)":"rgba(255,255,255,0.03)",border:`1px solid ${showCleanPanel?"rgba(6,182,212,0.25)":"rgba(255,255,255,0.08)"}`,borderRadius:6,color:showCleanPanel?"#67e8f9":"var(--text-2)",fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4}}>
+            <span>🧹 Point Cloud Cleaning</span><span style={{fontSize:10,opacity:0.7}}>{showCleanPanel?"▲":"▼"}</span>
+          </button>
+          {showCleanPanel&&(
+            <div style={{background:"rgba(0,0,0,0.25)",border:"1px solid rgba(6,182,212,0.12)",borderRadius:8,padding:"10px 12px",display:"flex",flexDirection:"column",gap:10}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <div><div style={{fontSize:11,color:"var(--text-2)",fontWeight:600}}>Enable Cleaning</div><div style={{fontSize:10,color:"var(--text-3)"}}>Remove foreign objects</div></div>
+                <Toggle checked={enableClean} onChange={setEnableClean}/>
+              </div>
+              {enableClean&&(
+                <>
+                  <ParamSlider label="Downsample Percentage" hint="Keep X-% of points" value={cleanPct} min={1.0} max={100.0} step={1.0} unit="%" precision={1} defaultVal={20.0} onChange={setCleanPct}/>
+                  <ParamSlider label="Min Wall Height Span" hint="Min % of storey height to retain" value={cleanSpanMin} min={0.50} max={1.00} step={0.05} unit="" precision={2} defaultVal={0.65} onChange={setCleanSpanMin}/>
+                  <ParamSlider label="Max Wall Height Span" hint="Max % of room height to retain" value={cleanSpanMax} min={0.80} max={1.20} step={0.05} unit="" precision={2} defaultVal={1.00} onChange={setCleanSpanMax}/>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Detection params */}
         <div style={{marginTop:8}}>
           <button onClick={()=>setShowWP(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:showWP?"rgba(6,182,212,0.08)":"rgba(255,255,255,0.03)",border:`1px solid ${showWP?"rgba(6,182,212,0.25)":"rgba(255,255,255,0.08)"}`,borderRadius:6,color:showWP?"#67e8f9":"var(--text-2)",fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4}}>
@@ -332,11 +362,12 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
               <ParamSlider label="Min Wall Length" value={minWallM} min={0.10} max={2.0} step={0.05} unit="m" defaultVal={0.40} onChange={setMinWallM}/>
               <ParamSlider label="Max Wall Thickness" value={maxWallThick} min={0.10} max={1.5} step={0.05} unit="m" defaultVal={0.75} onChange={setMaxWallThick}/>
               <ParamSlider label="DP Simplification" value={dpTol} min={0.01} max={0.20} step={0.005} unit="m" precision={3} defaultVal={0.04} onChange={setDpTol}/>
+              <ParamSlider label="Wall Height Reach" hint="Min fraction of storey height" value={wallReachFrac} min={0.10} max={1.0} step={0.05} unit="" precision={2} defaultVal={0.35} onChange={setWallReachFrac}/>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div><div style={{fontSize:11,color:"var(--text-2)",fontWeight:600}}>Manhattan Snap</div><div style={{fontSize:10,color:"var(--text-3)"}}>Force H/V alignment</div></div>
                 <Toggle checked={snapToAxis} onChange={setSnapToAxis}/>
               </div>
-              <button onClick={()=>{setGridSize(0.02);setThreshFrac(0.01);setMinWallM(0.40);setMaxWallThick(0.75);setDpTol(0.04);setSnapToAxis(true);}} style={{fontSize:10,color:"var(--text-3)",background:"none",border:"1px solid rgba(255,255,255,0.08)",borderRadius:4,padding:"3px 8px",cursor:"pointer",alignSelf:"flex-end"}}>↩ Reset</button>
+              <button onClick={()=>{setGridSize(0.02);setThreshFrac(0.01);setMinWallM(0.40);setMaxWallThick(0.75);setDpTol(0.04);setSnapToAxis(true);setWallReachFrac(0.35);}} style={{fontSize:10,color:"var(--text-3)",background:"none",border:"1px solid rgba(255,255,255,0.08)",borderRadius:4,padding:"3px 8px",cursor:"pointer",alignSelf:"flex-end"}}>↩ Reset</button>
             </div>
           )}
         </div>

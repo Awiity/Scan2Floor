@@ -449,6 +449,7 @@ class C2BWallParams(BaseModel):
     max_wall_thickness: float = 0.75 # maximum slab thickness for face-pairing
     dp_tolerance: float = 0.04       # Douglas-Peucker tolerance in metres
     threshold_frac: float = 0.01     # relative density threshold for binarisation
+    wall_reach_frac: float = 0.70    # min height-reach as fraction of storey height
     save_debug: bool = True
     # Auto-run downstream phases
     detect_openings: bool = True
@@ -697,6 +698,11 @@ class PipelineRunPayload(BaseModel):
     run_c2b:        bool  = True
     run_slices:     bool  = True
     detect_floors:  list[int] | None = None
+    # point cloud cleaning options
+    enable_cleaning:       bool  = True
+    clean_downsample_pct:  float = 20.0
+    clean_span_min:        float = 0.65
+    clean_span_max:        float = 1.00
     # wall detection overrides (all optional)
     grid_size:          float = 0.02
     snap_to_axis:       bool  = True
@@ -704,17 +710,19 @@ class PipelineRunPayload(BaseModel):
     max_wall_thickness: float = 0.75
     dp_tolerance:       float = 0.04
     threshold_frac:     float = 0.01
+    wall_reach_frac:    float = 0.35
 
 
 @app.post("/api/pipeline/run")
 def pipeline_run(payload: PipelineRunPayload):
     """
-    Start the unified 5-stage pipeline in the background:
-      1. Preprocess XYZ   → pointcloud.bin + info.json
-      2. Cloud2BIM C2B    → horiz_surface_N.xyz
-      3. Import C2B Floors → update floor_levels in info.json
-      4. Extract Slices   → wall_slice_floor_N.npy
-      5. Detect Walls & Rooms → walls_floor_N.json + DXF
+    Start the unified 6-stage pipeline in the background:
+      1. Clean Point Cloud → cloud_cleaned.xyz (downsamples & removes foreign objects)
+      2. Preprocess XYZ   → pointcloud.bin + info.json
+      3. Cloud2BIM C2B    → horiz_surface_N.xyz
+      4. Import C2B Floors → update floor_levels in info.json
+      5. Extract Slices   → wall_slice_floor_N.npy
+      6. Detect Walls & Rooms → walls_floor_N.json + DXF
     Poll /api/pipeline/status for progress.
     """
     p = payload.xyz_path.strip()
@@ -736,6 +744,7 @@ def pipeline_run(payload: PipelineRunPayload):
         "max_wall_thickness": payload.max_wall_thickness,
         "dp_tolerance":       payload.dp_tolerance,
         "threshold_frac":     payload.threshold_frac,
+        "wall_reach_frac":    payload.wall_reach_frac,
     }
 
     started = _pipeline.start_pipeline(
@@ -744,6 +753,10 @@ def pipeline_run(payload: PipelineRunPayload):
         run_slices=payload.run_slices,
         detect_floors=payload.detect_floors,
         wall_cfg=wall_cfg,
+        enable_cleaning=payload.enable_cleaning,
+        clean_downsample_pct=payload.clean_downsample_pct,
+        clean_span_min=payload.clean_span_min,
+        clean_span_max=payload.clean_span_max,
     )
 
     if not started:

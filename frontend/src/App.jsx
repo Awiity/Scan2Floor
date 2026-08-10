@@ -12,6 +12,7 @@ import PointCloud from "./components/PointCloud";
 import LoadingOverlay from "./components/LoadingOverlay";
 import FloorPlanPanel from "./components/FloorPlanPanel";
 import FloorPlanViewer from "./components/FloorPlanViewer";
+import RoomListPanel from "./components/RoomListPanel";
 
 const POLL_MS = 7 * 1000;
 
@@ -44,6 +45,38 @@ export default function App() {
   // Bumped whenever wall detection finishes so FloorPlanViewer re-fetches.
   const [floorDataVersion, setFloorDataVersion] = useState(0);
   const handleWallsDetected = () => setFloorDataVersion((v) => v + 1);
+
+  /* ---------- room selection ----------- */
+  const [selectedRoomId, setSelectedRoomId] = useState(null);
+  const [roomsData, setRoomsData] = useState(null);
+
+  // Fetch rooms for the active floor (defaulting to floor 0 when activeFloor is "all")
+  useEffect(() => {
+    const targetFloor = (activeFloor === "all" || activeFloor == null) ? 0 : activeFloor;
+    let cancelled = false;
+    fetch(`/api/rooms/${targetFloor}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setRoomsData(d ? { ...d, targetFloor } : null);
+      })
+      .catch(() => {
+        if (!cancelled) setRoomsData(null);
+      });
+    return () => { cancelled = true; };
+  }, [activeFloor, floorDataVersion]);
+
+  // Clear room selection when activeFloor changes
+  useEffect(() => {
+    setSelectedRoomId(null);
+  }, [activeFloor]);
+
+  // Derive the full room object for the currently selected room
+  const highlightedRoom = selectedRoomId != null
+    ? (() => {
+        const found = (roomsData?.rooms ?? []).find((r) => r.id === selectedRoomId);
+        return found ? { ...found, floor_idx: roomsData?.targetFloor ?? 0 } : null;
+      })()
+    : null;
 
   /* ---------- camera ref -------------- */
   const controlsRef = useRef();
@@ -164,6 +197,7 @@ export default function App() {
                     modelInfo={modelInfo}
                     activeFloor={activeFloor}
                     reloadKey={cloudReloadKey}
+                    highlightedRoom={highlightedRoom}
                     onLoadStart={() => setCloudLoading(true)}
                     onLoaded={(n) => {
                       setCloudLoading(false);
@@ -227,6 +261,16 @@ export default function App() {
             </div>
           )}
 
+          {/* Room list panel — shown when FloorPlanViewer is active */}
+          {showFloorPlanViewer && (
+            <RoomListPanel
+              floor={activeFloor === "all" ? 0 : activeFloor}
+              dataVersion={floorDataVersion}
+              selectedRoomId={selectedRoomId}
+              onSelectRoom={setSelectedRoomId}
+            />
+          )}
+
           {/* Floor plan panel (Matterport image) */}
           {showFloorPlan && (
             <FloorPlanPanel floor={fpFloor} setFloor={setFpFloor} />
@@ -240,6 +284,9 @@ export default function App() {
               modelInfo={modelInfo}
               dataVersion={floorDataVersion}
               onClose={() => setShowFloorPlanViewer(false)}
+              highlightedRoomId={selectedRoomId}
+              onSelectRoom={setSelectedRoomId}
+              onSelectFloor={setActiveFloor}
             />
           </div>
         )}
