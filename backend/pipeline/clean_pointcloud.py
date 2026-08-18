@@ -330,6 +330,16 @@ def clean_point_cloud(
             local_floor[ci] = np.percentile(neigh_mins, 10)  # robust low-end
             local_ceil[ci]  = np.percentile(neigh_maxs, 90)  # robust high-end
 
+        # ── Anchor local ceiling to structural ceiling (Fix: vehicles/cars) ─────
+        # In open areas (parking lots, large halls) there may be no ceiling points
+        # visible near a cell. The 90th-percentile of neighbours' max_z then
+        # converges to the tallest *objects* nearby (e.g. car rooftops at ~1.5m)
+        # rather than the actual roof slab at ~3–4m. This makes local_h ≈ car_height,
+        # so car columns look like they span 100% of storey height → kept as walls.
+        # Fix: ensure local_ceil is never more than 0.5m below the detected
+        # structural ceiling c_k (from the global histogram peak).
+        local_ceil = np.maximum(local_ceil, np.float32(c_k - 0.50))
+
         local_h = np.maximum(local_ceil - local_floor, 0.5)  # avoid div/0
 
         # Wall span against local height context.
@@ -367,6 +377,26 @@ def clean_point_cloud(
         rejected_furniture_cells = furniture_cells
         n_furniture_cells = int(np.sum(rejected_furniture_cells))
 
+        # ── Vehicle veto (Fix: parked cars in parking lots) ──────────────────
+        # Cars and vans are tall enough to fool a span filter if local_ceil was
+        # underestimated (now fixed above), but we add an explicit veto as a
+        # safety net.  A vehicle cell is characterised by:
+        #   - NOT classified as a wall
+        #   - Vertical span >= 0.80m  (taller than furniture, unlike chairs/tables)
+        #   - Touches the floor area (scanner sees car body from bumper upward)
+        #   - Top is clearly below the structural ceiling (cars don’t reach the roof)
+        vehicle_ceiling_gap = 0.50  # car top must be at least 50cm below ceiling
+        vehicle_floor_reach = 0.70  # car bottom must be within 70cm of local floor
+        vehicle_cells = (
+            ~valid_wall_cells &
+            ~rejected_furniture_cells &
+            (cell_spans >= 0.80) &
+            (cell_min_z <= (local_floor + vehicle_floor_reach)) &
+            (cell_max_z  < (np.float32(c_k) - vehicle_ceiling_gap))
+        )
+        rejected_vehicle_cells = vehicle_cells
+        n_vehicle_cells = int(np.sum(rejected_vehicle_cells))
+
         # ── Sloped-wall accommodation (Fix: rooms with sloped walls) ─────────
         # In a room with sloped/raked walls each cell only partially spans the
         # local height, but they form a consistent slope across neighbours.
@@ -376,6 +406,7 @@ def clean_point_cloud(
         tentative_slope_cells = (
             ~valid_wall_cells &
             ~rejected_furniture_cells &
+            ~rejected_vehicle_cells &
             (cell_ratios >= 0.35) &
             cell_reach_bot  # must still start from the floor area
         )
@@ -398,7 +429,11 @@ def clean_point_cloud(
         else:
             slope_confirmed = np.zeros(n_cells, dtype=bool)
 
-        is_wall_storey = valid_wall_cells[inverse_idx] & ~rejected_furniture_cells[inverse_idx]
+        is_wall_storey = (
+            valid_wall_cells[inverse_idx] &
+            ~rejected_furniture_cells[inverse_idx] &
+            ~rejected_vehicle_cells[inverse_idx]
+        )
         is_wall_k = np.zeros(N_sampled, dtype=bool)
         is_wall_k[storey_indices[is_wall_storey]] = True
 
@@ -431,7 +466,8 @@ def clean_point_cloud(
         print(f"    Ceiling points : {n_cl:,}")
         print(f"    Wall points    : {n_wl:,}")
         print(f"    Slope-wall cells rescued: {n_sl:,}")
-        print(f"    Furniture cells vetoed: {n_furniture_cells:,} (chairs/tables)")
+        print(f"    Furniture cells vetoed : {n_furniture_cells:,} (chairs/tables)")
+        print(f"    Vehicle cells vetoed   : {n_vehicle_cells:,} (cars/vans)")
 
     cleaned_pts = pts[keep_mask]
     N_cleaned = len(cleaned_pts)
