@@ -23,7 +23,7 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
 const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
-export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected }) {
+export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className }) {
   const cloudReady = backendStatus === "ready";
   const fmt = n => n?.toLocaleString?.() ?? "—";
 
@@ -200,7 +200,7 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
   });
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar${className ? ` ${className}` : ""}`}>
 
       {/* ── Pipeline ── */}
       <div className="sidebar-section">

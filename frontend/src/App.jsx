@@ -13,6 +13,7 @@ import LoadingOverlay from "./components/LoadingOverlay";
 import FloorPlanPanel from "./components/FloorPlanPanel";
 import FloorPlanViewer from "./components/FloorPlanViewer";
 import RoomListPanel from "./components/RoomListPanel";
+import CameraFocuser from "./components/CameraFocuser";
 
 const POLL_MS = 7 * 1000;
 
@@ -26,6 +27,7 @@ export default function App() {
   const [showCloud, setShowCloud] = useState(false);
   const [showFloorPlan, setShowFloorPlan] = useState(false);
   const [showFloorPlanViewer, setShowFloorPlanViewer] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fpFloor, setFpFloor] = useState(0);
   const [activeFloor, setActiveFloor] = useState("all");
 
@@ -144,6 +146,7 @@ export default function App() {
           setShowFloorPlan={setShowFloorPlan}
           showFloorPlanViewer={showFloorPlanViewer}
           setShowFloorPlanViewer={setShowFloorPlanViewer}
+          className={sidebarCollapsed ? "collapsed" : ""}
           modelInfo={modelInfo}
           backendStatus={backendStatus}
           cloudPoints={cloudPoints}
@@ -152,6 +155,16 @@ export default function App() {
           onReprocessDone={handleReprocessDone}
           onWallsDetected={handleWallsDetected}
         />
+
+        {/* Sidebar toggle tab */}
+        <button
+          className={`sidebar-toggle-tab${sidebarCollapsed ? " collapsed" : ""}`}
+          style={{ left: sidebarCollapsed ? 0 : "var(--sidebar-w)", transition: "left 0.2s cubic-bezier(0.4,0,0.2,1), color 0.15s, border-color 0.15s, background 0.15s" }}
+          onClick={() => setSidebarCollapsed(v => !v)}
+          title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
+        >
+          <span className="toggle-arrow">‹</span>
+        </button>
 
         <div className="viewport">
           {/* Three.js canvas */}
@@ -215,6 +228,14 @@ export default function App() {
                 minDistance={1}
                 maxDistance={500}
               />
+
+              {/* 3D camera focus on selected room */}
+              <CameraFocuser
+                highlightedRoom={highlightedRoom}
+                modelInfo={modelInfo}
+                controlsRef={controlsRef}
+              />
+
               <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
                 <GizmoViewport labelColor="white" axisHeadScale={1} />
               </GizmoHelper>

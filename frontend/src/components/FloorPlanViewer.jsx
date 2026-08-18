@@ -648,6 +648,33 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   // redraw when data changes
   useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, highlightedRoomId, scheduleDraw]);
 
+  // ── Center camera on selected room ──────────────────────────────────────────
+  useEffect(() => {
+    if (highlightedRoomId == null || !roomsData?.rooms?.length) return;
+    const room = roomsData.rooms.find(r => r.id === highlightedRoomId);
+    if (!room) return;
+    const cvs = canvasRef.current;
+    if (!cvs) return;
+    const cw = cvs.clientWidth || cvs.width;
+    const ch = cvs.clientHeight || cvs.height;
+    const cam = camRef.current;
+    // Target: room centroid at canvas centre
+    const targetOx = cw / 2 - room.centroid_x * cam.scale;
+    const targetOy = ch / 2 - room.centroid_z * cam.scale;
+    const startOx = cam.ox, startOy = cam.oy;
+    const duration = 300; // ms
+    const startTime = performance.now();
+    const ease = t => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; // easeInOut
+    const animate = (now) => {
+      const t = Math.min(1, (now - startTime) / duration);
+      const e = ease(t);
+      camRef.current = { ...camRef.current, ox: startOx + (targetOx - startOx) * e, oy: startOy + (targetOy - startOy) * e };
+      scheduleDraw();
+      if (t < 1) requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  }, [highlightedRoomId]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Canvas resize ───────────────────────────────────────────────────────────
   useEffect(() => {
     const cvs = canvasRef.current;

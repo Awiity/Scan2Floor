@@ -149,6 +149,49 @@ html, body, #root {
   flex-shrink: 0;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
+  transition: width 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.sidebar.collapsed {
+  width: 0;
+  overflow: hidden;
+}
+
+/* Sidebar toggle tab — sits on the edge of the sidebar */
+.sidebar-toggle-tab {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 200;
+  width: 18px;
+  height: 52px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: none;
+  border-radius: 0 8px 8px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-3);
+  font-size: 11px;
+  transition: all 0.2s;
+  user-select: none;
+  backdrop-filter: blur(var(--blur));
+  box-shadow: 2px 0 8px rgba(0,0,0,0.25);
+}
+.sidebar-toggle-tab:hover {
+  color: var(--cyan);
+  border-color: var(--border-hi);
+  background: var(--surface-2);
+}
+.sidebar-toggle-tab .toggle-arrow {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-block;
+}
+.sidebar-toggle-tab.collapsed .toggle-arrow {
+  transform: rotate(180deg);
 }
 
 .sidebar-section {
@@ -730,6 +773,43 @@ html, body, #root {
   z-index: 60;
   animation: fadeIn .3s ease;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  transition: max-height 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity 0.2s ease;
+}
+
+.room-list-panel.collapsed .room-list-scroll,
+.room-list-panel.collapsed .room-list-hint {
+  display: none;
+}
+
+/* Collapse toggle button inside room list header */
+.room-list-collapse-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
+.room-list-collapse-btn:hover {
+  color: var(--cyan);
+  border-color: var(--border-hi);
+  background: rgba(0,200,255,0.06);
+}
+.room-list-collapse-btn .rlp-arrow {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: inline-block;
+}
+.room-list-panel.collapsed .room-list-collapse-btn .rlp-arrow {
+  transform: rotate(180deg);
 }
 
 .room-list-header {

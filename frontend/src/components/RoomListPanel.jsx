@@ -22,6 +22,7 @@ export default function RoomListPanel({
 }) {
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
 
   // Fetch rooms whenever the floor or data version changes
   useEffect(() => {
@@ -50,16 +51,25 @@ export default function RoomListPanel({
   };
 
   return (
-    <div className="room-list-panel">
+    <div className={`room-list-panel${collapsed ? " collapsed" : ""}`}>
       {/* Header */}
       <div className="room-list-header">
         <div className="room-list-title">
           <span className="room-list-icon">🏠</span>
           <span>Rooms</span>
         </div>
-        <span className="room-list-badge">
-          {loading ? "…" : rooms.length}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span className="room-list-badge">
+            {loading ? "…" : rooms.length}
+          </span>
+          <button
+            className="room-list-collapse-btn"
+            onClick={() => setCollapsed(v => !v)}
+            title={collapsed ? "Expand room list" : "Collapse room list"}
+          >
+            <span className="rlp-arrow">▾</span>
+          </button>
+        </div>
       </div>
 
       {/* List */}
