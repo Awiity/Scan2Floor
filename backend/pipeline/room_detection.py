@@ -320,19 +320,26 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
         if area_px < min_area_px or area_px > max_area_px:
             continue
 
-        # Secondary border component filter (reject outdoor voids touching borders)
-        if lbl in border_labels and area_px > max(min_area_px, int(4.0 / (grid_size ** 2))):
+        # Secondary border component filter (reject outdoor voids touching borders).
+        # Threshold kept very tight (1 m²) so that even small exterior slivers that
+        # escaped the primary exterior_label selection are discarded.
+        if lbl in border_labels and area_px > max(min_area_px, int(1.0 / (grid_size ** 2))):
             continue
 
-        # Point cloud coverage check: reject un-scanned outdoor ghost voids
+        # Point cloud coverage check: reject un-scanned outdoor ghost voids.
+        # Border-touching labels use a higher threshold (35%) because the exterior
+        # often has stray scan points that inflate coverage for interior rooms but
+        # not for true outdoor voids beyond the building envelope.
         comp_mask = (label_img == lbl)
         if pc_occupancy is not None:
             scanned_ratio = float(pc_occupancy[comp_mask].mean())
-            if scanned_ratio < 0.12:  # Less than 12% of region area has point cloud coverage
+            coverage_threshold = 0.35 if lbl in border_labels else 0.12
+            if scanned_ratio < coverage_threshold:
                 area_m2_val = round(area_px * grid_size ** 2, 1)
                 print(
                     f"[rooms floor {floor_idx}] rejected ghost room label {lbl} "
-                    f"({area_m2_val} m2): un-scanned void (coverage={scanned_ratio*100:.1f}%)"
+                    f"({area_m2_val} m2): un-scanned void (coverage={scanned_ratio*100:.1f}% "
+                    f"< {coverage_threshold*100:.0f}%)"
                 )
                 continue
 

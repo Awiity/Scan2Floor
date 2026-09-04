@@ -569,19 +569,21 @@ class OpeningParams(BaseModel):
 
 @app.post("/api/openings")
 def generate_openings(params: OpeningParams):
-    """Run opening detection standalone (walls must already exist)."""
-    try:
-        result = detect_openings_for_floor(params.floor_idx, params.model_dump())
-        export_floor_dxf(params.floor_idx, PROCESSED_DIR)
-        return {
-            "status": "success",
-            "n_doors": result["n_doors"],
-            "n_windows": result["n_windows"],
-        }
-    except FileNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    """Run opening detection standalone — currently disabled (results unreliable)."""
+    # TODO: Door/Window detection disabled — results were unreliable.
+    # try:
+    #     result = detect_openings_for_floor(params.floor_idx, params.model_dump())
+    #     export_floor_dxf(params.floor_idx, PROCESSED_DIR)
+    #     return {
+    #         "status": "success",
+    #         "n_doors": result["n_doors"],
+    #         "n_windows": result["n_windows"],
+    #     }
+    # except FileNotFoundError as e:
+    #     raise HTTPException(status_code=404, detail=str(e))
+    # except Exception as e:
+    #     raise HTTPException(status_code=500, detail=str(e))
+    return {"status": "disabled", "n_doors": 0, "n_windows": 0}
 
 
 @app.get("/api/openings/{floor_idx}")
@@ -658,21 +660,32 @@ def colorplans():
 
 
 @app.get("/api/scan/browse")
-def scan_browse():
+def scan_browse(root: str | None = None):
     """
-    List all .xyz files found under SCAN_ROOTS directories.
-    Returns grouped by parent directory so the UI can render a file tree.
+    List all .xyz files found recursively under the given folder.
+
+    - If `root` query param is supplied, scan that directory tree.
+    - Otherwise fall back to the SCAN_ROOTS env-configured directories.
+
+    Returns groups keyed by a path *relative to the scanned root* so the UI
+    can show compact labels (e.g. "data/matterpak" instead of "/data/matterpak").
     """
-    import glob as _glob
+    roots_to_scan = [root] if root else _SCAN_ROOTS
 
     groups = []
-    for root in _SCAN_ROOTS:
-        if not os.path.isdir(root):
+    for scan_root in roots_to_scan:
+        scan_root = scan_root.rstrip("/\\")
+        if not os.path.isdir(scan_root):
             continue
-        for dirpath, _dirs, filenames in os.walk(root):
+        for dirpath, _dirs, filenames in os.walk(scan_root):
             xyz_files = sorted(f for f in filenames if f.lower().endswith(".xyz"))
             if not xyz_files:
                 continue
+            # Compute a relative label; fall back to the absolute path if needed
+            try:
+                rel_dir = os.path.relpath(dirpath, os.path.dirname(scan_root))
+            except ValueError:
+                rel_dir = dirpath
             entries = []
             for fname in xyz_files:
                 fpath = os.path.join(dirpath, fname)
@@ -681,10 +694,10 @@ def scan_browse():
                 except Exception:
                     size_mb = -1
                 entries.append({"name": fname, "path": fpath, "size_mb": size_mb})
-            groups.append({"dir": dirpath, "files": entries})
+            groups.append({"dir": rel_dir, "abs_dir": dirpath, "files": entries})
 
     return {
-        "roots": _SCAN_ROOTS,
+        "roots": roots_to_scan,
         "groups": groups,
         "total": sum(len(g["files"]) for g in groups),
     }
@@ -886,13 +899,14 @@ def c2b_generate_walls(params: C2BWallParams):
             "n_rooms": 0,
         }
 
-        if params.detect_openings and real_lines:
-            try:
-                op = detect_openings_for_floor(params.floor_idx, cfg)
-                result["n_doors"]   = op["n_doors"]
-                result["n_windows"] = op["n_windows"]
-            except Exception as exc:
-                result["opening_warning"] = str(exc)
+        # TODO: Door/Window detection disabled — results were unreliable.
+        # if params.detect_openings and real_lines:
+        #     try:
+        #         op = detect_openings_for_floor(params.floor_idx, cfg)
+        #         result["n_doors"]   = op["n_doors"]
+        #         result["n_windows"] = op["n_windows"]
+        #     except Exception as exc:
+        #         result["opening_warning"] = str(exc)
 
         if params.detect_rooms and real_lines:
             try:

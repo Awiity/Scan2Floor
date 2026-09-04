@@ -485,9 +485,9 @@ html, body, #root {
   cursor: not-allowed;
 }
 
-/* ── FloorPlan Viewer Panel ──────────────────────────────── */
+/* ── FloorPlan Viewer Panel ────────────────────────────── */
 .fpv-panel {
-  width: 560px;
+  min-width: 560px;
   flex-shrink: 0;
   background: var(--surface);
   border-left: 1px solid var(--border);
@@ -496,6 +496,23 @@ html, body, #root {
   flex-direction: column;
   overflow: hidden;
   animation: slideInRight .25s ease;
+  position: relative;
+}
+
+/* Drag-to-resize handle — left edge of fpv-panel */
+.fpv-resize-handle {
+  position: absolute;
+  top: 0; left: 0;
+  width: 6px; height: 100%;
+  cursor: ew-resize;
+  z-index: 10;
+  background: linear-gradient(90deg, rgba(0,200,224,0.18) 0%, transparent 100%);
+  border-left: 1px solid rgba(0,200,224,0.15);
+  transition: background 0.15s, border-color 0.15s;
+}
+.fpv-resize-handle:hover {
+  background: linear-gradient(90deg, rgba(0,200,224,0.40) 0%, transparent 100%);
+  border-left-color: rgba(0,200,224,0.50);
 }
 @keyframes slideInRight {
   from { transform: translateX(40px); opacity: 0; }

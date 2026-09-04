@@ -23,41 +23,44 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
 const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
-export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className }) {
+export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className }) {
   const cloudReady = backendStatus === "ready";
   const fmt = n => n?.toLocaleString?.() ?? "—";
 
-  // File browser
+  // File browser — folder-based scanner
+  const LS_ROOT_KEY = "scan2floor_scan_root";
+  const [scanRoot,     setScanRoot]     = useState(() => localStorage.getItem(LS_ROOT_KEY) ?? "/data");
   const [scanGroups,   setScanGroups]   = useState([]);
+  const [scanTotal,    setScanTotal]    = useState(null); // null = not yet scanned
   const [browseLoading,setBrowseLoading]= useState(false);
+  const [browseError,  setBrowseError]  = useState("");
   const [selected,     setSelected]     = useState(null);
-  const [showManual,   setShowManual]   = useState(false);
-  const [manualPath,   setManualPath]   = useState("");
-  const [manualOk,     setManualOk]     = useState(false);
 
-  const fetchScans = async () => {
+  const fetchScans = async (rootOverride) => {
+    const root = (rootOverride ?? scanRoot).trim();
+    if (!root) return;
     setBrowseLoading(true);
+    setBrowseError("");
     try {
-      const d = await fetch("/api/scan/browse").then(r=>r.json());
+      const d = await fetch(`/api/scan/browse?root=${encodeURIComponent(root)}`).then(r => r.json());
       setScanGroups(d.groups ?? []);
-      const all = (d.groups ?? []).flatMap(g=>g.files);
+      setScanTotal(d.total ?? 0);
+      const all = (d.groups ?? []).flatMap(g => g.files);
       if (all.length === 1 && !selected) setSelected(all[0]);
-    } catch { setScanGroups([]); }
-    finally { setBrowseLoading(false); }
+      localStorage.setItem(LS_ROOT_KEY, root);
+    } catch {
+      setScanGroups([]);
+      setScanTotal(0);
+      setBrowseError("Failed to reach backend.");
+    } finally {
+      setBrowseLoading(false);
+    }
   };
 
-  useEffect(() => {
-    fetchScans();
-    fetch("/api/xyz-path").then(r=>r.json()).then(d=>{ if(d.xyz_path) setManualPath(d.xyz_path); }).catch(()=>{});
-  }, []);
+  // On mount: auto-scan the stored root if we have one
+  useEffect(() => { fetchScans(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveManual = async () => {
-    const p = manualPath.trim(); if(!p) return;
-    const r = await fetch("/api/xyz-path",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:p})}).catch(()=>null);
-    if(r?.ok){ setSelected({name:p.split("/").pop(),path:p,size_mb:-1}); setManualOk(true); setTimeout(()=>setManualOk(false),3000); }
-  };
-
-  const effectivePath = selected?.path || manualPath.trim() || null;
+  const effectivePath = selected?.path || null;
 
   // Pipeline
   const [pipeStatus, setPipeStatus] = useState(null);
@@ -206,52 +209,113 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
       <div className="sidebar-section">
         <div className="section-title">Pipeline</div>
 
-        {/* File Browser */}
+        {/* File Browser — folder scanner */}
         <div style={{marginBottom:10}}>
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-            <span style={{fontSize:11,color:"var(--text-2)",fontWeight:600}}>Scan File</span>
-            <button onClick={fetchScans} disabled={browseLoading} style={{fontSize:10,color:"#67e8f9",background:"none",border:"1px solid rgba(103,232,249,0.2)",borderRadius:4,padding:"2px 7px",cursor:"pointer"}}>
-              {browseLoading?"…":"↺ Refresh"}
+          <div style={{fontSize:11,color:"var(--text-2)",fontWeight:600,marginBottom:6}}>Scan Folder</div>
+
+          {/* Folder path input + Scan button */}
+          <div style={{display:"flex",gap:5,marginBottom:6}}>
+            <input
+              id="scan-folder-input"
+              value={scanRoot}
+              onChange={e => setScanRoot(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && fetchScans()}
+              placeholder="/data"
+              style={{
+                flex:1,minWidth:0,background:"var(--surface-2,#111827)",
+                border:"1px solid var(--border,#1e2d4a)",borderRadius:6,
+                color:"var(--text-1)",fontSize:11,padding:"5px 8px",
+                outline:"none",fontFamily:"monospace",
+              }}
+            />
+            <button
+              id="scan-folder-btn"
+              onClick={() => fetchScans()}
+              disabled={browseLoading}
+              style={{
+                background:"rgba(6,182,212,0.15)",border:"1px solid rgba(6,182,212,0.35)",
+                borderRadius:6,color:"#67e8f9",fontSize:11,fontWeight:700,
+                padding:"5px 10px",cursor:browseLoading?"not-allowed":"pointer",
+                whiteSpace:"nowrap",transition:"all 0.15s",flexShrink:0,
+              }}
+            >
+              {browseLoading ? "⏳" : "🔍 Scan"}
             </button>
           </div>
 
-          {scanGroups.length === 0 && !browseLoading && (
-            <div style={{fontSize:10,color:"var(--text-3)",marginBottom:6,padding:"6px 8px",background:"rgba(239,68,68,0.07)",border:"1px solid rgba(239,68,68,0.2)",borderRadius:5}}>
-              No .xyz files found under mounted <code style={{color:"#67e8f9"}}>/data</code> — add volume mounts in docker-compose.yml
+          {/* Error */}
+          {browseError && (
+            <div style={{fontSize:10,color:"#ef4444",marginBottom:5}}>{browseError}</div>
+          )}
+
+          {/* Summary header */}
+          {scanTotal !== null && !browseLoading && (
+            <div style={{
+              fontSize:10,color: scanTotal===0 ? "#ef4444" : "#67e8f9",
+              marginBottom: scanTotal>0 ? 6 : 0,
+              fontWeight:600,
+            }}>
+              {scanTotal === 0
+                ? `No .xyz files found under ${scanRoot}`
+                : `${scanTotal} file${scanTotal===1?"":"s"} found total.`
+              }
             </div>
           )}
 
-          {scanGroups.map((grp,gi)=>(
+          {/* Grouped file list */}
+          {scanGroups.map((grp, gi) => (
             <div key={gi} style={{marginBottom:6}}>
-              <div style={{fontSize:9,color:"var(--text-3)",marginBottom:3,fontFamily:"monospace"}}>{grp.dir}</div>
-              {grp.files.map((f,fi)=>{
-                const isSel = selected?.path===f.path;
+              {/* Directory label */}
+              <div style={{
+                fontSize:9,color:"var(--text-3)",marginBottom:3,
+                fontFamily:"monospace",display:"flex",alignItems:"center",gap:4,
+              }}>
+                <span style={{opacity:0.5}}>📁</span>
+                <span>{grp.dir} :</span>
+              </div>
+              {/* Files in this dir */}
+              {grp.files.map((f, fi) => {
+                const isSel = selected?.path === f.path;
                 return (
-                  <div key={fi} onClick={()=>setSelected(f)} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 8px",borderRadius:5,marginBottom:2,background:isSel?"rgba(6,182,212,0.15)":"rgba(255,255,255,0.03)",border:`1px solid ${isSel?"rgba(6,182,212,0.4)":"rgba(255,255,255,0.06)"}`,cursor:"pointer",transition:"all 0.15s"}}>
-                    <span style={{fontSize:14}}>{isSel?"📂":"📄"}</span>
+                  <div
+                    key={fi}
+                    onClick={() => setSelected(f)}
+                    style={{
+                      display:"flex",alignItems:"center",gap:6,
+                      padding:"5px 8px",borderRadius:5,marginBottom:2,
+                      background: isSel ? "rgba(6,182,212,0.15)" : "rgba(255,255,255,0.03)",
+                      border:`1px solid ${isSel?"rgba(6,182,212,0.4)":"rgba(255,255,255,0.06)"}`,
+                      cursor:"pointer",transition:"all 0.15s",marginLeft:12,
+                    }}
+                  >
+                    <span style={{fontSize:13}}>{isSel ? "📂" : "📄"}</span>
                     <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontSize:11,color:isSel?"#67e8f9":"var(--text-1)",fontWeight:isSel?700:400,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{f.name}</div>
-                      {f.size_mb>0&&<div style={{fontSize:9,color:"var(--text-3)"}}>{f.size_mb.toFixed(1)} MB</div>}
+                      <div style={{
+                        fontSize:11,
+                        color: isSel ? "#67e8f9" : "var(--text-1)",
+                        fontWeight: isSel ? 700 : 400,
+                        whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
+                      }}>
+                        {f.name}
+                      </div>
+                      {f.size_mb > 0 && (
+                        <div style={{fontSize:9,color:"var(--text-3)"}}>{f.size_mb.toFixed(1)} MB</div>
+                      )}
                     </div>
-                    {isSel&&<span style={{color:"#67e8f9",fontSize:12}}>✓</span>}
+                    {isSel && <span style={{color:"#67e8f9",fontSize:12}}>✓</span>}
                   </div>
                 );
               })}
             </div>
           ))}
 
-          <button onClick={()=>setShowManual(v=>!v)} style={{fontSize:10,color:"var(--text-3)",background:"none",border:"none",cursor:"pointer",padding:0,marginTop:2}}>
-            {showManual?"▲ Hide":"▼ Enter path manually"}
-          </button>
-          {showManual&&(
-            <div style={{marginTop:6,display:"flex",gap:6}}>
-              <input value={manualPath} onChange={e=>setManualPath(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveManual()} placeholder="/data/folder/cloud.xyz" style={{flex:1,background:"var(--surface-2,#111827)",border:"1px solid var(--border,#1e2d4a)",borderRadius:6,color:"var(--text-1)",fontSize:11,padding:"5px 8px",outline:"none",fontFamily:"monospace"}}/>
-              <button onClick={saveManual} style={{background:"#06b6d4",color:"#000",border:"none",borderRadius:6,padding:"5px 9px",fontSize:11,fontWeight:700,cursor:"pointer"}}>{manualOk?"✓":"Set"}</button>
-            </div>
-          )}
-
-          {selected&&(
-            <div style={{marginTop:6,fontSize:11,padding:"5px 8px",background:"rgba(0,200,80,0.08)",border:"1px solid rgba(0,200,80,0.25)",borderRadius:5,color:"#00c850",fontFamily:"monospace",wordBreak:"break-all"}}>
+          {/* Selected file badge */}
+          {selected && (
+            <div style={{
+              marginTop:6,fontSize:11,padding:"5px 8px",
+              background:"rgba(0,200,80,0.08)",border:"1px solid rgba(0,200,80,0.25)",
+              borderRadius:5,color:"#00c850",fontFamily:"monospace",wordBreak:"break-all",
+            }}>
               ✓ {selected.name}
             </div>
           )}
@@ -386,11 +450,7 @@ export default function Sidebar({ showMesh, setShowMesh, showCloud, setShowCloud
       {/* ── Layers ── */}
       <div className="sidebar-section">
         <div className="section-title">Layers</div>
-        <div className="layer-item" onClick={()=>setShowMesh(v=>!v)}>
-          <div className="layer-icon mesh">🧊</div>
-          <div style={{flex:1}}><div className="layer-label">OBJ Mesh</div><div className="layer-sub">Optimized Geometry</div></div>
-          <Toggle checked={showMesh} onChange={setShowMesh}/>
-        </div>
+
         <div className="layer-item" onClick={()=>cloudReady&&setShowCloud(v=>!v)} style={{opacity:cloudReady?1:0.5,cursor:cloudReady?"pointer":"not-allowed"}}>
           <div className="layer-icon cloud">✦</div>
           <div style={{flex:1}}><div className="layer-label">Point Cloud</div><div className="layer-sub">{cloudReady?cloudPoints?`${fmt(cloudPoints)} pts`:"~1.1M pts ready":"Preprocessing…"}</div></div>

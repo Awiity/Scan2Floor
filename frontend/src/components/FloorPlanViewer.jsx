@@ -2,13 +2,14 @@
  * FloorPlanViewer.jsx — Interactive HTML5 Canvas Floor Plan Renderer + Editor
  *
  * Rendering:  wall vectors, room fills, opening symbols, scale bar, compass
- * Editing:    Pan/Add Wall/Delete Wall modes, snap-to-endpoint, undo/redo,
+ * Editing:    Pan/Add Wall/Delete Wall/Hide modes, snap-to-endpoint, undo/redo,
  *             save edits to backend (auto re-runs room detection)
  *
  * Dark-mode palette
  *   background   #070b18   walls     #00c8e0  (cyan)
  *   grid         #0a2050   algo wall #00c8e0  user wall #fbbf24 (amber)
  *   doors        #fbbf24   windows   #818cf8  hovered   #ff6b6b (red)
+ *   hidden wall  #4a5568  (slate-grey, dashed, excluded from room recalc)
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -20,6 +21,7 @@ const C = {
   wall:       "#00c8e0",      wallGlow: "rgba(0,200,224,0.18)",
   wallUser:   "#fbbf24",      wallUserGlow: "rgba(251,191,36,0.20)",
   wallHover:  "#ff6b6b",      wallHoverGlow: "rgba(255,107,107,0.25)",
+  wallHidden: "#4a6080",      wallHiddenGlow: "rgba(74,96,128,0.15)",
   wallPreview:"#fbbf24",
   door:       "#fbbf24",
   window:     "#818cf8",
@@ -157,21 +159,48 @@ function drawRooms(ctx, rooms, cam, highlightedRoomId) {
 }
 
 function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, editMode) {
-  const lw = Math.max(1.5, cam.scale * 0.18);
+  // Thinner lines — scale * 0.09 (was 0.18), min 1px
+  const lw = Math.max(1.0, cam.scale * 0.09);
 
+  // Draw hidden walls first (below active walls)
   for (let i = 0; i < editedLines.length; i++) {
-    const { pts: [[x1, z1], [x2, z2]], source } = editedLines[i];
-    const isHovered = i === hoveredIdx && editMode === "delete";
+    const line = editedLines[i];
+    if (!line.hidden) continue;
+    const [[x1, z1], [x2, z2]] = line.pts;
+    const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
+    const color = isHovered ? C.wallHover : C.wallHidden;
+    const glow  = isHovered ? C.wallHoverGlow : C.wallHiddenGlow;
+    const [cx1, cy1] = toCanvas(x1, z1, cam);
+    const [cx2, cy2] = toCanvas(x2, z2, cam);
+    ctx.save();
+    ctx.globalAlpha = isHovered ? 0.85 : 0.45;
+    ctx.lineCap = "round";
+    if (!isHovered) ctx.setLineDash([5, 6]);
+    ctx.strokeStyle = glow; ctx.lineWidth = lw + 5;
+    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = isHovered ? lw * 1.8 : lw;
+    ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 8 : 2;
+    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
+  // Draw visible walls on top
+  for (let i = 0; i < editedLines.length; i++) {
+    const line = editedLines[i];
+    if (line.hidden) continue;
+    const { pts: [[x1, z1], [x2, z2]], source } = line;
+    const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
     const color     = isHovered ? C.wallHover : source === "user" ? C.wallUser : C.wall;
     const glow      = isHovered ? C.wallHoverGlow : source === "user" ? C.wallUserGlow : C.wallGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
     ctx.lineCap = "round";
-    ctx.strokeStyle = glow; ctx.lineWidth = lw + 8;
+    ctx.strokeStyle = glow; ctx.lineWidth = lw + 6;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
     ctx.strokeStyle = color; ctx.lineWidth = isHovered ? lw * 2 : lw;
-    ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 10 : 4;
+    ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 10 : 3;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
     ctx.restore();
   }
@@ -188,7 +217,7 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     ctx.setLineDash([]);
     // Start point dot
     ctx.fillStyle = C.wallPreview;
-    ctx.beginPath(); ctx.arc(cax, cay, Math.max(4, lw * 1.5), 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cax, cay, Math.max(3, lw * 1.5), 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
 
@@ -303,28 +332,38 @@ const TOOLS = [
   { id: "select", icon: "✋", label: "Pan",       key: "S", title: "Pan & Zoom (S)" },
   { id: "add",    icon: "✏️",  label: "Add Wall",  key: "A", title: "Add Wall (A)" },
   { id: "delete", icon: "✂️",  label: "Delete",    key: "D", title: "Delete Wall (D)" },
+  { id: "hide",   icon: "👁",  label: "Hide",      key: "H", title: "Hide/Show Wall (H) — hides from room recalc" },
 ];
 
-function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, onSave, onReset, saveState, wallCount, userCount }) {
-  const toolBtn = (id, icon, label, title) => (
-    <button
-      key={id}
-      onClick={() => onMode(id)}
-      title={title}
-      style={{
-        display: "flex", alignItems: "center", gap: 4,
-        padding: "4px 9px", borderRadius: 5, fontSize: 11,
-        fontWeight: mode === id ? 700 : 400,
-        background:  mode === id ? "rgba(251,191,36,0.15)" : "rgba(255,255,255,0.04)",
-        border:      mode === id ? "1px solid rgba(251,191,36,0.5)" : "1px solid rgba(255,255,255,0.1)",
-        color:       mode === id ? "#fbbf24" : "rgba(200,220,255,0.6)",
-        cursor: "pointer", transition: "all 0.15s",
-        fontFamily: "Inter, sans-serif",
-      }}
-    >
-      <span>{icon}</span><span style={{ fontSize: 10.5 }}>{label}</span>
-    </button>
-  );
+function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, onSave, onReset, saveState, wallCount, userCount, hiddenCount }) {
+  const toolBtn = (id, icon, label, title) => {
+    const isHide = id === "hide";
+    return (
+      <button
+        key={id}
+        onClick={() => onMode(id)}
+        title={title}
+        style={{
+          display: "flex", alignItems: "center", gap: 4,
+          padding: "4px 9px", borderRadius: 5, fontSize: 11,
+          fontWeight: mode === id ? 700 : 400,
+          background:  mode === id
+            ? (isHide ? "rgba(74,96,128,0.22)" : "rgba(251,191,36,0.15)")
+            : "rgba(255,255,255,0.04)",
+          border:      mode === id
+            ? (isHide ? "1px solid rgba(74,96,128,0.7)" : "1px solid rgba(251,191,36,0.5)")
+            : "1px solid rgba(255,255,255,0.1)",
+          color:       mode === id
+            ? (isHide ? "#94a3b8" : "#fbbf24")
+            : "rgba(200,220,255,0.6)",
+          cursor: "pointer", transition: "all 0.15s",
+          fontFamily: "Inter, sans-serif",
+        }}
+      >
+        <span>{icon}</span><span style={{ fontSize: 10.5 }}>{label}</span>
+      </button>
+    );
+  };
 
   const iconBtn = (label, onClick, disabled, title) => (
     <button
@@ -359,8 +398,14 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
 
       <div style={{ flex: 1 }} />
 
-      <span style={{ fontSize: 10, color: "rgba(200,220,255,0.35)", fontFamily: "JetBrains Mono, monospace" }}>
-        {wallCount}W {userCount > 0 && <span style={{ color: "#fbbf24" }}>+{userCount} added</span>}
+      <span style={{ fontSize: 10, color: "rgba(200,220,255,0.35)", fontFamily: "JetBrains Mono, monospace", display: "flex", gap: 6, alignItems: "center" }}>
+        <span>{wallCount}W</span>
+        {userCount > 0 && <span style={{ color: "#fbbf24" }}>+{userCount}</span>}
+        {hiddenCount > 0 && (
+          <span style={{ color: "#94a3b8", display: "inline-flex", alignItems: "center", gap: 2 }}>
+            <span style={{ opacity: 0.7 }}>👁</span>{hiddenCount} hidden
+          </span>
+        )}
       </span>
 
       {isDirty && (
@@ -378,7 +423,7 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
       <button
         onClick={onSave}
         disabled={!isDirty || saveState === "saving"}
-        title="Save edits and recalculate rooms (Ctrl+S)"
+        title="Save edits and recalculate rooms (Ctrl+S) — hidden walls excluded"
         style={{
           padding: "4px 10px", borderRadius: 5, fontSize: 11, fontWeight: 700,
           background:   isDirty && saveState !== "saving" ? "rgba(0,200,80,0.15)" : "rgba(255,255,255,0.04)",
@@ -397,9 +442,10 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
 // ── Mode hint bar ──────────────────────────────────────────────────────────────
 
 const MODE_HINTS = {
-  select: "Drag to pan · Scroll to zoom · Double-click to fit",
+  select: "Drag to pan · Scroll to zoom · Double-click to fit · Click room to select",
   add:    "Click to place first point → click again to draw wall · Esc to cancel",
   delete: "Hover over a wall to highlight · Click to delete · Esc to exit",
+  hide:   "Click a wall to hide/unhide it — hidden walls are excluded from room recalculation",
 };
 
 function ModeHint({ mode, addStep }) {
@@ -422,9 +468,10 @@ function ModeHint({ mode, addStep }) {
 
 // ── Legend ─────────────────────────────────────────────────────────────────────
 
-function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, lowConfCount }) {
+function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, hiddenCount, lowConfCount }) {
+  const visibleAlgo = wallCount - userCount - hiddenCount;
   const items = [
-    { color: C.wall,     label: `Algo walls (${wallCount - userCount})` },
+    { color: C.wall,     label: `Algo walls (${Math.max(0, visibleAlgo)})` },
     ...(userCount > 0 ? [{ color: C.wallUser, label: `Added walls (${userCount})` }] : []),
     { color: C.door,   label: `Doors (${doorCount})` },
     { color: C.window, label: `Windows (${windowCount})` },
@@ -435,7 +482,7 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, lowCo
       position: "absolute", bottom: 10, right: 10,
       background: "rgba(7,11,24,0.82)", backdropFilter: "blur(8px)",
       border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8,
-      padding: "8px 12px", display: "flex", flexDirection: "column", gap: 5, minWidth: 160,
+      padding: "8px 12px", display: "flex", flexDirection: "column", gap: 5, minWidth: 165,
     }}>
       {items.map(({ color, label, fill }) => (
         <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -446,6 +493,13 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, lowCo
           <span style={{ fontSize: 10.5, color: "rgba(200,220,255,0.7)", fontFamily: "Inter,sans-serif" }}>{label}</span>
         </div>
       ))}
+      {hiddenCount > 0 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 5, marginTop: 2 }}>
+          <div style={{ width: 14, height: 2, background: C.wallHidden, borderRadius: 2, opacity: 0.6,
+            backgroundImage: `repeating-linear-gradient(90deg,${C.wallHidden} 0 5px,transparent 5px 9px)` }} />
+          <span style={{ fontSize: 10.5, color: "#94a3b8", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>👁 {hiddenCount} hidden</span>
+        </div>
+      )}
       {lowConfCount > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 5, marginTop: 2 }}>
           <div style={{ width: 14, height: 2.5, background: "#fbbf24", borderRadius: 2, backgroundImage: "repeating-linear-gradient(90deg,#fbbf24 0 4px,transparent 4px 7px)" }} />
@@ -489,6 +543,70 @@ function FloorTab({ active, label, onClick }) {
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
+// ── Room height helper ─────────────────────────────────────────────────────────
+function deriveRoomHeight(modelInfo, floorIdx) {
+  const levels = modelInfo?.floor_levels;
+  if (!levels || levels.length < 2) return null;
+  const sorted = [...levels].sort((a, b) => a - b);
+  // Find gap adjacent to floorIdx
+  const idx = Math.min(floorIdx, sorted.length - 2);
+  const h = Math.abs(sorted[idx + 1] - sorted[idx]);
+  return h > 0.5 ? h : null;
+}
+
+// ── RoomInfoChip ───────────────────────────────────────────────────────────────
+function RoomInfoChip({ room, floorIdx, modelInfo }) {
+  if (!room) return null;
+  const height = deriveRoomHeight(modelInfo, floorIdx);
+  // Derive dimensions from bbox (length = Z span, width = X span)
+  const roomLen = Math.abs(room.bbox.z_max - room.bbox.z_min);
+  const roomW   = Math.abs(room.bbox.x_max - room.bbox.x_min);
+  // Orient so the larger value is shown first
+  const dimA = Math.max(roomLen, roomW);
+  const dimB = Math.min(roomLen, roomW);
+  return (
+    <div style={{
+      position: "absolute", top: 12, left: 12,
+      background: "rgba(7,11,24,0.88)", backdropFilter: "blur(10px)",
+      border: "1px solid rgba(0,200,224,0.35)", borderRadius: 10,
+      padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6,
+      boxShadow: "0 0 18px rgba(0,200,224,0.12)",
+      pointerEvents: "none", minWidth: 160,
+      animation: "fadeIn 0.18s ease",
+    }}>
+      {/* Badge row */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <span style={{
+          background: "rgba(0,200,224,0.18)", color: "#00c8e0",
+          border: "1px solid rgba(0,200,224,0.4)", borderRadius: 5,
+          padding: "2px 8px", fontSize: 11, fontWeight: 700, fontFamily: "Inter,sans-serif",
+        }}>R{room.id}</span>
+        <span style={{ fontSize: 10, color: "rgba(200,220,255,0.45)", fontFamily: "JetBrains Mono, monospace" }}>selected</span>
+      </div>
+      {/* Metrics */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+          <span style={{ fontSize: 10, color: "rgba(200,220,255,0.45)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Area</span>
+          <span style={{ fontSize: 11, color: "rgba(200,230,255,0.9)", fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>{room.area_m2.toFixed(1)} m²</span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+          <span style={{ fontSize: 10, color: "rgba(200,220,255,0.45)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Size</span>
+          <span style={{ fontSize: 11, color: "rgba(200,230,255,0.9)", fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>
+            {dimA.toFixed(2)} × {dimB.toFixed(2)} m
+          </span>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+          <span style={{ fontSize: 10, color: "rgba(200,220,255,0.45)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Height</span>
+          <span style={{ fontSize: 11, fontFamily: "JetBrains Mono, monospace", fontWeight: 600,
+            color: height ? "rgba(200,230,255,0.9)" : "rgba(150,160,180,0.5)" }}>
+            {height ? `≈ ${height.toFixed(2)} m` : "—"}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor }) {
   const canvasRef = useRef(null);
   const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
@@ -511,7 +629,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   }, [modelInfo?.floor_levels, selectedFloor]);
 
   // ── Edit state ──────────────────────────────────────────────────────────────
-  // editedLines: [{pts: [[x1,z1],[x2,z2]], source: 'algo'|'user'}]
+  // editedLines: [{pts: [[x1,z1],[x2,z2]], source: 'algo'|'user', hidden?: true}]
   const [editedLines,  setEditedLines]  = useState([]);
   const [editMode,     setEditMode]     = useState("select");
   const [addStep,      setAddStep]      = useState(null);   // first point of new wall
@@ -599,7 +717,10 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     if (!isDirty) return;
     setSaveState("saving");
     try {
-      const lines = editedLinesRef.current.map(l => l.pts);
+      // Hidden walls are excluded — they are suppressed from room recalculation
+      const lines = editedLinesRef.current
+        .filter(l => !l.hidden)
+        .map(l => l.pts);
       const r = await fetch(`/api/walls/${selectedFloor}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -706,6 +827,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         if (e.key === "s" || e.key === "S") { setEditMode("select"); editModeRef.current = "select"; }
         if (e.key === "a" || e.key === "A") { setEditMode("add");    editModeRef.current = "add"; }
         if (e.key === "d" || e.key === "D") { setEditMode("delete"); editModeRef.current = "delete"; }
+        if (e.key === "h" || e.key === "H") { setEditMode("hide");   editModeRef.current = "hide"; }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -746,7 +868,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       const [wx, wz] = getWorldFromEvent(e);
       snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current);
 
-      if (editModeRef.current === "delete") {
+      if (editModeRef.current === "delete" || editModeRef.current === "hide") {
         const idx = findNearestLine(wx, wz, editedLinesRef.current, camRef.current);
         hoveredLineRef.current = idx;
         setHoveredLine(idx);   // for cursor CSS
@@ -789,6 +911,21 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         setEditedLines(newLines); editedLinesRef.current = newLines;
         hoveredLineRef.current = -1; setHoveredLine(-1);
         snapRef.current = null;
+        setIsDirty(true);
+        scheduleDraw();
+      }
+      return;
+    }
+
+    if (mode === "hide") {
+      const idx = hoveredLineRef.current;
+      if (idx >= 0) {
+        // Toggle hidden flag on the wall
+        const newLines = editedLinesRef.current.map((line, i) =>
+          i === idx ? { ...line, hidden: !line.hidden } : line
+        );
+        pushHistory(editedLinesRef.current);
+        setEditedLines(newLines); editedLinesRef.current = newLines;
         setIsDirty(true);
         scheduleDraw();
       }
@@ -874,7 +1011,8 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
   // ── Derived metrics ─────────────────────────────────────────────────────────
   const wallCount    = editedLines.length;
-  const userCount    = editedLines.filter(l => l.source === "user").length;
+  const userCount    = editedLines.filter(l => l.source === "user" && !l.hidden).length;
+  const hiddenCount  = editedLines.filter(l => l.hidden).length;
   const roomCount    = roomsData?.rooms?.length ?? 0;
   const openings     = openingsData?.openings ?? [];
   const doorCount    = openings.filter(o => o.type === "door").length;
@@ -885,6 +1023,11 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
+
+  // Highlighted room object (for the info chip)
+  const highlightedRoom = highlightedRoomId != null
+    ? (roomsData?.rooms ?? []).find(r => r.id === highlightedRoomId) ?? null
+    : null;
 
   // Cursor style
   const cursorStyle = editMode === "select"
@@ -975,7 +1118,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         onMode={(m) => {
           setEditMode(m); editModeRef.current = m;
           if (m !== "add") { addStepRef.current = null; setAddStep(null); scheduleDraw(); }
-          if (m !== "delete") { hoveredLineRef.current = -1; setHoveredLine(-1); scheduleDraw(); }
+          if (m !== "delete" && m !== "hide") { hoveredLineRef.current = -1; setHoveredLine(-1); scheduleDraw(); }
           snapRef.current = null;
         }}
         canUndo={canUndo} canRedo={canRedo}
@@ -986,6 +1129,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         saveState={saveState}
         wallCount={wallCount}
         userCount={userCount}
+        hiddenCount={hiddenCount}
       />
 
       {/* ── Canvas area ──────────────────────────────────────────────────────── */}
@@ -1055,9 +1199,14 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
           </div>
         )}
 
+        {/* Room info chip — selected room details */}
+        {loadState === "ready" && highlightedRoom && (
+          <RoomInfoChip room={highlightedRoom} floorIdx={selectedFloor} modelInfo={modelInfo} />
+        )}
+
         {/* Legend */}
         {loadState === "ready" && wallCount > 0 && (
-          <Legend wallCount={wallCount} doorCount={doorCount} windowCount={windowCount} roomCount={roomCount} userCount={userCount} lowConfCount={lowConfCount} />
+          <Legend wallCount={wallCount} doorCount={doorCount} windowCount={windowCount} roomCount={roomCount} userCount={userCount} hiddenCount={hiddenCount} lowConfCount={lowConfCount} />
         )}
 
         {/* Mode hint bar */}

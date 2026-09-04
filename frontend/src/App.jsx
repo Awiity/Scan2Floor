@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useRef } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback } from "react";
 import { Canvas } from "@react-three/fiber";
 import {
   OrbitControls,
@@ -7,7 +7,7 @@ import {
   GizmoViewport,
 } from "@react-three/drei";
 import Sidebar from "./components/Sidebar";
-import OBJModel from "./components/OBJModel";
+import OBJModel from "./components/OBJModel"; // kept for future use — toggle removed from UI
 import PointCloud from "./components/PointCloud";
 import LoadingOverlay from "./components/LoadingOverlay";
 import FloorPlanPanel from "./components/FloorPlanPanel";
@@ -23,13 +23,37 @@ export default function App() {
   const [modelInfo, setModelInfo] = useState(null);
 
   /* ---------- layer visibility -------- */
-  const [showMesh, setShowMesh] = useState(false);
+  const [showMesh, setShowMesh] = useState(false); // reserved, toggle removed from UI
   const [showCloud, setShowCloud] = useState(false);
   const [showFloorPlan, setShowFloorPlan] = useState(false);
   const [showFloorPlanViewer, setShowFloorPlanViewer] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fpFloor, setFpFloor] = useState(0);
   const [activeFloor, setActiveFloor] = useState("all");
+
+  /* ---------- fpv panel width (resizable) --------- */
+  const MIN_FPV_WIDTH = 560;
+  const [fpvWidth, setFpvWidth] = useState(MIN_FPV_WIDTH);
+  const fpvDragRef = useRef(null);
+
+  const onFpvResizeStart = useCallback((e) => {
+    e.preventDefault();
+    fpvDragRef.current = { startX: e.clientX, startWidth: fpvWidth };
+    const onMove = (ev) => {
+      if (!fpvDragRef.current) return;
+      // Dragging left = larger panel (panel is on the right side)
+      const delta = fpvDragRef.current.startX - ev.clientX;
+      const newW = Math.max(MIN_FPV_WIDTH, fpvDragRef.current.startWidth + delta);
+      setFpvWidth(newW);
+    };
+    const onUp = () => {
+      fpvDragRef.current = null;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [fpvWidth]);
 
   /* ---------- loading state ----------- */
   const [meshLoading, setMeshLoading] = useState(false);
@@ -138,8 +162,6 @@ export default function App() {
       {/* ── Workspace ── */}
       <div className="workspace">
         <Sidebar
-          showMesh={showMesh}
-          setShowMesh={setShowMesh}
           showCloud={showCloud}
           setShowCloud={setShowCloud}
           showFloorPlan={showFloorPlan}
@@ -300,7 +322,13 @@ export default function App() {
 
         {/* Phase 4: 2D Vector Floor Plan Viewer */}
         {showFloorPlanViewer && (
-          <div className="fpv-panel">
+          <div className="fpv-panel" style={{ width: fpvWidth, position: "relative" }}>
+            {/* Drag handle on left edge */}
+            <div
+              className="fpv-resize-handle"
+              onMouseDown={onFpvResizeStart}
+              title="Drag to resize panel"
+            />
             <FloorPlanViewer
               modelInfo={modelInfo}
               dataVersion={floorDataVersion}

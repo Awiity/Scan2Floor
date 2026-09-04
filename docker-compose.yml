@@ -45,6 +45,8 @@ services:
       # FORMAT:  - <host_path>:/data/<folder_name>:ro
       #
       - ./data/matterpak:/data/matterpak:ro
+      - ./data/matterpak_2:/data/matterpak_2:ro
+      - ./data/matterpak_3:/data/matterpak_3:ro
       #
       # ── Add more scan mounts here (copy the line above and change paths):
       # - D:/scans/building_2:/data/building_2:ro
