@@ -22,6 +22,7 @@ const C = {
   wallUser:   "#fbbf24",      wallUserGlow: "rgba(251,191,36,0.20)",
   wallHover:  "#ff6b6b",      wallHoverGlow: "rgba(255,107,107,0.25)",
   wallHidden: "#4a6080",      wallHiddenGlow: "rgba(74,96,128,0.15)",
+  wallSelected: "#fb923c",   wallSelectedGlow: "rgba(251,146,60,0.30)",
   wallPreview:"#fbbf24",
   door:       "#fbbf24",
   window:     "#818cf8",
@@ -105,6 +106,57 @@ function findNearestLine(wx, wz, editedLines, cam, pixThresh = 10) {
   return idx;
 }
 
+/**
+ * Find all line indices whose segment touches or is enclosed by the world-space rect
+ * defined by corners (rx1,rz1)-(rx2,rz2).
+ */
+function findLinesInRect(rx1, rz1, rx2, rz2, editedLines) {
+  const xMin = Math.min(rx1, rx2), xMax = Math.max(rx1, rx2);
+  const zMin = Math.min(rz1, rz2), zMax = Math.max(rz1, rz2);
+  if (xMax - xMin < 1e-6 && zMax - zMin < 1e-6) return [];
+  const result = [];
+  for (let i = 0; i < editedLines.length; i++) {
+    const [[x1, z1], [x2, z2]] = editedLines[i].pts;
+    // A segment intersects the AABB if at least one endpoint is inside,
+    // or the segment crosses any of the four rect edges.
+    if (
+      (x1 >= xMin && x1 <= xMax && z1 >= zMin && z1 <= zMax) ||
+      (x2 >= xMin && x2 <= xMax && z2 >= zMin && z2 <= zMax) ||
+      segIntersectsRect(x1, z1, x2, z2, xMin, zMin, xMax, zMax)
+    ) {
+      result.push(i);
+    }
+  }
+  return result;
+}
+
+/** Returns true if segment p1-p2 crosses any edge of axis-aligned rect. */
+function segIntersectsRect(x1, z1, x2, z2, rxMin, rzMin, rxMax, rzMax) {
+  // Cohen-Sutherland style: test segment against each of the 4 rect edges
+  const edges = [
+    [rxMin, rzMin, rxMax, rzMin],
+    [rxMax, rzMin, rxMax, rzMax],
+    [rxMax, rzMax, rxMin, rzMax],
+    [rxMin, rzMax, rxMin, rzMin],
+  ];
+  for (const [ex1, ez1, ex2, ez2] of edges) {
+    if (segmentsIntersect(x1, z1, x2, z2, ex1, ez1, ex2, ez2)) return true;
+  }
+  return false;
+}
+
+function cross2d(ax, ay, bx, by) { return ax * by - ay * bx; }
+
+function segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy) {
+  const d1x = bx - ax, d1y = by - ay;
+  const d2x = dx - cx, d2y = dy - cy;
+  const denom = cross2d(d1x, d1y, d2x, d2y);
+  if (Math.abs(denom) < 1e-10) return false;
+  const t = cross2d(cx - ax, cy - ay, d2x, d2y) / denom;
+  const u = cross2d(cx - ax, cy - ay, d1x, d1y) / denom;
+  return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
 // ── Draw functions ─────────────────────────────────────────────────────────────
 
 function drawGrid(ctx, cam, w, h) {
@@ -158,7 +210,7 @@ function drawRooms(ctx, rooms, cam, highlightedRoomId) {
   ctx.restore();
 }
 
-function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, editMode) {
+function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, selectedIdxSet, addStart, snapInfo, editMode) {
   // Thinner lines — scale * 0.09 (was 0.18), min 1px
   const lw = Math.max(1.0, cam.scale * 0.09);
 
@@ -167,19 +219,20 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const line = editedLines[i];
     if (!line.hidden) continue;
     const [[x1, z1], [x2, z2]] = line.pts;
-    const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
-    const color = isHovered ? C.wallHover : C.wallHidden;
-    const glow  = isHovered ? C.wallHoverGlow : C.wallHiddenGlow;
+    const isSelected = selectedIdxSet && selectedIdxSet.has(i);
+    const isHovered  = i === hoveredIdx && !isSelected && (editMode === "delete" || editMode === "hide");
+    const color = isSelected ? C.wallSelected : isHovered ? C.wallHover : C.wallHidden;
+    const glow  = isSelected ? C.wallSelectedGlow : isHovered ? C.wallHoverGlow : C.wallHiddenGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
-    ctx.globalAlpha = isHovered ? 0.85 : 0.45;
+    ctx.globalAlpha = (isHovered || isSelected) ? 0.92 : 0.45;
     ctx.lineCap = "round";
-    if (!isHovered) ctx.setLineDash([5, 6]);
+    if (!isHovered && !isSelected) ctx.setLineDash([5, 6]);
     ctx.strokeStyle = glow; ctx.lineWidth = lw + 5;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
-    ctx.strokeStyle = color; ctx.lineWidth = isHovered ? lw * 1.8 : lw;
-    ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 8 : 2;
+    ctx.strokeStyle = color; ctx.lineWidth = (isHovered || isSelected) ? lw * 1.8 : lw;
+    ctx.shadowColor = color; ctx.shadowBlur = (isHovered || isSelected) ? 8 : 2;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
     ctx.setLineDash([]);
     ctx.restore();
@@ -190,17 +243,22 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const line = editedLines[i];
     if (line.hidden) continue;
     const { pts: [[x1, z1], [x2, z2]], source } = line;
-    const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
-    const color     = isHovered ? C.wallHover : source === "user" ? C.wallUser : C.wall;
-    const glow      = isHovered ? C.wallHoverGlow : source === "user" ? C.wallUserGlow : C.wallGlow;
+    const isSelected = selectedIdxSet && selectedIdxSet.has(i);
+    const isHovered  = i === hoveredIdx && !isSelected && (editMode === "delete" || editMode === "hide");
+    const color = isSelected ? C.wallSelected
+                : isHovered  ? C.wallHover
+                : source === "user" ? C.wallUser : C.wall;
+    const glow  = isSelected ? C.wallSelectedGlow
+                : isHovered  ? C.wallHoverGlow
+                : source === "user" ? C.wallUserGlow : C.wallGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
     ctx.lineCap = "round";
     ctx.strokeStyle = glow; ctx.lineWidth = lw + 6;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
-    ctx.strokeStyle = color; ctx.lineWidth = isHovered ? lw * 2 : lw;
-    ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 10 : 3;
+    ctx.strokeStyle = color; ctx.lineWidth = (isHovered || isSelected) ? lw * 2 : lw;
+    ctx.shadowColor = color; ctx.shadowBlur = (isHovered || isSelected) ? 10 : 3;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
     ctx.restore();
   }
@@ -237,6 +295,23 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     ctx.beginPath(); ctx.arc(csx, csy, r, 0, Math.PI * 2); ctx.stroke();
     ctx.restore();
   }
+}
+
+/** Draw the marquee selection rectangle (canvas pixels). */
+function drawMarqueeRect(ctx, rectPx) {
+  if (!rectPx) return;
+  const { x, y, w, h } = rectPx;
+  ctx.save();
+  ctx.fillStyle   = "rgba(251,146,60,0.08)";
+  ctx.strokeStyle = "rgba(251,146,60,0.85)";
+  ctx.lineWidth   = 1.5;
+  ctx.setLineDash([5, 4]);
+  ctx.shadowColor = "rgba(251,146,60,0.5)";
+  ctx.shadowBlur  = 6;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+  ctx.restore();
 }
 
 // Low-confidence threshold must match backend LOW_CONFIDENCE_THRESHOLD
@@ -444,8 +519,8 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
 const MODE_HINTS = {
   select: "Drag to pan · Scroll to zoom · Double-click to fit · Click room to select",
   add:    "Click to place first point → click again to draw wall · Esc to cancel",
-  delete: "Hover over a wall to highlight · Click to delete · Esc to exit",
-  hide:   "Click a wall to hide/unhide it — hidden walls are excluded from room recalculation",
+  delete: "Click a wall to delete · Hold LMB + drag to select multiple walls, release to delete all",
+  hide:   "Click a wall to hide/unhide · Hold LMB + drag to select multiple walls, release to toggle all",
 };
 
 function ModeHint({ mode, addStep }) {
@@ -638,14 +713,24 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const [saveState,    setSaveState]    = useState("idle"); // idle|saving|saved|error
   const [undoStack,    setUndoStack]    = useState([]);
   const [redoStack,    setRedoStack]    = useState([]);
+  // Multi-selection state
+  const [selectedLines, setSelectedLines] = useState(new Set()); // Set of indices
+  const [marqueeRect,   setMarqueeRect]   = useState(null);      // {x,y,w,h} canvas px
 
   // Refs for event handlers (avoid stale closures)
-  const editModeRef    = useRef("select");
-  const editedLinesRef = useRef([]);
-  const addStepRef     = useRef(null);
-  const hoveredLineRef = useRef(-1);
-  const snapRef        = useRef(null);
-  const dragRef        = useRef(null);
+  const editModeRef      = useRef("select");
+  const editedLinesRef   = useRef([]);
+  const addStepRef       = useRef(null);
+  const hoveredLineRef   = useRef(-1);
+  const snapRef          = useRef(null);
+  const dragRef          = useRef(null);
+  // Marquee drag refs (for delete/hide multi-select)
+  const marqueeDragRef   = useRef(null); // {startCx, startCy, startWx, startWz} when dragging
+  const selectedLinesRef = useRef(new Set());
+  const marqueeRectRef   = useRef(null);
+
+  useEffect(() => { selectedLinesRef.current = selectedLines; }, [selectedLines]);
+  useEffect(() => { marqueeRectRef.current   = marqueeRect;   }, [marqueeRect]);
 
   useEffect(() => { editModeRef.current    = editMode;    }, [editMode]);
   useEffect(() => { editedLinesRef.current = editedLines; }, [editedLines]);
@@ -757,10 +842,11 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       drawRooms(ctx, roomsData?.rooms, cam, highlightedRoomIdRef.current);
       drawEditedWalls(
         ctx, editedLinesRef.current, cam,
-        hoveredLineRef.current, addStepRef.current, snapRef.current,
+        hoveredLineRef.current, selectedLinesRef.current, addStepRef.current, snapRef.current,
         editModeRef.current,
       );
       drawOpenings(ctx, openingsData?.openings, cam);
+      drawMarqueeRect(ctx, marqueeRectRef.current);
       drawScale(ctx, cam, w, h);
       drawCompass(ctx, w);
     });
@@ -848,10 +934,22 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
   // ── Pointer events ──────────────────────────────────────────────────────────
   const onMouseDown = useCallback((e) => {
-    if (editModeRef.current === "select") {
+    if (e.button !== 0) return; // LMB only
+    const mode = editModeRef.current;
+    if (mode === "select") {
       dragRef.current = { startX: e.clientX, startY: e.clientY, ox: camRef.current.ox, oy: camRef.current.oy };
+    } else if (mode === "delete" || mode === "hide") {
+      // Begin potential marquee drag; record start in both canvas and world coords
+      const cvs = canvasRef.current;
+      if (!cvs) return;
+      const rect = cvs.getBoundingClientRect();
+      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+      const [wx, wz] = toWorld(cx, cy, camRef.current);
+      marqueeDragRef.current = { startCx: cx, startCy: cy, startWx: wx, startWz: wz, moved: false };
     }
   }, []);
+
+  const MARQUEE_THRESHOLD_PX = 5; // pixels to move before activating marquee
 
   const onMouseMove = useCallback((e) => {
     // Pan in select mode
@@ -863,21 +961,92 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       return;
     }
 
-    // Snap indicator and hover highlight in edit modes
+    // Marquee dragging in delete/hide modes
+    if ((editModeRef.current === "delete" || editModeRef.current === "hide") && marqueeDragRef.current) {
+      const cvs = canvasRef.current;
+      if (!cvs) return;
+      const rect = cvs.getBoundingClientRect();
+      const curCx = e.clientX - rect.left, curCy = e.clientY - rect.top;
+      const { startCx, startCy, startWx, startWz } = marqueeDragRef.current;
+      const moved = Math.hypot(curCx - startCx, curCy - startCy) > MARQUEE_THRESHOLD_PX;
+      marqueeDragRef.current.moved = moved;
+
+      if (moved) {
+        // Update marquee rect (in canvas pixels for drawing)
+        const rx = Math.min(startCx, curCx), ry = Math.min(startCy, curCy);
+        const rw = Math.abs(curCx - startCx),   rh = Math.abs(curCy - startCy);
+        marqueeRectRef.current = { x: rx, y: ry, w: rw, h: rh };
+        setMarqueeRect({ x: rx, y: ry, w: rw, h: rh });
+
+        // Update selection set (in world coords)
+        const [curWx, curWz] = toWorld(curCx, curCy, camRef.current);
+        const indices = findLinesInRect(startWx, startWz, curWx, curWz, editedLinesRef.current);
+        const newSet = new Set(indices);
+        selectedLinesRef.current = newSet;
+        setSelectedLines(newSet);
+
+        // Suppress single-wall hover highlight while marquee is active
+        hoveredLineRef.current = -1;
+        setHoveredLine(-1);
+        scheduleDraw();
+        return;
+      }
+    }
+
+    // Snap indicator and hover highlight in edit modes (no marquee drag active)
     if (editModeRef.current !== "select") {
       const [wx, wz] = getWorldFromEvent(e);
       snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current);
 
       if (editModeRef.current === "delete" || editModeRef.current === "hide") {
-        const idx = findNearestLine(wx, wz, editedLinesRef.current, camRef.current);
-        hoveredLineRef.current = idx;
-        setHoveredLine(idx);   // for cursor CSS
+        if (!marqueeDragRef.current?.moved) {
+          const idx = findNearestLine(wx, wz, editedLinesRef.current, camRef.current);
+          hoveredLineRef.current = idx;
+          setHoveredLine(idx);   // for cursor CSS
+        }
       }
       scheduleDraw();
     }
   }, [scheduleDraw, getWorldFromEvent]);
 
-  const onMouseUp = useCallback(() => { dragRef.current = null; }, []);
+  const onMouseUp = useCallback((e) => {
+    dragRef.current = null;
+
+    const mode = editModeRef.current;
+    if ((mode === "delete" || mode === "hide") && marqueeDragRef.current) {
+      const wasDragging = marqueeDragRef.current.moved;
+      marqueeDragRef.current = null;
+
+      // Clear marquee visuals
+      marqueeRectRef.current = null;
+      setMarqueeRect(null);
+
+      if (wasDragging) {
+        // Apply the bulk action to all selected walls
+        const sel = selectedLinesRef.current;
+        if (sel.size > 0) {
+          pushHistory(editedLinesRef.current);
+          if (mode === "delete") {
+            const newLines = editedLinesRef.current.filter((_, i) => !sel.has(i));
+            setEditedLines(newLines); editedLinesRef.current = newLines;
+          } else {
+            // hide: toggle hidden state on each selected wall
+            const newLines = editedLinesRef.current.map((line, i) =>
+              sel.has(i) ? { ...line, hidden: !line.hidden } : line
+            );
+            setEditedLines(newLines); editedLinesRef.current = newLines;
+          }
+          setIsDirty(true);
+        }
+        // Clear selection
+        selectedLinesRef.current = new Set();
+        setSelectedLines(new Set());
+        hoveredLineRef.current = -1;
+        setHoveredLine(-1);
+        scheduleDraw();
+      }
+    }
+  }, [pushHistory, scheduleDraw]);
 
   const onClick = useCallback((e) => {
     const mode = editModeRef.current;
@@ -1030,9 +1199,12 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     : null;
 
   // Cursor style
+  const isMarqueeDragging = marqueeDragRef.current?.moved ?? false;
   const cursorStyle = editMode === "select"
     ? (dragRef.current ? "grabbing" : "grab")
     : editMode === "add"
+    ? "crosshair"
+    : isMarqueeDragging
     ? "crosshair"
     : (hoveredLine >= 0 ? "pointer" : "default");
 
@@ -1119,6 +1291,10 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
           setEditMode(m); editModeRef.current = m;
           if (m !== "add") { addStepRef.current = null; setAddStep(null); scheduleDraw(); }
           if (m !== "delete" && m !== "hide") { hoveredLineRef.current = -1; setHoveredLine(-1); scheduleDraw(); }
+          // Clear multi-selection when switching modes
+          selectedLinesRef.current = new Set(); setSelectedLines(new Set());
+          marqueeRectRef.current = null; setMarqueeRect(null);
+          marqueeDragRef.current = null;
           snapRef.current = null;
         }}
         canUndo={canUndo} canRedo={canRedo}
