@@ -682,7 +682,7 @@ function RoomInfoChip({ room, floorIdx, modelInfo }) {
   );
 }
 
-export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor }) {
+export default function FloorPlanViewer({ modelInfo, activeFloor = 0, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, onSaved }) {
   const canvasRef = useRef(null);
   const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
   const rafRef    = useRef(null);
@@ -690,10 +690,18 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const floors = modelInfo?.floor_levels ?? [];
 
   // ── Data fetch state ────────────────────────────────────────────────────────
-  const [selectedFloor, setSelectedFloor] = useState(0);
+  const [selectedFloor, setSelectedFloor] = useState(typeof activeFloor === "number" ? activeFloor : 0);
+  const lastFloorRef = useRef(selectedFloor);
   const [roomsData,     setRoomsData]     = useState(null);
   const [openingsData,  setOpeningsData]  = useState(null);
   const [loadState,     setLoadState]     = useState("idle");
+
+  // Keep selectedFloor in sync if parent changes activeFloor
+  useEffect(() => {
+    if (typeof activeFloor === "number" && activeFloor !== selectedFloor) {
+      setSelectedFloor(activeFloor);
+    }
+  }, [activeFloor]);
 
   // Keep selected floor in bounds if number of floors changes
   useEffect(() => {
@@ -759,8 +767,12 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         setLoadState("ready");
         const cvs = canvasRef.current;
         if (cvs && converted.length) {
-          const b = wallsBoundsFromEdited(converted);
-          camRef.current = fitCamera(b, cvs.clientWidth || cvs.width, cvs.clientHeight || cvs.height);
+          const floorChanged = lastFloorRef.current !== selectedFloor;
+          lastFloorRef.current = selectedFloor;
+          if (floorChanged || !camRef.current) {
+            const b = wallsBoundsFromEdited(converted);
+            camRef.current = fitCamera(b, cvs.clientWidth || cvs.width, cvs.clientHeight || cvs.height);
+          }
           scheduleDraw();
         }
       })
@@ -815,14 +827,16 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       if (!r.ok) { setSaveState("error"); return; }
       setSaveState("saved");
       setIsDirty(false);
-      // Refresh rooms from updated backend
+      // Refresh rooms in this canvas
       fetch(`/api/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => {});
+      // Notify parent so RoomListPanel / App state also refreshes
+      onSaved?.();
       setTimeout(() => setSaveState("idle"), 3000);
     } catch {
       setSaveState("error");
       setTimeout(() => setSaveState("idle"), 3000);
     }
-  }, [isDirty, selectedFloor]);
+  }, [isDirty, selectedFloor, onSaved]);
 
   // ── Draw loop ───────────────────────────────────────────────────────────────
   // Keep a ref for highlightedRoomId to avoid stale closures in scheduleDraw

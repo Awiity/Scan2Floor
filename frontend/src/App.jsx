@@ -331,11 +331,13 @@ export default function App() {
             />
             <FloorPlanViewer
               modelInfo={modelInfo}
+              activeFloor={activeFloor === "all" ? 0 : activeFloor}
               dataVersion={floorDataVersion}
               onClose={() => setShowFloorPlanViewer(false)}
               highlightedRoomId={selectedRoomId}
               onSelectRoom={setSelectedRoomId}
               onSelectFloor={setActiveFloor}
+              onSaved={handleWallsDetected}
             />
           </div>
         )}
