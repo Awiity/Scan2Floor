@@ -127,31 +127,50 @@ function drawRooms(ctx, rooms, cam, highlightedRoomId) {
     const isHighlighted = room.id === highlightedRoomId;
     const baseAlpha = isHighlighted ? 0.30 : hasHighlight ? 0.03 : 0.07;
     const fill = C.roomFills[room.id % C.roomFills.length].replace(/[\d.]+\)$/, `${baseAlpha})`);
-    const { x_min, z_min, x_max, z_max } = room.bbox;
-    const [cx1, cy1] = toCanvas(x_min, z_min, cam);
-    const [cx2, cy2] = toCanvas(x_max, z_max, cam);
-    const rw = cx2 - cx1, rh = cy2 - cy1;
-    ctx.fillStyle = fill; ctx.fillRect(cx1, cy1, rw, rh);
+
+    // Build the room boundary path — prefer true polygon, fall back to bbox rect
+    ctx.beginPath();
+    const poly = room.polygon;
+    if (poly && poly.length >= 3) {
+      const [sx, sy] = toCanvas(poly[0][0], poly[0][1], cam);
+      ctx.moveTo(sx, sy);
+      for (let i = 1; i < poly.length; i++) {
+        const [px, py] = toCanvas(poly[i][0], poly[i][1], cam);
+        ctx.lineTo(px, py);
+      }
+    } else {
+      // Legacy fallback: bounding-box rectangle
+      const { x_min, z_min, x_max, z_max } = room.bbox;
+      const [cx1, cy1] = toCanvas(x_min, z_min, cam);
+      const [cx2, cy2] = toCanvas(x_max, z_max, cam);
+      ctx.rect(cx1, cy1, cx2 - cx1, cy2 - cy1);
+    }
+    ctx.closePath();
+
+    ctx.fillStyle = fill;
+    ctx.fill();
 
     if (isHighlighted) {
-      // Bright glow border for selected room
       ctx.save();
       ctx.strokeStyle = "rgba(0,200,224,0.6)";
       ctx.lineWidth = 2.5;
       ctx.shadowColor = "rgba(0,200,224,0.5)";
       ctx.shadowBlur = 12;
-      ctx.strokeRect(cx1, cy1, rw, rh);
+      ctx.stroke();
       ctx.restore();
     } else {
-      ctx.strokeStyle = C.roomBorder; ctx.lineWidth = 0.5; ctx.strokeRect(cx1, cy1, rw, rh);
+      ctx.strokeStyle = C.roomBorder;
+      ctx.lineWidth = 0.5;
+      ctx.stroke();
     }
 
     const fontSize = Math.max(9, Math.min(13, cam.scale * 0.7));
-    if (Math.abs(rw) > fontSize * 2.5 && Math.abs(rh) > fontSize * 1.5) {
+    // Draw room label at centroid — always use centroid so it works for any shape
+    if (cam.scale > 3) {
+      const [centX, centY] = toCanvas(room.centroid_x, room.centroid_z, cam);
       ctx.font = `${fontSize}px "Inter", sans-serif`;
       ctx.fillStyle = isHighlighted ? "rgba(0,230,255,0.9)" : C.labelRoom;
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      const [centX, centY] = toCanvas(room.centroid_x, room.centroid_z, cam);
       ctx.fillText(`R${room.id}  ${room.area_m2.toFixed(1)} m²`, centX, centY);
     }
   }

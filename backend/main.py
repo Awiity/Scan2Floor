@@ -496,14 +496,16 @@ def save_walls_edit(floor_idx: int, payload: WallsEditPayload):
     room_warning = None
     try:
         room_cfg = {
-            "floor_idx":       floor_idx,
-            "wall_thickness_m": 0.20,
-            "extend_m":        0.45,
-            "min_seg_m":       0.40,
-            "min_room_m2":     0.80,
-            "max_room_m2":     800.0,
-            "min_room_width_m": 0.60,
-            "save_debug":      True,
+            "floor_idx":              floor_idx,
+            "wall_thickness_m":       0.20,
+            "extend_m":               0.45,
+            "min_seg_m":              0.40,
+            "min_room_m2":            0.80,
+            "max_room_m2":            800.0,
+            "min_room_width_m":       0.60,
+            "polygon_approx_m":       0.05,
+            "manhattan_snap_polygon": True,
+            "save_debug":             True,
         }
         rm = detect_rooms_for_floor(floor_idx, room_cfg)
         n_rooms = rm["n_rooms"]
@@ -606,6 +608,8 @@ class RoomDetectionParams(BaseModel):
     min_room_m2: float = 0.8         # drop regions smaller than this
     max_room_m2: float = 800.0       # drop regions larger than this
     min_room_width_m: float = 0.60   # reject rooms thinner than this (aspect filter)
+    polygon_approx_m: float = 0.05   # Douglas-Peucker tolerance for polygon simplification (metres)
+    manhattan_snap_polygon: bool = True  # snap near-axis polygon edges to exact 0°/90°
     save_debug: bool = True
 
 

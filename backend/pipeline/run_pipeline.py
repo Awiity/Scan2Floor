@@ -347,13 +347,15 @@ def run_pipeline(
                 **(wall_cfg or {}),
             }
             room_cfg = {
-                "wall_thickness_m":  0.20,
-                "extend_m":          0.55,
-                "min_seg_m":         0.40,
-                "min_room_m2":       0.80,
-                "max_room_m2":       800.0,
-                "min_room_width_m":  0.60,
-                "save_debug":        True,
+                "wall_thickness_m":       0.20,
+                "extend_m":               0.55,
+                "min_seg_m":              0.40,
+                "min_room_m2":            0.80,
+                "max_room_m2":            800.0,
+                "min_room_width_m":       0.60,
+                "polygon_approx_m":       0.05,
+                "manhattan_snap_polygon": True,
+                "save_debug":             True,
             }
 
             for fi in floors_to_run:

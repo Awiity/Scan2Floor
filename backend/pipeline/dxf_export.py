@@ -167,18 +167,25 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
         except Exception:
             pass
 
-    # ── Rooms (bounding boxes + area labels) ─────────────────────────────────
+    # ── Rooms (polygon outlines + area labels) ────────────────────────────────
     for room in rooms:
-        bb = room["bbox"]
-        rx1, rz1 = bb["x_min"], bb["z_min"]
-        rx2, rz2 = bb["x_max"], bb["z_max"]
         room_dxf = {"layer": LAYER_ROOM}
-        # Draw closed bounding-box rectangle
-        msp.add_lwpolyline(
-            [(rx1, rz1), (rx2, rz1), (rx2, rz2), (rx1, rz2)],
-            close=True,
-            dxfattribs=room_dxf,
-        )
+        poly = room.get("polygon", [])
+        if poly and len(poly) >= 3:
+            # True non-rectangular polygon
+            pts = [(p[0], p[1]) for p in poly]
+            msp.add_lwpolyline(pts, close=True, dxfattribs=room_dxf)
+        else:
+            # Fallback: axis-aligned bounding-box rectangle
+            bb = room["bbox"]
+            msp.add_lwpolyline(
+                [(bb["x_min"], bb["z_min"]),
+                 (bb["x_max"], bb["z_min"]),
+                 (bb["x_max"], bb["z_max"]),
+                 (bb["x_min"], bb["z_max"])],
+                close=True,
+                dxfattribs=room_dxf,
+            )
         # Centroid label
         cx, cz = room["centroid_x"], room["centroid_z"]
         label = f"R{room['id']}  {room['area_m2']:.1f} m\u00b2"
@@ -242,20 +249,33 @@ def _write_svg(path: str, lines: list, openings: list = None, rooms: list = None
         "#0284c7", "#16a34a", "#d97706", "#dc2626",
     ]
     for room in rooms:
-        bb = room["bbox"]
-        rx1_s = tx(bb["x_min"])
-        rz1_s = ty(bb["z_max"])   # ty is Y-flipped: z_max → top in SVG
-        rw_s  = (bb["x_max"] - bb["x_min"]) * scale
-        rh_s  = (bb["z_max"] - bb["z_min"]) * scale
+        poly  = room.get("polygon", [])
         col   = room_colours[(room["id"] - 1) % len(room_colours)]
         cx_s  = tx(room["centroid_x"])
         cz_s  = ty(room["centroid_z"])
-        parts.append(
-            f'<rect x="{rx1_s:.1f}" y="{rz1_s:.1f}" '
-            f'width="{rw_s:.1f}" height="{rh_s:.1f}" '
-            f'fill="{col}" fill-opacity="0.18" '
-            f'stroke="{col}" stroke-width="0.8" stroke-dasharray="5,3"/>'
-        )
+
+        if poly and len(poly) >= 3:
+            # True polygon path
+            d = "M " + " L ".join(f"{tx(p[0]):.1f},{ty(p[1]):.1f}" for p in poly) + " Z"
+            parts.append(
+                f'<path d="{d}" '
+                f'fill="{col}" fill-opacity="0.18" '
+                f'stroke="{col}" stroke-width="0.8" stroke-dasharray="5,3"/>'
+            )
+        else:
+            # Fallback: bounding-box rectangle
+            bb = room["bbox"]
+            rx1_s = tx(bb["x_min"])
+            rz1_s = ty(bb["z_max"])   # ty is Y-flipped: z_max → top in SVG
+            rw_s  = (bb["x_max"] - bb["x_min"]) * scale
+            rh_s  = (bb["z_max"] - bb["z_min"]) * scale
+            parts.append(
+                f'<rect x="{rx1_s:.1f}" y="{rz1_s:.1f}" '
+                f'width="{rw_s:.1f}" height="{rh_s:.1f}" '
+                f'fill="{col}" fill-opacity="0.18" '
+                f'stroke="{col}" stroke-width="0.8" stroke-dasharray="5,3"/>'
+            )
+
         parts.append(
             f'<text x="{cx_s:.1f}" y="{cz_s:.1f}" '
             f'text-anchor="middle" dominant-baseline="middle" '

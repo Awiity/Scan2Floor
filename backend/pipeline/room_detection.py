@@ -28,6 +28,11 @@ min_room_width_m   float  min room dimension for aspect filter   (default 0.6)
 min_seg_m          float  ignore walls shorter than this         (default 0.4)
 save_debug         bool   write debug PNGs                       (default True)
 
+Key parameters (continued)
+--------------------------
+polygon_approx_m    float  Douglas-Peucker tolerance for polygon simplification (default 0.05)
+manhattan_snap_polygon bool snap near-axis polygon edges to exact 0°/90°       (default True)
+
 Output JSON schema
 ------------------
 {
@@ -40,7 +45,8 @@ Output JSON schema
       "area_m2": 14.32,
       "bbox": {"x_min": -10.8, "x_max": -4.7, "z_min": -5.0, "z_max": 0.7},
       "centroid_x": -7.75,
-      "centroid_z": -2.15
+      "centroid_z": -2.15,
+      "polygon": [[-10.8, 0.7], [-4.7, 0.7], [-4.7, -5.0], [-10.8, -5.0]]
     }, ...
   ]
 }
@@ -110,11 +116,14 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
     ]
     close_passes = config.get("close_passes", default_passes)
 
-    min_seg_m      = float(config.get("min_seg_m",      0.4))
-    min_room_m2    = float(config.get("min_room_m2",    0.8))
-    max_room_m2    = float(config.get("max_room_m2", 800.0))
-    min_room_w_m   = float(config.get("min_room_width_m", 0.60))
-    save_debug     = bool(config.get("save_debug", True))
+    min_seg_m              = float(config.get("min_seg_m",              0.4))
+    min_room_m2            = float(config.get("min_room_m2",            0.8))
+    max_room_m2            = float(config.get("max_room_m2",          800.0))
+    min_room_w_m           = float(config.get("min_room_width_m",      0.60))
+    save_debug             = bool(config.get("save_debug",             True))
+    # Polygon extraction parameters
+    polygon_approx_m       = float(config.get("polygon_approx_m",     0.05))  # D-P epsilon in metres
+    manhattan_snap_polygon = bool(config.get("manhattan_snap_polygon", True))  # snap near-axis edges
 
     if not lines:
         print(f"[rooms floor {floor_idx}] no walls — returning empty")
@@ -376,9 +385,6 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
         bw = int(stats[lbl, cv2.CC_STAT_WIDTH])
         bh = int(stats[lbl, cv2.CC_STAT_HEIGHT])
 
-        # Aspect-ratio guard: skip regions thinner than min_room_width_m
-        # These are typically gaps between parking spots, wall-interior
-        # scan slivers, staircase steps, etc.
         area_m2 = round(area_px * grid_size ** 2, 3)
 
         # Back-project pixel bbox → world coords (Y is flipped)
@@ -392,6 +398,29 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
         cx_m = round(x_min_r + centroids[lbl][0] * grid_size, 4)
         cz_m = round(z_max_r - centroids[lbl][1] * grid_size, 4)  # flipped
 
+        # ── Extract true polygon boundary ─────────────────────────────────────
+        # Re-use the already-computed comp_mask to find the outer contour,
+        # then simplify with Douglas-Peucker and back-project to world coords.
+        polygon_world: list[list[float]] = []
+        try:
+            mask_uint8 = np.uint8(comp_mask) * 255
+            contours, _ = cv2.findContours(
+                mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+            )
+            if contours:
+                outer = max(contours, key=cv2.contourArea)
+                # D-P epsilon: polygon_approx_m converted to pixels, minimum 1
+                eps = max(1.0, polygon_approx_m / grid_size)
+                approx = cv2.approxPolyDP(outer, eps, closed=True)
+                for pt in approx.reshape(-1, 2):
+                    wx = round(x_min_r + float(pt[0]) * grid_size, 4)
+                    wz = round(z_max_r - float(pt[1]) * grid_size, 4)  # Y flipped
+                    polygon_world.append([wx, wz])
+                if manhattan_snap_polygon and len(polygon_world) >= 3:
+                    polygon_world = _manhattan_snap_polygon(polygon_world)
+        except Exception as _poly_exc:
+            print(f"[rooms floor {floor_idx}] polygon extraction failed for label {lbl}: {_poly_exc}")
+
         room_id += 1
         rooms.append(
             {
@@ -400,6 +429,7 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
                 "bbox":       bbox,
                 "centroid_x": cx_m,
                 "centroid_z": cz_m,
+                "polygon":    polygon_world,  # true boundary; [] = extraction failed
             }
         )
 
@@ -434,11 +464,12 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
     clean_rooms = []
     for r in rooms:
         clean_rooms.append({
-            "id": int(r["id"]),
-            "area_m2": float(r["area_m2"]),
-            "bbox": {k: float(v) for k, v in r["bbox"].items()},
+            "id":         int(r["id"]),
+            "area_m2":    float(r["area_m2"]),
+            "bbox":       {k: float(v) for k, v in r["bbox"].items()},
             "centroid_x": float(r["centroid_x"]),
             "centroid_z": float(r["centroid_z"]),
+            "polygon":    [[float(v) for v in pt] for pt in r.get("polygon", [])],
         })
 
     # ── Save JSON ─────────────────────────────────────────────────────────────
@@ -458,6 +489,46 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal helpers
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def _manhattan_snap_polygon(
+    polygon: list[list[float]],
+    angle_tol_deg: float = 5.0,
+) -> list[list[float]]:
+    """
+    Snap near-horizontal and near-vertical polygon edges to exact 0° / 90°.
+
+    For each consecutive edge (p_i → p_{i+1}):
+      • nearly horizontal  → average both Z values (eliminates vertical drift)
+      • nearly vertical    → average both X values (eliminates horizontal drift)
+
+    The pass is sequential, so each snap propagates to the next vertex.
+    Returns a new list — the input is not modified.
+    """
+    import math
+    if len(polygon) < 3:
+        return polygon
+    tol = math.radians(angle_tol_deg)
+    snapped = [list(pt) for pt in polygon]   # shallow copy of [x, z] pairs
+    n = len(snapped)
+    for i in range(n):
+        j = (i + 1) % n
+        dx = snapped[j][0] - snapped[i][0]
+        dz = snapped[j][1] - snapped[i][1]
+        if dx == 0 and dz == 0:
+            continue
+        ang = abs(math.atan2(dz, dx))
+        if ang < tol or abs(ang - math.pi) < tol:
+            # Nearly horizontal: pull both vertices to the same Z
+            avg_z = (snapped[i][1] + snapped[j][1]) / 2.0
+            snapped[i][1] = round(avg_z, 4)
+            snapped[j][1] = round(avg_z, 4)
+        elif abs(ang - math.pi / 2) < tol:
+            # Nearly vertical: pull both vertices to the same X
+            avg_x = (snapped[i][0] + snapped[j][0]) / 2.0
+            snapped[i][0] = round(avg_x, 4)
+            snapped[j][0] = round(avg_x, 4)
+    return snapped
 
 
 def _empty_result(floor_idx: int, processed_dir: str, grid_size: float) -> dict:
