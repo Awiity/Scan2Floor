@@ -443,18 +443,19 @@ def preprocess_walls_status():
 class C2BWallParams(BaseModel):
     """Parameters for the Cloud2BIM-style wall detector."""
     floor_idx: int
-    grid_size: float = 0.02          # finer grid = better accuracy, more RAM
+    grid_size: float = 0.02
     snap_to_axis: bool = True
-    min_wall_m: float = 0.40         # shorter minimum — contour segs are smaller
-    max_wall_thickness: float = 0.75 # maximum slab thickness for face-pairing
-    dp_tolerance: float = 0.04       # Douglas-Peucker tolerance in metres
-    threshold_frac: float = 0.01     # relative density threshold for binarisation
-    wall_reach_frac: float = 0.70    # min height-reach as fraction of storey height
+    min_wall_m: float = 0.40
+    max_wall_thickness: float = 0.75
+    dp_tolerance: float = 0.04
+    threshold_frac: float = 0.01
+    wall_reach_frac: float = 0.70
     save_debug: bool = True
     # Auto-run downstream phases
     detect_openings: bool = True
     detect_rooms: bool = True
-    wall_thickness: float = 0.25     # used by opening detection
+    wall_thickness: float = 0.25
+    polygon_rooms: bool = True   # True = polygon mode; False = legacy rectangular
 
 
 
@@ -468,7 +469,8 @@ def get_walls(floor_idx: int):
 
 
 class WallsEditPayload(BaseModel):
-    lines: list   # list of [[x1, z1], [x2, z2]] pairs
+    lines: list          # list of [[x1, z1], [x2, z2]] pairs
+    polygon_rooms: bool = True   # True = polygon mode; False = legacy rectangular
 
 
 @app.put("/api/walls/{floor_idx}")
@@ -503,8 +505,10 @@ def save_walls_edit(floor_idx: int, payload: WallsEditPayload):
             "min_room_m2":            0.80,
             "max_room_m2":            800.0,
             "min_room_width_m":       0.60,
+            "polygon_rooms":          payload.polygon_rooms,
             "polygon_approx_m":       0.05,
             "manhattan_snap_polygon": True,
+            "polygon_smooth_m":       0.15,
             "save_debug":             True,
         }
         rm = detect_rooms_for_floor(floor_idx, room_cfg)
@@ -602,14 +606,16 @@ def get_openings(floor_idx: int):
 
 class RoomDetectionParams(BaseModel):
     floor_idx: int
-    wall_thickness_m: float = 0.20   # drawn wall half-width in metres (auto-scales to px)
-    extend_m: float = 0.45           # endpoint extension to seal T-junctions (metres)
-    min_seg_m: float = 0.4           # ignore wall segments shorter than this
-    min_room_m2: float = 0.8         # drop regions smaller than this
-    max_room_m2: float = 800.0       # drop regions larger than this
-    min_room_width_m: float = 0.60   # reject rooms thinner than this (aspect filter)
-    polygon_approx_m: float = 0.05   # Douglas-Peucker tolerance for polygon simplification (metres)
-    manhattan_snap_polygon: bool = True  # snap near-axis polygon edges to exact 0°/90°
+    wall_thickness_m: float = 0.20
+    extend_m: float = 0.45
+    min_seg_m: float = 0.4
+    min_room_m2: float = 0.8
+    max_room_m2: float = 800.0
+    min_room_width_m: float = 0.60
+    polygon_rooms: bool = True           # True = polygon mode; False = legacy rectangular
+    polygon_approx_m: float = 0.05
+    manhattan_snap_polygon: bool = True
+    polygon_smooth_m: float = 0.15
     save_debug: bool = True
 
 
@@ -728,6 +734,8 @@ class PipelineRunPayload(BaseModel):
     dp_tolerance:       float = 0.04
     threshold_frac:     float = 0.01
     wall_reach_frac:    float = 0.35
+    # room shape mode
+    polygon_rooms:      bool  = True    # True = polygon; False = legacy rectangular
 
 
 @app.post("/api/pipeline/run")
@@ -770,6 +778,7 @@ def pipeline_run(payload: PipelineRunPayload):
         run_slices=payload.run_slices,
         detect_floors=payload.detect_floors,
         wall_cfg=wall_cfg,
+        room_cfg_overrides={"polygon_rooms": payload.polygon_rooms},
         enable_cleaning=payload.enable_cleaning,
         clean_downsample_pct=payload.clean_downsample_pct,
         clean_span_min=payload.clean_span_min,
@@ -916,13 +925,17 @@ def c2b_generate_walls(params: C2BWallParams):
             try:
                 room_cfg = {
                     **cfg,
-                    "wall_thickness_m":  0.20,
-                    "extend_m":          0.45,
-                    "min_seg_m":         0.4,
-                    "min_room_m2":       0.8,
-                    "max_room_m2":       800.0,
-                    "min_room_width_m":  0.60,
-                    "save_debug":        True,
+                    "wall_thickness_m":       0.20,
+                    "extend_m":               0.45,
+                    "min_seg_m":              0.4,
+                    "min_room_m2":            0.8,
+                    "max_room_m2":            800.0,
+                    "min_room_width_m":       0.60,
+                    "polygon_rooms":          params.polygon_rooms,
+                    "polygon_approx_m":       0.05,
+                    "manhattan_snap_polygon": True,
+                    "polygon_smooth_m":       0.15,
+                    "save_debug":             True,
                 }
                 rm = detect_rooms_for_floor(params.floor_idx, room_cfg)
                 result["n_rooms"] = rm["n_rooms"]

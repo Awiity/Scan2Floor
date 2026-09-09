@@ -626,7 +626,7 @@ function RoomInfoChip({ room, floorIdx, modelInfo }) {
   );
 }
 
-export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor }) {
+export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, roomMode = "polygon" }) {
   const canvasRef = useRef(null);
   const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
   const rafRef    = useRef(null);
@@ -743,7 +743,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       const r = await fetch(`/api/walls/${selectedFloor}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lines }),
+        body: JSON.stringify({ lines, polygon_rooms: roomMode === "polygon" }),
       });
       const d = await r.json();
       if (!r.ok) { setSaveState("error"); return; }

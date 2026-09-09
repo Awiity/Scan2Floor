@@ -76,6 +76,10 @@ export default function App() {
   const [selectedRoomId, setSelectedRoomId] = useState(null);
   const [roomsData, setRoomsData] = useState(null);
 
+  /* ---------- room shape mode ---------- */
+  // 'polygon' = new non-rectangular mode; 'rectangular' = legacy bbox-only mode
+  const [roomMode, setRoomMode] = useState("polygon");
+
   // Fetch rooms for the active floor (defaulting to floor 0 when activeFloor is "all")
   useEffect(() => {
     const targetFloor = (activeFloor === "all" || activeFloor == null) ? 0 : activeFloor;
@@ -176,6 +180,8 @@ export default function App() {
           setActiveFloor={setActiveFloor}
           onReprocessDone={handleReprocessDone}
           onWallsDetected={handleWallsDetected}
+          roomMode={roomMode}
+          setRoomMode={setRoomMode}
         />
 
         {/* Sidebar toggle tab */}
@@ -336,6 +342,7 @@ export default function App() {
               highlightedRoomId={selectedRoomId}
               onSelectRoom={setSelectedRoomId}
               onSelectFloor={setActiveFloor}
+              roomMode={roomMode}
             />
           </div>
         )}

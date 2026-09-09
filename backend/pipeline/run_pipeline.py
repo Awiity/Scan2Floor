@@ -131,6 +131,7 @@ def run_pipeline(
     run_slices:            bool  = True,
     detect_floors:         list[int] | None = None,   # None → all floors
     wall_cfg:              dict  | None = None,
+    room_cfg_overrides:    dict  | None = None,       # e.g. {"polygon_rooms": False}
     enable_cleaning:       bool  = True,
     clean_downsample_pct:  float = 20.0,
     clean_span_min:        float = 0.65,
@@ -140,6 +141,7 @@ def run_pipeline(
     Execute the full 6-stage pipeline. Call this in a daemon thread.
     `detect_floors` restricts wall detection to specific floor indices.
     `wall_cfg` is passed to detect_walls_c2b_for_floor (optional overrides).
+    `room_cfg_overrides` is merged into the room detection config dict.
     """
     global status
 
@@ -353,9 +355,12 @@ def run_pipeline(
                 "min_room_m2":            0.80,
                 "max_room_m2":            800.0,
                 "min_room_width_m":       0.60,
+                "polygon_rooms":          True,   # overridable via room_cfg_overrides
                 "polygon_approx_m":       0.05,
                 "manhattan_snap_polygon": True,
+                "polygon_smooth_m":       0.15,
                 "save_debug":             True,
+                **(room_cfg_overrides or {}),
             }
 
             for fi in floors_to_run:

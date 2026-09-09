@@ -23,7 +23,7 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
 const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
-export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className }) {
+export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode }) {
   const cloudReady = backendStatus === "ready";
   const fmt = n => n?.toLocaleString?.() ?? "—";
 
@@ -105,7 +105,7 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
     if(!effectivePath||pipeRunning) return;
     setPipeError(""); setPipeStatus(null); setPipeCancelling(false);
     try {
-      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,enable_cleaning:enableClean,clean_downsample_pct:cleanPct,clean_span_min:cleanSpanMin,clean_span_max:cleanSpanMax,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac})}).then(r=>r.json());
+      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,enable_cleaning:enableClean,clean_downsample_pct:cleanPct,clean_span_min:cleanSpanMin,clean_span_max:cleanSpanMax,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac,polygon_rooms:roomMode==="polygon"})}).then(r=>r.json());
       if(d.status==="started"||d.status==="already_running"){ setPipeRunning(true); startPoll(); }
       else if(d.detail) setPipeError(d.detail);
     } catch { setPipeError("Network error"); }
@@ -116,7 +116,7 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
     if(!effectivePath||pipeRunning) return;
     setPipeError(""); setPipeCancelling(false);
     try {
-      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,resume_from_stage:fromStage,enable_cleaning:enableClean,clean_downsample_pct:cleanPct,clean_span_min:cleanSpanMin,clean_span_max:cleanSpanMax,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac})}).then(r=>r.json());
+      const d = await fetch("/api/pipeline/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({xyz_path:effectivePath,run_c2b:true,run_slices:true,resume_from_stage:fromStage,enable_cleaning:enableClean,clean_downsample_pct:cleanPct,clean_span_min:cleanSpanMin,clean_span_max:cleanSpanMax,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac,polygon_rooms:roomMode==="polygon"})}).then(r=>r.json());
       if(d.status==="started"||d.status==="already_running"){ setPipeRunning(true); startPoll(); }
       else if(d.detail) setPipeError(d.detail);
     } catch { setPipeError("Network error"); }
@@ -170,7 +170,7 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
   const runSingleFloor = async()=>{
     setAdvBusy(true); setAdvMsg("");
     try {
-      const r=await fetch("/api/c2b/walls",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({floor_idx:advFloor,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac,detect_openings:true,detect_rooms:true,wall_thickness:wallThickM,extend_m:extendM,min_seg_m:minSegM,min_room_m2:minRoomM2,min_room_width_m:minRoomW})});
+      const r=await fetch("/api/c2b/walls",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({floor_idx:advFloor,grid_size:gridSize,snap_to_axis:snapToAxis,min_wall_m:minWallM,max_wall_thickness:maxWallThick,dp_tolerance:dpTol,threshold_frac:threshFrac,wall_reach_frac:wallReachFrac,detect_openings:true,detect_rooms:true,wall_thickness:wallThickM,extend_m:extendM,min_seg_m:minSegM,min_room_m2:minRoomM2,min_room_width_m:minRoomW,polygon_rooms:roomMode==="polygon"})});
       const d=await r.json();
       if(!r.ok) setAdvMsg("⚠ "+(d.detail??"Error"));
       else { setAdvMsg(`✓ ${d.lines_count} walls · ${d.n_doors}D ${d.n_windows}W · ${d.n_rooms} rooms`); onWallsDetected?.(); }
@@ -421,6 +421,40 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
           </button>
           {showWP&&(
             <div style={{background:"rgba(0,0,0,0.25)",border:"1px solid rgba(6,182,212,0.12)",borderRadius:8,padding:"10px 12px",display:"flex",flexDirection:"column",gap:10}}>
+              {/* ── Room Shape Mode switch ── */}
+              <div>
+                <div style={{fontSize:11,color:"var(--text-2)",fontWeight:600,marginBottom:6}}>Room Shape Mode</div>
+                <div style={{display:"flex",borderRadius:7,overflow:"hidden",border:"1px solid rgba(103,232,249,0.25)",background:"rgba(0,0,0,0.3)"}}>
+                  {[
+                    {id:"rectangular", label:"▭  Rectangular", hint:"Legacy bbox"},
+                    {id:"polygon",     label:"⬡  Polygon",     hint:"True shape"},
+                  ].map(opt => {
+                    const active = roomMode === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        id={`room-mode-${opt.id}`}
+                        onClick={() => setRoomMode?.(opt.id)}
+                        title={opt.hint}
+                        style={{
+                          flex:1, border:"none", cursor:"pointer",
+                          padding:"6px 4px", fontSize:11, fontWeight:active?700:500,
+                          transition:"all 0.18s",
+                          background: active ? "rgba(6,182,212,0.22)" : "transparent",
+                          color: active ? "#67e8f9" : "var(--text-3)",
+                          borderRight: opt.id==="rectangular" ? "1px solid rgba(103,232,249,0.15)" : "none",
+                          boxShadow: active ? "inset 0 0 0 1px rgba(6,182,212,0.35)" : "none",
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{fontSize:10,color:"var(--text-3)",marginTop:4}}>
+                  {roomMode==="polygon" ? "True non-rectangular room outlines" : "Fast axis-aligned bounding boxes"}
+                </div>
+              </div>
               <ParamSlider label="Grid Resolution" hint="Finer = more detail, slower" value={gridSize} min={0.01} max={0.10} step={0.005} unit="m" defaultVal={0.02} onChange={setGridSize}/>
               <ParamSlider label="Density Threshold" hint="Lower = catch more walls" value={threshFrac} min={0.001} max={0.05} step={0.001} unit="" precision={3} defaultVal={0.01} onChange={setThreshFrac}/>
               <ParamSlider label="Min Wall Length" value={minWallM} min={0.10} max={2.0} step={0.05} unit="m" defaultVal={0.40} onChange={setMinWallM}/>

@@ -32,6 +32,8 @@ Key parameters (continued)
 --------------------------
 polygon_approx_m    float  Douglas-Peucker tolerance for polygon simplification (default 0.05)
 manhattan_snap_polygon bool snap near-axis polygon edges to exact 0°/90°       (default True)
+polygon_smooth_m    float  morphological closing radius before contour extraction  (default 0.15)
+                           fills small wall-caused notches; 0 = disabled
 
 Output JSON schema
 ------------------
@@ -122,8 +124,13 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
     min_room_w_m           = float(config.get("min_room_width_m",      0.60))
     save_debug             = bool(config.get("save_debug",             True))
     # Polygon extraction parameters
+    polygon_rooms          = bool(config.get("polygon_rooms",          True))   # False = legacy rectangular
     polygon_approx_m       = float(config.get("polygon_approx_m",     0.05))  # D-P epsilon in metres
     manhattan_snap_polygon = bool(config.get("manhattan_snap_polygon", True))  # snap near-axis edges
+    # Morphological closing radius applied to the room mask before contour extraction.
+    # Fills small notches caused by adjacent wall segments partially penetrating the mask.
+    # Rule of thumb: ~0.5× wall_thickness_m.  Set to 0 to disable.
+    polygon_smooth_m       = float(config.get("polygon_smooth_m",     0.15))
 
     if not lines:
         print(f"[rooms floor {floor_idx}] no walls — returning empty")
@@ -399,27 +406,36 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
         cz_m = round(z_max_r - centroids[lbl][1] * grid_size, 4)  # flipped
 
         # ── Extract true polygon boundary ─────────────────────────────────────
-        # Re-use the already-computed comp_mask to find the outer contour,
-        # then simplify with Douglas-Peucker and back-project to world coords.
+        # Skipped entirely when polygon_rooms=False (legacy rectangular mode).
+        # In that case polygon=[] and every downstream bbox-fallback activates.
         polygon_world: list[list[float]] = []
-        try:
-            mask_uint8 = np.uint8(comp_mask) * 255
-            contours, _ = cv2.findContours(
-                mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
-            )
-            if contours:
-                outer = max(contours, key=cv2.contourArea)
-                # D-P epsilon: polygon_approx_m converted to pixels, minimum 1
-                eps = max(1.0, polygon_approx_m / grid_size)
-                approx = cv2.approxPolyDP(outer, eps, closed=True)
-                for pt in approx.reshape(-1, 2):
-                    wx = round(x_min_r + float(pt[0]) * grid_size, 4)
-                    wz = round(z_max_r - float(pt[1]) * grid_size, 4)  # Y flipped
-                    polygon_world.append([wx, wz])
-                if manhattan_snap_polygon and len(polygon_world) >= 3:
-                    polygon_world = _manhattan_snap_polygon(polygon_world)
-        except Exception as _poly_exc:
-            print(f"[rooms floor {floor_idx}] polygon extraction failed for label {lbl}: {_poly_exc}")
+        if polygon_rooms:
+            try:
+                mask_uint8 = np.uint8(comp_mask) * 255
+
+                # ── Morphological closing: fill wall-caused notches ────────────────
+                if polygon_smooth_m > 0:
+                    smooth_px = max(1, int(round(polygon_smooth_m / grid_size)))
+                    k_s = cv2.getStructuringElement(
+                        cv2.MORPH_RECT, (smooth_px * 2 + 1, smooth_px * 2 + 1)
+                    )
+                    mask_uint8 = cv2.morphologyEx(mask_uint8, cv2.MORPH_CLOSE, k_s)
+
+                contours, _ = cv2.findContours(
+                    mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+                )
+                if contours:
+                    outer = max(contours, key=cv2.contourArea)
+                    eps = max(1.0, polygon_approx_m / grid_size)
+                    approx = cv2.approxPolyDP(outer, eps, closed=True)
+                    for pt in approx.reshape(-1, 2):
+                        wx = round(x_min_r + float(pt[0]) * grid_size, 4)
+                        wz = round(z_max_r - float(pt[1]) * grid_size, 4)  # Y flipped
+                        polygon_world.append([wx, wz])
+                    if manhattan_snap_polygon and len(polygon_world) >= 3:
+                        polygon_world = _manhattan_snap_polygon(polygon_world)
+            except Exception as _poly_exc:
+                print(f"[rooms floor {floor_idx}] polygon extraction failed for label {lbl}: {_poly_exc}")
 
         room_id += 1
         rooms.append(
