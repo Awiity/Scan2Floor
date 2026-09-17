@@ -23,7 +23,7 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
 const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
-export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode }) {
+export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave }) {
   const cloudReady = backendStatus === "ready";
   const fmt = n => n?.toLocaleString?.() ?? "—";
 
@@ -35,6 +35,75 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
   const [browseLoading,setBrowseLoading]= useState(false);
   const [browseError,  setBrowseError]  = useState("");
   const [selected,     setSelected]     = useState(null);
+
+  // ── Saves ─────────────────────────────────────────────────────────────────
+  const [saves,          setSaves]          = useState([]);
+  const [savesLoading,   setSavesLoading]   = useState(false);
+  const [showSaves,      setShowSaves]      = useState(true);
+  const [saveName,       setSaveName]       = useState("");
+  const [saveLoading,    setSaveLoading]    = useState(false);
+  const [saveMsg,        setSaveMsg]        = useState("");
+  const [deleteConfirm,  setDeleteConfirm]  = useState(null); // name pending delete
+
+  // Derive default save name from the selected xyz path
+  const derivedSaveName = (() => {
+    const path = selected?.path || "";
+    if (!path) return "";
+    const parts = path.replace(/\\/g, "/").split("/");
+    // find the folder containing the .xyz file
+    const idx = parts.length - 2;
+    return idx >= 0 ? parts[idx] : "output";
+  })();
+
+  const effectiveSaveName = saveName.trim() || derivedSaveName || "output";
+
+  const fetchSaves = async () => {
+    setSavesLoading(true);
+    try {
+      const d = await fetch("/api/saves").then(r => r.json());
+      setSaves(d.saves ?? []);
+    } catch {
+      setSaves([]);
+    } finally {
+      setSavesLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchSaves(); }, []);
+
+  const handleSaveCurrent = async () => {
+    if (saveLoading) return;
+    setSaveLoading(true); setSaveMsg("");
+    try {
+      const d = await fetch("/api/saves", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: effectiveSaveName }),
+      }).then(r => r.json());
+      if (d.status === "ok") {
+        setSaveMsg(`✓ Saved as "${d.name}" (${d.files_saved} files)`);
+        fetchSaves();
+        setTimeout(() => setSaveMsg(""), 4000);
+      } else {
+        setSaveMsg("⚠ Save failed");
+      }
+    } catch {
+      setSaveMsg("⚠ Network error");
+    } finally {
+      setSaveLoading(false);
+    }
+  };
+
+  const handleDeleteSave = async (name) => {
+    if (deleteConfirm !== name) { setDeleteConfirm(name); return; }
+    setDeleteConfirm(null);
+    try {
+      await fetch(`/api/saves/${encodeURIComponent(name)}`, { method: "DELETE" });
+      fetchSaves();
+      // If user is viewing this save, unload it
+      onLoadSave?.(null);
+    } catch {}
+  };
 
   const fetchScans = async (rootOverride) => {
     const root = (rootOverride ?? scanRoot).trim();
@@ -208,6 +277,120 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
       {/* ── Pipeline ── */}
       <div className="sidebar-section">
         <div className="section-title">Pipeline</div>
+
+        {/* ── Saved Outputs ── */}
+        <div style={{marginBottom:12}}>
+          <button
+            onClick={() => setShowSaves(v => !v)}
+            style={{
+              width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
+              background:showSaves?"rgba(99,102,241,0.10)":"rgba(255,255,255,0.03)",
+              border:`1px solid ${showSaves?"rgba(99,102,241,0.35)":"rgba(255,255,255,0.08)"}`,
+              borderRadius:6,color:showSaves?"#a5b4fc":"var(--text-2)",
+              fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4,
+            }}
+          >
+            <span>💾 Saved Outputs {saves.length > 0 && <span style={{fontSize:10,marginLeft:4,background:"rgba(99,102,241,0.2)",color:"#a5b4fc",borderRadius:10,padding:"0 6px"}}>{saves.length}</span>}</span>
+            <span style={{fontSize:10,opacity:0.7}}>{showSaves?"▲":"▼"}</span>
+          </button>
+
+          {showSaves && (
+            <div style={{background:"rgba(0,0,0,0.25)",border:"1px solid rgba(99,102,241,0.15)",borderRadius:8,padding:"10px 10px",display:"flex",flexDirection:"column",gap:8}}>
+
+              {/* Save current output */}
+              <div>
+                <div style={{fontSize:11,color:"var(--text-2)",fontWeight:600,marginBottom:5}}>Save Current Output</div>
+                <div style={{display:"flex",gap:5,marginBottom:5}}>
+                  <input
+                    id="save-name-input"
+                    value={saveName}
+                    onChange={e => setSaveName(e.target.value)}
+                    onKeyDown={e => e.key === "Enter" && handleSaveCurrent()}
+                    placeholder={derivedSaveName || "output-name"}
+                    style={{
+                      flex:1,minWidth:0,background:"var(--surface-2,#111827)",
+                      border:"1px solid var(--border,#1e2d4a)",borderRadius:6,
+                      color:"var(--text-1)",fontSize:11,padding:"5px 8px",
+                      outline:"none",fontFamily:"monospace",
+                    }}
+                  />
+                  <button
+                    id="save-output-btn"
+                    onClick={handleSaveCurrent}
+                    disabled={saveLoading}
+                    style={{
+                      background:"rgba(99,102,241,0.15)",border:"1px solid rgba(99,102,241,0.35)",
+                      borderRadius:6,color:"#a5b4fc",fontSize:11,fontWeight:700,
+                      padding:"5px 10px",cursor:saveLoading?"not-allowed":"pointer",
+                      whiteSpace:"nowrap",transition:"all 0.15s",flexShrink:0,
+                    }}
+                  >
+                    {saveLoading ? "⏳" : "💾 Save"}
+                  </button>
+                </div>
+                {saveMsg && <div style={{fontSize:10,color:saveMsg.startsWith("✓")?"#00c850":"#ef4444"}}>{saveMsg}</div>}
+              </div>
+
+              {/* Divider */}
+              <div style={{borderTop:"1px solid rgba(255,255,255,0.06)"}} />
+
+              {/* Saved list */}
+              <div>
+                <div style={{fontSize:11,color:"var(--text-2)",fontWeight:600,marginBottom:5,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <span>Saved Outputs</span>
+                  <button onClick={fetchSaves} title="Refresh list" style={{background:"none",border:"none",cursor:"pointer",fontSize:11,color:"var(--text-3)",padding:"0 2px"}}>{savesLoading?"⏳":"↻"}</button>
+                </div>
+                {saves.length === 0 && !savesLoading && (
+                  <div style={{fontSize:10,color:"var(--text-3)",textAlign:"center",padding:"8px 0"}}>No saved outputs yet.</div>
+                )}
+                {saves.map(sv => (
+                  <div
+                    key={sv.name}
+                    style={{
+                      display:"flex",alignItems:"center",gap:6,
+                      padding:"6px 8px",borderRadius:5,marginBottom:3,
+                      background:"rgba(255,255,255,0.03)",
+                      border:"1px solid rgba(255,255,255,0.07)",
+                    }}
+                  >
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:11,color:"var(--text-1)",fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                        📁 {sv.name}
+                      </div>
+                      <div style={{fontSize:9,color:"var(--text-3)",fontFamily:"monospace"}}>
+                        {sv.n_floors} floor{sv.n_floors!==1?"s":""} · {sv.timestamp ? sv.timestamp.replace("T"," ").replace("Z"," UTC") : ""}
+                      </div>
+                    </div>
+                    <button
+                      id={`load-save-${sv.name}`}
+                      onClick={() => { onLoadSave?.(sv.name); setShowFloorPlanViewer(true); }}
+                      title={`View saved output: ${sv.name}`}
+                      style={{
+                        background:"rgba(0,200,224,0.12)",border:"1px solid rgba(0,200,224,0.3)",
+                        borderRadius:5,color:"#67e8f9",fontSize:10,fontWeight:700,
+                        padding:"3px 7px",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,
+                      }}
+                    >▶ Load</button>
+                    <button
+                      id={`delete-save-${sv.name}`}
+                      onClick={() => handleDeleteSave(sv.name)}
+                      title={deleteConfirm===sv.name?"Click again to confirm delete":"Delete this save"}
+                      style={{
+                        background:deleteConfirm===sv.name?"rgba(239,68,68,0.15)":"rgba(255,255,255,0.04)",
+                        border:deleteConfirm===sv.name?"1px solid rgba(239,68,68,0.4)":"1px solid rgba(255,255,255,0.1)",
+                        borderRadius:5,
+                        color:deleteConfirm===sv.name?"#ef4444":"var(--text-3)",
+                        fontSize:10,fontWeight:600,
+                        padding:"3px 7px",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,transition:"all 0.15s",
+                      }}
+                    >{deleteConfirm===sv.name?"⚠ Confirm":"✕"}</button>
+                  </div>
+                ))}
+              </div>
+
+            </div>
+          )}
+        </div>
 
         {/* File Browser — folder scanner */}
         <div style={{marginBottom:10}}>

@@ -626,12 +626,15 @@ function RoomInfoChip({ room, floorIdx, modelInfo }) {
   );
 }
 
-export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, roomMode = "polygon" }) {
+export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, roomMode = "polygon", saveName = null }) {
   const canvasRef = useRef(null);
   const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
   const rafRef    = useRef(null);
 
   const floors = modelInfo?.floor_levels ?? [];
+
+  // Base URL prefix — either live API or a saved output
+  const apiBase = saveName ? `/api/saves/${encodeURIComponent(saveName)}` : "/api";
 
   // ── Data fetch state ────────────────────────────────────────────────────────
   const [selectedFloor, setSelectedFloor] = useState(0);
@@ -681,9 +684,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     setHoveredLine(-1); hoveredLineRef.current = -1;
 
     Promise.all([
-      fetch(`/api/walls/${selectedFloor}`).then(r => r.json()),
-      fetch(`/api/rooms/${selectedFloor}`).then(r => r.json()),
-      fetch(`/api/openings/${selectedFloor}`).then(r => r.json()),
+      fetch(`${apiBase}/walls/${selectedFloor}`).then(r => r.json()),
+      fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()),
+      fetch(`${apiBase}/openings/${selectedFloor}`).then(r => r.json()),
     ])
       .then(([w, r, o]) => {
         if (cancelled) return;
@@ -701,7 +704,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       .catch(() => { if (!cancelled) setLoadState("error"); });
 
     return () => { cancelled = true; };
-  }, [selectedFloor, dataVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedFloor, dataVersion, saveName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Undo / Redo ─────────────────────────────────────────────────────────────
   const pushHistory = useCallback((snapshot) => {
@@ -740,7 +743,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       const lines = editedLinesRef.current
         .filter(l => !l.hidden)
         .map(l => l.pts);
-      const r = await fetch(`/api/walls/${selectedFloor}`, {
+      // Route to save-specific endpoint if viewing a save
+      const putUrl = `${apiBase}/walls/${selectedFloor}`;
+      const r = await fetch(putUrl, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ lines, polygon_rooms: roomMode === "polygon" }),
@@ -749,8 +754,8 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       if (!r.ok) { setSaveState("error"); return; }
       setSaveState("saved");
       setIsDirty(false);
-      // Refresh rooms from updated backend
-      fetch(`/api/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => {});
+      // Refresh rooms from updated backend (save or live)
+      fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => {});
       setTimeout(() => setSaveState("idle"), 3000);
     } catch {
       setSaveState("error");
@@ -1016,10 +1021,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
   // Discard all edits
   const handleReset = useCallback(() => {
-    const original = editedLines.filter(l => l.source === "algo");
-    // Re-fetch to be safe
-    setSelectedFloor(f => f); // trigger re-fetch via dataVersion trick... actually just re-fetch directly
-    fetch(`/api/walls/${selectedFloor}`).then(r => r.json()).then(w => {
+    fetch(`${apiBase}/walls/${selectedFloor}`).then(r => r.json()).then(w => {
       const converted = (w?.lines ?? []).map(pts => ({ pts, source: "algo" }));
       setEditedLines(converted); editedLinesRef.current = converted;
       setUndoStack([]); setRedoStack([]);
@@ -1063,7 +1065,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     return `Floor ${i}  (${lvl >= 0 ? "+" : ""}${lvl.toFixed(1)} m)`;
   };
 
-  const dxfUrl = `/api/walls/${selectedFloor}/download`;
+  const dxfUrl = saveName
+    ? `${apiBase}/download/${selectedFloor}`
+    : `${apiBase}/walls/${selectedFloor}/download`;
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -1072,8 +1076,8 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="fpv-header">
         <div className="fpv-title">
-          <span className="fpv-icon">📐</span>
-          <span>Vector Floor Plan</span>
+          <span className="fpv-icon">{saveName ? "💾" : "📐"}</span>
+          <span>{saveName ? `Saved: ${saveName}` : "Vector Floor Plan"}</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {loadState === "loading" && <Badge colour="orange">⏳ Loading…</Badge>}

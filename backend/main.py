@@ -958,6 +958,244 @@ def c2b_generate_walls(params: C2BWallParams):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+# ── Output Saves ──────────────────────────────────────────────────────────────
+
+SAVES_DIR = os.path.join(PROCESSED_DIR, "saves")
+
+# Files copied from processed/ into each save folder
+_SAVE_PATTERNS = [
+    "walls_floor_*.json",
+    "rooms_floor_*.json",
+    "openings_floor_*.json",
+    "floor_*.dxf",
+    "floor_*.svg",
+    "info.json",
+]
+
+
+def _save_dir(name: str) -> str:
+    """Return the absolute path for a save folder (no path traversal)."""
+    safe = os.path.basename(name)
+    return os.path.join(SAVES_DIR, safe)
+
+
+def _read_meta(save_path: str) -> dict | None:
+    meta_path = os.path.join(save_path, "meta.json")
+    if not os.path.exists(meta_path):
+        return None
+    try:
+        with open(meta_path) as fh:
+            return json.load(fh)
+    except Exception:
+        return None
+
+
+class SavePayload(BaseModel):
+    name: str | None = None   # None → derive from xyz path
+
+
+@app.get("/api/saves")
+def list_saves():
+    """List all saved outputs (subfolders in processed/saves/)."""
+    if not os.path.isdir(SAVES_DIR):
+        return {"saves": []}
+    saves = []
+    for entry in sorted(os.scandir(SAVES_DIR), key=lambda e: e.name):
+        if not entry.is_dir():
+            continue
+        meta = _read_meta(entry.path)
+        if meta is None:
+            continue
+        # Count how many floor DXF/wall files are present
+        import glob as _glob
+        n_floors = len(_glob.glob(os.path.join(entry.path, "walls_floor_*.json")))
+        saves.append({
+            "name":      entry.name,
+            "timestamp": meta.get("timestamp"),
+            "xyz_path":  meta.get("xyz_path", ""),
+            "n_floors":  n_floors,
+        })
+    return {"saves": saves}
+
+
+@app.post("/api/saves")
+def create_save(payload: SavePayload):
+    """
+    Copy current processed output (walls, rooms, DXF, SVG, info.json) into
+    a named subfolder under processed/saves/.  Overwrites if already exists.
+    The default name is derived from the parent directory of the .xyz file.
+    """
+    import glob as _glob
+    import shutil
+
+    xyz_path = _get_xyz_path()
+
+    # Derive default name from xyz parent directory
+    if payload.name and payload.name.strip():
+        name = payload.name.strip()
+    else:
+        name = os.path.basename(os.path.dirname(xyz_path))
+        if not name or name in (".", ""):
+            name = "output"
+
+    # Sanitise: keep only alphanumerics, hyphens, underscores, dots
+    import re as _re
+    name = _re.sub(r"[^A-Za-z0-9._-]", "_", name)
+
+    save_path = _save_dir(name)
+    os.makedirs(save_path, exist_ok=True)
+
+    copied = []
+    for pat in _SAVE_PATTERNS:
+        for src in _glob.glob(os.path.join(PROCESSED_DIR, pat)):
+            dst = os.path.join(save_path, os.path.basename(src))
+            shutil.copy2(src, dst)
+            copied.append(os.path.basename(src))
+
+    # Write meta
+    import time as _time
+    meta = {
+        "name":      name,
+        "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "xyz_path":  xyz_path,
+    }
+    with open(os.path.join(save_path, "meta.json"), "w") as fh:
+        json.dump(meta, fh, indent=2)
+
+    return {"status": "ok", "name": name, "files_saved": len(copied), "files": copied}
+
+
+@app.delete("/api/saves/{name}")
+def delete_save(name: str):
+    """Delete a saved output folder."""
+    import shutil
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    shutil.rmtree(save_path)
+    return {"status": "deleted", "name": name}
+
+
+@app.get("/api/saves/{name}/walls/{floor_idx}")
+def save_get_walls(name: str, floor_idx: int):
+    save_path = _save_dir(name)
+    wall_path = os.path.join(save_path, f"walls_floor_{floor_idx}.json")
+    if not os.path.exists(wall_path):
+        return JSONResponse({"status": "not_processed", "lines": []})
+    with open(wall_path) as f:
+        return json.load(f)
+
+
+@app.put("/api/saves/{name}/walls/{floor_idx}")
+def save_edit_walls(name: str, floor_idx: int, payload: WallsEditPayload):
+    """
+    Persist user-edited wall lines for a saved output → re-run room detection
+    → re-export DXF/SVG inside the save folder.
+    """
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+
+    wall_path = os.path.join(save_path, f"walls_floor_{floor_idx}.json")
+    existing: dict = {"floor_idx": floor_idx}
+    if os.path.exists(wall_path):
+        with open(wall_path) as f:
+            existing = json.load(f)
+    existing["lines"] = payload.lines
+    existing["source"] = f"user-edited ({len(payload.lines)} walls)"
+    with open(wall_path, "w") as f:
+        json.dump(existing, f)
+
+    # Re-run room detection inside save folder
+    n_rooms = 0
+    room_warning = None
+    try:
+        room_cfg = {
+            "floor_idx":              floor_idx,
+            "wall_thickness_m":       0.20,
+            "extend_m":               0.45,
+            "min_seg_m":              0.40,
+            "min_room_m2":            0.80,
+            "max_room_m2":            800.0,
+            "min_room_width_m":       0.60,
+            "polygon_rooms":          payload.polygon_rooms,
+            "polygon_approx_m":       0.05,
+            "manhattan_snap_polygon": True,
+            "polygon_smooth_m":       0.15,
+            "save_debug":             False,
+        }
+        rm = detect_rooms_for_floor(floor_idx, room_cfg, processed_dir=save_path)
+        n_rooms = rm["n_rooms"]
+    except Exception as exc:
+        room_warning = str(exc)
+
+    # Re-export DXF + SVG into save folder
+    dxf_warning = None
+    try:
+        export_floor_dxf(floor_idx, save_path)
+    except Exception as exc:
+        dxf_warning = str(exc)
+
+    result = {"status": "saved", "n_walls": len(payload.lines), "n_rooms": n_rooms}
+    if room_warning:
+        result["room_warning"] = room_warning
+    if dxf_warning:
+        result["dxf_warning"] = dxf_warning
+    return result
+
+
+@app.get("/api/saves/{name}/rooms/{floor_idx}")
+def save_get_rooms(name: str, floor_idx: int):
+    save_path = _save_dir(name)
+    path = os.path.join(save_path, f"rooms_floor_{floor_idx}.json")
+    if not os.path.exists(path):
+        return JSONResponse({"status": "not_processed", "rooms": []})
+    with open(path) as f:
+        return json.load(f)
+
+
+@app.get("/api/saves/{name}/openings/{floor_idx}")
+def save_get_openings(name: str, floor_idx: int):
+    save_path = _save_dir(name)
+    path = os.path.join(save_path, f"openings_floor_{floor_idx}.json")
+    if not os.path.exists(path):
+        return JSONResponse({"status": "not_processed", "openings": []})
+    with open(path) as f:
+        return json.load(f)
+
+
+@app.get("/api/saves/{name}/svg/{floor_idx}")
+def save_get_svg(name: str, floor_idx: int):
+    save_path = _save_dir(name)
+    svg_path = os.path.join(save_path, f"floor_{floor_idx}.svg")
+    if not os.path.exists(svg_path):
+        raise HTTPException(status_code=404, detail="SVG not found in this save.")
+    return FileResponse(svg_path, media_type="image/svg+xml")
+
+
+@app.get("/api/saves/{name}/download/{floor_idx}")
+def save_download_dxf(name: str, floor_idx: int):
+    save_path = _save_dir(name)
+    dxf_path = os.path.join(save_path, f"floor_{floor_idx}.dxf")
+    if not os.path.exists(dxf_path):
+        raise HTTPException(status_code=404, detail="DXF not found in this save.")
+    return FileResponse(
+        dxf_path, media_type="application/dxf",
+        filename=f"{name}_floor_{floor_idx}.dxf"
+    )
+
+
+@app.get("/api/saves/{name}/info")
+def save_get_info(name: str):
+    """Return info.json from a save (contains floor_levels etc.)."""
+    save_path = _save_dir(name)
+    path = os.path.join(save_path, "info.json")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="info.json not found in this save.")
+    with open(path) as f:
+        return json.load(f)
+
+
 # ── Serve React frontend ──────────────────────────────────────────────────────
 # Mount the compiled Vite bundle as the root static site.
 # IMPORTANT: this mount must come LAST — FastAPI routes registered above it

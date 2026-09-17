@@ -68,7 +68,7 @@ import numpy as np
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
+def detect_rooms_for_floor(floor_idx: int, config: dict, processed_dir: str | None = None) -> dict:
     """
     Detect room boundaries for a given floor.
 
@@ -77,9 +77,13 @@ def detect_rooms_for_floor(floor_idx: int, config: dict) -> dict:
              processed/debug_floor<N>_rooms.png  (if save_debug=True)
              processed/debug_floor<N>_rooms_canvas.png (wall raster, if save_debug)
     Returns: result dict  { floor_idx, n_rooms, rooms }
+
+    Optional processed_dir overrides the default (env var / derived) path so
+    room detection can be run against an arbitrary directory (e.g. a save folder).
     """
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    processed_dir = os.environ.get("PROCESSED_DIR", os.path.join(base_dir, "processed"))
+    if processed_dir is None:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        processed_dir = os.environ.get("PROCESSED_DIR", os.path.join(base_dir, "processed"))
 
     wall_path = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
     if not os.path.exists(wall_path):

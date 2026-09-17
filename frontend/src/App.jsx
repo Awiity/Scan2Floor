@@ -80,6 +80,10 @@ export default function App() {
   // 'polygon' = new non-rectangular mode; 'rectangular' = legacy bbox-only mode
   const [roomMode, setRoomMode] = useState("polygon");
 
+  /* ---------- loaded save -------------- */
+  // null = live data; string = name of the loaded save being viewed
+  const [loadedSave, setLoadedSave] = useState(null);
+
   // Fetch rooms for the active floor (defaulting to floor 0 when activeFloor is "all")
   useEffect(() => {
     const targetFloor = (activeFloor === "all" || activeFloor == null) ? 0 : activeFloor;
@@ -182,6 +186,7 @@ export default function App() {
           onWallsDetected={handleWallsDetected}
           roomMode={roomMode}
           setRoomMode={setRoomMode}
+          onLoadSave={setLoadedSave}
         />
 
         {/* Sidebar toggle tab */}
@@ -278,6 +283,32 @@ export default function App() {
             />
           )}
 
+          {/* Saved-output banner */}
+          {loadedSave && (
+            <div style={{
+              position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
+              zIndex: 10, display: "flex", alignItems: "center", gap: 8,
+              background: "rgba(99,102,241,0.18)", backdropFilter: "blur(8px)",
+              border: "1px solid rgba(99,102,241,0.45)", borderRadius: 8,
+              padding: "6px 14px", fontSize: 12, fontWeight: 700,
+              color: "#a5b4fc", fontFamily: "Inter, sans-serif",
+              boxShadow: "0 4px 20px rgba(99,102,241,0.2)",
+            }}>
+              <span>💾 Viewing saved output:</span>
+              <span style={{ color: "#e0e7ff" }}>{loadedSave}</span>
+              <button
+                onClick={() => setLoadedSave(null)}
+                title="Return to live data"
+                style={{
+                  marginLeft: 4, background: "rgba(255,255,255,0.08)",
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  borderRadius: 5, color: "#c7d2fe", fontSize: 11,
+                  padding: "2px 7px", cursor: "pointer",
+                }}
+              >✕ Live</button>
+            </div>
+          )}
+
           {/* Processing banner — only when a job is actively running */}
           {backendStatus === "processing" && (
             <div className="processing-banner">
@@ -343,6 +374,7 @@ export default function App() {
               onSelectRoom={setSelectedRoomId}
               onSelectFloor={setActiveFloor}
               roomMode={roomMode}
+              saveName={loadedSave}
             />
           </div>
         )}
