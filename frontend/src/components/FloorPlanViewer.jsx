@@ -93,6 +93,68 @@ function computeSnap(wx, wz, editedLines, cam, pixThresh = 14) {
   return { pt: [Math.round(wx / g) * g, Math.round(wz / g) * g], kind: "grid" };
 }
 
+/**
+ * Projects (wx, wz) onto the nearest 45° axis emanating from (fromX, fromZ).
+ * Returns { pt, angle, dist } — the constrained world point, the snapped angle
+ * in radians, and the distance from fromX/fromZ.
+ */
+function applyAngleConstraint(wx, wz, fromX, fromZ) {
+  const dx = wx - fromX, dz = wz - fromZ;
+  const raw = Math.atan2(dz, dx);
+  const snapAngle = Math.round(raw / (Math.PI / 4)) * (Math.PI / 4);
+  const dist = Math.hypot(dx, dz);
+  return {
+    pt:    [fromX + Math.cos(snapAngle) * dist, fromZ + Math.sin(snapAngle) * dist],
+    angle: snapAngle,
+    dist,
+  };
+}
+
+/**
+ * Like computeSnap but after applying an angle constraint from `fromPt`.
+ * Endpoint snapping is restricted to points within `epPixThresh` of the
+ * constrained ray (so you can still snap-to-endpoint along the axis).
+ */
+function computeSnapConstrained(wx, wz, editedLines, cam, fromX, fromZ, pixThresh = 14) {
+  const { pt: [cx, cz], angle, dist } = applyAngleConstraint(wx, wz, fromX, fromZ);
+  const cosA = Math.cos(angle), sinA = Math.sin(angle);
+  // Try to find an endpoint close to the constrained ray
+  const worldEpThresh = pixThresh / cam.scale;
+  let bestEp = worldEpThresh, epPt = null;
+  for (const { pts: [[x1, z1], [x2, z2]] } of editedLines) {
+    for (const [ex, ez] of [[x1, z1], [x2, z2]]) {
+      // Project endpoint onto the constrained axis
+      const tPt = (ex - fromX) * cosA + (ez - fromZ) * sinA; // scalar along ray
+      if (tPt < 0) continue; // behind start point
+      const projX = fromX + tPt * cosA;
+      const projZ = fromZ + tPt * sinA;
+      const perpDist = Math.hypot(ex - projX, ez - projZ);
+      if (perpDist < worldEpThresh && perpDist < bestEp) {
+        // Snap to the endpoint projected onto the ray (keeps the angle exact)
+        bestEp = perpDist;
+        epPt = [projX, projZ]; // stay on the constrained axis
+      }
+    }
+  }
+  const finalPt = epPt ?? cx !== undefined ? (epPt ?? [cx, cz]) : [cx, cz];
+  // Grid-snap along the constrained ray when no endpoint found
+  let snappedPt;
+  if (epPt) {
+    snappedPt = epPt;
+  } else {
+    const g = 0.5;
+    const tSnapped = Math.round(dist / g) * g;
+    snappedPt = [fromX + Math.cos(angle) * tSnapped, fromZ + Math.sin(angle) * tSnapped];
+  }
+  return {
+    pt:   snappedPt,
+    kind: epPt ? "endpoint" : "angle",
+    angle,
+    dist: Math.hypot(snappedPt[0] - fromX, snappedPt[1] - fromZ),
+    fromPt: [fromX, fromZ],
+  };
+}
+
 /** Find index of line closest to (wx,wz) within pixThresh px, or -1. */
 function findNearestLine(wx, wz, editedLines, cam, pixThresh = 10) {
   const worldThresh = pixThresh / cam.scale;
@@ -105,7 +167,79 @@ function findNearestLine(wx, wz, editedLines, cam, pixThresh = 10) {
   return idx;
 }
 
+/**
+ * Returns true if segment (x1,z1)→(x2,z2) intersects or lies within the
+ * axis-aligned world-space rectangle [rxMin,rxMax] × [rzMin,rzMax].
+ */
+function segIntersectsRect(x1, z1, x2, z2, rxMin, rxMax, rzMin, rzMax) {
+  // Both endpoints inside? → fully contained
+  const p1In = x1 >= rxMin && x1 <= rxMax && z1 >= rzMin && z1 <= rzMax;
+  const p2In = x2 >= rxMin && x2 <= rxMax && z2 >= rzMin && z2 <= rzMax;
+  if (p1In || p2In) return true;
+  // Cohen-Sutherland clip test — check if segment crosses any of the 4 edges
+  const dx = x2 - x1, dz = z2 - z1;
+  const tests = [
+    [rzMin, dz, z1, dx, x1, rxMin, rxMax],   // bottom edge (z = rzMin)
+    [rzMax, dz, z1, dx, x1, rxMin, rxMax],   // top edge
+    [rxMin, dx, x1, dz, z1, rzMin, rzMax],   // left edge
+    [rxMax, dx, x1, dz, z1, rzMin, rzMax],   // right edge
+  ];
+  for (const [edge, dPar, startPar, dPerp, startPerp, perpMin, perpMax] of tests) {
+    if (dPar === 0) continue;
+    const t = (edge - startPar) / dPar;
+    if (t < 0 || t > 1) continue;
+    const perp = startPerp + t * dPerp;
+    if (perp >= perpMin && perp <= perpMax) return true;
+  }
+  return false;
+}
+
 // ── Draw functions ─────────────────────────────────────────────────────────────
+
+/** Draw the drag-selection box overlay (canvas-space coords). */
+function drawBoxSelect(ctx, box, mode) {
+  if (!box) return;
+  const { cx1, cy1, cx2, cy2 } = box;
+  const x = Math.min(cx1, cx2), y = Math.min(cy1, cy2);
+  const w = Math.abs(cx2 - cx1), h = Math.abs(cy2 - cy1);
+  if (w < 2 && h < 2) return;
+  const isDelete = mode === "delete";
+  const strokeCol = isDelete ? "rgba(255,80,80,0.9)"   : "rgba(74,160,220,0.9)";
+  const fillCol   = isDelete ? "rgba(255,60,60,0.08)"  : "rgba(74,140,220,0.08)";
+  const glowCol   = isDelete ? "rgba(255,80,80,0.25)"  : "rgba(74,160,220,0.25)";
+  ctx.save();
+  // Glow layer
+  ctx.strokeStyle = glowCol;
+  ctx.lineWidth = 4;
+  ctx.setLineDash([6, 4]);
+  ctx.strokeRect(x, y, w, h);
+  // Fill
+  ctx.fillStyle = fillCol;
+  ctx.fillRect(x, y, w, h);
+  // Sharp border
+  ctx.strokeStyle = strokeCol;
+  ctx.lineWidth = 1.5;
+  ctx.shadowColor = strokeCol;
+  ctx.shadowBlur = 6;
+  ctx.strokeRect(x, y, w, h);
+  ctx.setLineDash([]);
+  // Corner ticks
+  const tick = 8;
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = strokeCol;
+  ctx.lineWidth = 2;
+  const corners = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]];
+  const dirs = [[ 1, 1], [-1, 1], [ 1,-1], [-1,-1]];
+  for (let i = 0; i < 4; i++) {
+    const [cx, cy] = corners[i];
+    const [dx, dy] = dirs[i];
+    ctx.beginPath();
+    ctx.moveTo(cx, cy); ctx.lineTo(cx + dx * tick, cy);
+    ctx.moveTo(cx, cy); ctx.lineTo(cx, cy + dy * tick);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 
 function drawGrid(ctx, cam, w, h) {
   const step = 5 * cam.scale;
@@ -228,6 +362,62 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
   if (editMode === "add" && addStart && snapInfo) {
     const [ax, az] = addStart, [sx, sz] = snapInfo.pt;
     const [cax, cay] = toCanvas(ax, az, cam), [csx, csy] = toCanvas(sx, sz, cam);
+
+    // ── Angle-constraint ghost guide line ───────────────────────────────────
+    if (snapInfo.kind === "angle" || snapInfo.kind === "endpoint" && snapInfo.angle != null) {
+      const angle = snapInfo.angle;
+      // Extend the axis line far beyond the canvas in both directions
+      const FAR = 4000;
+      const cosA = Math.cos(angle), sinA = Math.sin(angle);
+      // Convert axis direction to canvas scale
+      const cdx = cosA * cam.scale, cdz = sinA * cam.scale;
+      ctx.save();
+      ctx.setLineDash([4, 8]);
+      ctx.strokeStyle = "rgba(0,200,224,0.18)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cax - cdx * FAR, cay - cdz * FAR);
+      ctx.lineTo(cax + cdx * FAR, cay + cdz * FAR);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // Angle badge (e.g. "90°  4.5 m")
+      const angleDeg = Math.round(((angle * 180 / Math.PI) % 360 + 360) % 360);
+      const dist = snapInfo.dist ?? Math.hypot(sx - ax, sz - az);
+      const label = `${angleDeg}°  ${dist.toFixed(2)} m`;
+      // Position label near the cursor
+      const midCx = (cax + csx) / 2, midCy = (cay + csy) / 2;
+      ctx.save();
+      ctx.font = 'bold 10px "JetBrains Mono", monospace';
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = "rgba(7,11,24,0.75)";
+      ctx.fillRect(midCx - tw / 2 - 5, midCy - 9, tw + 10, 18);
+      ctx.fillStyle = "#00c8e0";
+      ctx.fillText(label, midCx, midCy);
+      ctx.restore();
+    } else {
+      // Free snap — show length readout
+      const dist = Math.hypot(sx - ax, sz - az);
+      if (dist > 0.01) {
+        const rawAngle = Math.atan2(sz - az, sx - ax);
+        const angleDeg = Math.round(((rawAngle * 180 / Math.PI) % 360 + 360) % 360);
+        const label = `${angleDeg}°  ${dist.toFixed(2)} m`;
+        const midCx = (cax + csx) / 2, midCy = (cay + csy) / 2;
+        ctx.save();
+        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = "rgba(7,11,24,0.65)";
+        ctx.fillRect(midCx - tw / 2 - 4, midCy - 8, tw + 8, 16);
+        ctx.fillStyle = "rgba(251,191,36,0.75)";
+        ctx.fillText(label, midCx, midCy);
+        ctx.restore();
+      }
+    }
+
+    // Wall preview line
     ctx.save();
     ctx.setLineDash([6, 4]); ctx.lineCap = "round";
     ctx.strokeStyle = C.wallPreview; ctx.lineWidth = lw;
@@ -244,8 +434,9 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
   if (snapInfo && editMode !== "select") {
     const [sx, sz] = snapInfo.pt;
     const [csx, csy] = toCanvas(sx, sz, cam);
+    const isAngle = snapInfo.kind === "angle";
     const r = snapInfo.kind === "endpoint" ? 7 : 5;
-    const color = snapInfo.kind === "endpoint" ? C.snapEp : C.snapGrid;
+    const color = snapInfo.kind === "endpoint" ? C.snapEp : isAngle ? "#00c8e0" : C.snapGrid;
     ctx.save();
     ctx.strokeStyle = color; ctx.lineWidth = snapInfo.kind === "endpoint" ? 2 : 1;
     const cross = r + 4;
@@ -463,22 +654,33 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
 const MODE_HINTS = {
   select: "Drag to pan · Scroll to zoom · Double-click to fit · Click room to select",
   add:    "Click to place first point → click again to draw wall · Esc to cancel",
-  delete: "Hover over a wall to highlight · Click to delete · Esc to exit",
-  hide:   "Click a wall to hide/unhide it — hidden walls are excluded from room recalculation",
+  delete: "Click a wall to delete · Hold & drag to box-delete all walls in area · Esc to exit",
+  hide:   "Click a wall to hide/unhide · Hold & drag to box-hide all walls in area · Esc to exit",
 };
+const ADD_HINT_FREE    = "Click to set first point  ·  then click to finish wall  ·  Esc to cancel";
+const ADD_HINT_PLACED  = "Click to finish  ·  Hold Shift → lock to 0°/45°/90°/135° axis  ·  Esc to cancel";
+const ADD_HINT_LOCKED  = "🔒 Angle locked — click to place wall  ·  Release Shift to free-draw  ·  Esc to cancel";
 
-function ModeHint({ mode, addStep }) {
-  const text = mode === "add" && addStep
-    ? "First point placed · Click to set second point · Esc to cancel"
-    : MODE_HINTS[mode];
+function ModeHint({ mode, addStep, angleConstrained }) {
+  let text;
+  if (mode === "add") {
+    if (!addStep)          text = ADD_HINT_FREE;
+    else if (angleConstrained) text = ADD_HINT_LOCKED;
+    else                   text = ADD_HINT_PLACED;
+  } else {
+    text = MODE_HINTS[mode];
+  }
+  const isLocked = mode === "add" && angleConstrained;
   return (
     <div style={{
       position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)",
-      background: "rgba(7,11,24,0.75)", border: "1px solid rgba(255,255,255,0.07)",
+      background: isLocked ? "rgba(0,30,60,0.88)" : "rgba(7,11,24,0.75)",
+      border: isLocked ? "1px solid rgba(0,200,224,0.35)" : "1px solid rgba(255,255,255,0.07)",
       borderRadius: 6, padding: "4px 12px",
-      fontSize: 10, color: mode === "select" ? "rgba(200,220,255,0.4)" : "#fbbf24",
+      fontSize: 10,
+      color: isLocked ? "#00c8e0" : mode === "select" ? "rgba(200,220,255,0.4)" : "#fbbf24",
       fontFamily: "Inter, sans-serif", whiteSpace: "nowrap", pointerEvents: "none",
-      transition: "color 0.2s",
+      transition: "all 0.15s",
     }}>
       {text}
     </div>
@@ -668,6 +870,12 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const hoveredLineRef = useRef(-1);
   const snapRef        = useRef(null);
   const dragRef        = useRef(null);
+  // Box-select drag state for delete/hide modes
+  // { startCx, startCy, cx1, cy1, cx2, cy2, moved }
+  const boxSelectRef   = useRef(null);
+  // Tracks whether Shift is currently held (for angle-snap in add mode)
+  const shiftRef       = useRef(false);
+  const [angleConstrained, setAngleConstrained] = useState(false);
 
   useEffect(() => { editModeRef.current    = editMode;    }, [editMode]);
   useEffect(() => { editedLinesRef.current = editedLines; }, [editedLines]);
@@ -785,6 +993,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         editModeRef.current,
       );
       drawOpenings(ctx, openingsData?.openings, cam);
+      drawBoxSelect(ctx, boxSelectRef.current, editModeRef.current);
       drawScale(ctx, cam, w, h);
       drawCompass(ctx, w);
     });
@@ -872,14 +1081,25 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
   // ── Pointer events ──────────────────────────────────────────────────────────
   const onMouseDown = useCallback((e) => {
-    if (editModeRef.current === "select") {
+    if (e.button !== 0) return;
+    const mode = editModeRef.current;
+    if (mode === "select") {
       dragRef.current = { startX: e.clientX, startY: e.clientY, ox: camRef.current.ox, oy: camRef.current.oy };
+    } else if (mode === "delete" || mode === "hide") {
+      const cvs = canvasRef.current;
+      if (!cvs) return;
+      const rect = cvs.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      boxSelectRef.current = { startCx: cx, startCy: cy, cx1: cx, cy1: cy, cx2: cx, cy2: cy, moved: false };
     }
   }, []);
 
   const onMouseMove = useCallback((e) => {
+    const mode = editModeRef.current;
+
     // Pan in select mode
-    if (editModeRef.current === "select" && dragRef.current) {
+    if (mode === "select" && dragRef.current) {
       const dx = e.clientX - dragRef.current.startX;
       const dy = e.clientY - dragRef.current.startY;
       camRef.current = { ...camRef.current, ox: dragRef.current.ox + dx, oy: dragRef.current.oy + dy };
@@ -887,24 +1107,118 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       return;
     }
 
-    // Snap indicator and hover highlight in edit modes
-    if (editModeRef.current !== "select") {
-      const [wx, wz] = getWorldFromEvent(e);
-      snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current);
+    // Box-select drag in delete/hide modes
+    if ((mode === "delete" || mode === "hide") && boxSelectRef.current) {
+      const cvs = canvasRef.current;
+      if (!cvs) return;
+      const rect = cvs.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const { startCx, startCy } = boxSelectRef.current;
+      const moved = Math.hypot(cx - startCx, cy - startCy) > 5;
+      boxSelectRef.current = { startCx, startCy, cx1: startCx, cy1: startCy, cx2: cx, cy2: cy, moved };
+      // Suppress individual hover highlight while box-selecting
+      hoveredLineRef.current = -1;
+      setHoveredLine(-1);
+      scheduleDraw();
+      return;
+    }
 
-      if (editModeRef.current === "delete" || editModeRef.current === "hide") {
+    // Snap indicator and hover highlight in edit modes
+    if (mode !== "select") {
+      const [wx, wz] = getWorldFromEvent(e);
+      const shiftHeld = e.shiftKey;
+      shiftRef.current = shiftHeld;
+
+      if (mode === "add" && addStepRef.current && shiftHeld) {
+        // Angle-constrained snap
+        const [ax, az] = addStepRef.current;
+        snapRef.current = computeSnapConstrained(wx, wz, editedLinesRef.current, camRef.current, ax, az);
+        if (!angleConstrained) setAngleConstrained(true);
+      } else {
+        snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current);
+        if (angleConstrained) setAngleConstrained(false);
+      }
+
+      if (mode === "delete" || mode === "hide") {
         const idx = findNearestLine(wx, wz, editedLinesRef.current, camRef.current);
         hoveredLineRef.current = idx;
         setHoveredLine(idx);   // for cursor CSS
       }
       scheduleDraw();
+    } else {
+      // Reset angle lock when not in add mode
+      if (angleConstrained) setAngleConstrained(false);
     }
-  }, [scheduleDraw, getWorldFromEvent]);
+  }, [scheduleDraw, getWorldFromEvent, angleConstrained]);
 
-  const onMouseUp = useCallback(() => { dragRef.current = null; }, []);
+  const onMouseUp = useCallback((e) => {
+    // Pan drag end
+    if (dragRef.current) { dragRef.current = null; return; }
+
+    // Box-select commit
+    const box = boxSelectRef.current;
+    if (box && box.moved) {
+      boxSelectRef.current = null;
+      const cam = camRef.current;
+      // Convert canvas-space box to world-space rect
+      const [wx1, wz1] = toWorld(Math.min(box.cx1, box.cx2), Math.min(box.cy1, box.cy2), cam);
+      const [wx2, wz2] = toWorld(Math.max(box.cx1, box.cx2), Math.max(box.cy1, box.cy2), cam);
+      const rxMin = Math.min(wx1, wx2), rxMax = Math.max(wx1, wx2);
+      const rzMin = Math.min(wz1, wz2), rzMax = Math.max(wz1, wz2);
+
+      const mode = editModeRef.current;
+      const lines = editedLinesRef.current;
+      const hits = lines.filter(({ pts: [[x1, z1], [x2, z2]] }) =>
+        segIntersectsRect(x1, z1, x2, z2, rxMin, rxMax, rzMin, rzMax)
+      );
+      if (hits.length > 0) {
+        pushHistory(lines);
+        let newLines;
+        if (mode === "delete") {
+          newLines = lines.filter(({ pts: [[x1, z1], [x2, z2]] }) =>
+            !segIntersectsRect(x1, z1, x2, z2, rxMin, rxMax, rzMin, rzMax)
+          );
+        } else {
+          // hide: toggle hidden flag on all intersecting walls
+          // Determine majority state — if most are visible, hide all; otherwise unhide all
+          const hiddenHits = hits.filter(l => l.hidden).length;
+          const shouldHide = hiddenHits < hits.length / 2;
+          newLines = lines.map(line => {
+            const [[x1, z1], [x2, z2]] = line.pts;
+            if (segIntersectsRect(x1, z1, x2, z2, rxMin, rxMax, rzMin, rzMax)) {
+              return { ...line, hidden: shouldHide };
+            }
+            return line;
+          });
+        }
+        setEditedLines(newLines); editedLinesRef.current = newLines;
+        setIsDirty(true);
+      }
+      hoveredLineRef.current = -1; setHoveredLine(-1);
+      scheduleDraw();
+      return;
+    }
+
+    // No drag box (or tiny move) — clear it so onClick fires normally
+    if (box) {
+      boxSelectRef.current = null;
+      scheduleDraw();
+    }
+  }, [pushHistory, scheduleDraw]);
 
   const onClick = useCallback((e) => {
     const mode = editModeRef.current;
+
+    // Suppress click if a box-select drag just committed (onMouseUp already handled it)
+    // We detect this by checking that boxSelectRef is now null but was a moved drag.
+    // Since onMouseUp clears it before onClick fires, we use a tiny flag instead.
+    if (mode === "delete" || mode === "hide") {
+      // If box was moved (and handled in onMouseUp), boxSelectRef is already null.
+      // We rely on hoveredLineRef being reset to -1 during a box drag — which means
+      // a click on nothing is a no-op anyway. Just need to avoid double-acting.
+      // A safe guard: if the box ref still exists here it means it was NOT a drag.
+    }
 
     if (mode === "add") {
       const snap = snapRef.current;
@@ -928,6 +1242,8 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     }
 
     if (mode === "delete") {
+      // Skip if a box-select drag was just completed (boxSelectRef cleared in onMouseUp)
+      if (boxSelectRef.current !== null) return; // still active (shouldn't happen)
       const idx = hoveredLineRef.current;
       if (idx >= 0) {
         const newLines = editedLinesRef.current.filter((_, i) => i !== idx);
@@ -942,6 +1258,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     }
 
     if (mode === "hide") {
+      if (boxSelectRef.current !== null) return;
       const idx = hoveredLineRef.current;
       if (idx >= 0) {
         // Toggle hidden flag on the wall
@@ -1055,7 +1372,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     ? (dragRef.current ? "grabbing" : "grab")
     : editMode === "add"
     ? "crosshair"
-    : (hoveredLine >= 0 ? "pointer" : "default");
+    : (boxSelectRef.current?.moved
+        ? "crosshair"
+        : hoveredLine >= 0 ? "pointer" : "crosshair");
 
   const floorLabel = (i) => {
     if (!floors.length) return `Floor ${i}`;
@@ -1163,7 +1482,11 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
           onMouseDown={onMouseDown}
           onMouseMove={onMouseMove}
           onMouseUp={onMouseUp}
-          onMouseLeave={onMouseUp}
+          onMouseLeave={(e) => {
+            // Cancel box-select if mouse leaves canvas
+            if (boxSelectRef.current) { boxSelectRef.current = null; scheduleDraw(); }
+            onMouseUp(e);
+          }}
           onClick={onClick}
           onWheel={onWheel}
           onDoubleClick={() => {
@@ -1234,7 +1557,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
         {/* Mode hint bar */}
         {loadState === "ready" && wallCount > 0 && (
-          <ModeHint mode={editMode} addStep={addStep} />
+          <ModeHint mode={editMode} addStep={addStep} angleConstrained={angleConstrained} />
         )}
       </div>
 
