@@ -577,18 +577,6 @@ class OpeningParams(BaseModel):
 def generate_openings(params: OpeningParams):
     """Run opening detection standalone — currently disabled (results unreliable)."""
     # TODO: Door/Window detection disabled — results were unreliable.
-    # try:
-    #     result = detect_openings_for_floor(params.floor_idx, params.model_dump())
-    #     export_floor_dxf(params.floor_idx, PROCESSED_DIR)
-    #     return {
-    #         "status": "success",
-    #         "n_doors": result["n_doors"],
-    #         "n_windows": result["n_windows"],
-    #     }
-    # except FileNotFoundError as e:
-    #     raise HTTPException(status_code=404, detail=str(e))
-    # except Exception as e:
-    #     raise HTTPException(status_code=500, detail=str(e))
     return {"status": "disabled", "n_doors": 0, "n_windows": 0}
 
 
@@ -596,9 +584,31 @@ def generate_openings(params: OpeningParams):
 def get_openings(floor_idx: int):
     path = os.path.join(PROCESSED_DIR, f"openings_floor_{floor_idx}.json")
     if not os.path.exists(path):
-        return JSONResponse({"status": "not_processed", "openings": []})
+        return JSONResponse({"status": "not_processed", "openings": [], "user_openings": []})
     with open(path) as f:
         return json.load(f)
+
+
+class UserOpeningsPayload(BaseModel):
+    user_openings: list  # list of manually-placed door/window objects
+
+
+@app.put("/api/openings/{floor_idx}")
+def save_user_openings(floor_idx: int, payload: UserOpeningsPayload):
+    """
+    Persist manually-placed doors and windows from the Room Editor.
+    Stores in the `user_openings` field of openings_floor_N.json,
+    keeping any auto-detected openings intact.
+    """
+    path = os.path.join(PROCESSED_DIR, f"openings_floor_{floor_idx}.json")
+    existing: dict = {"status": "not_processed", "openings": []}
+    if os.path.exists(path):
+        with open(path) as f:
+            existing = json.load(f)
+    existing["user_openings"] = payload.user_openings
+    with open(path, "w") as f:
+        json.dump(existing, f, indent=2)
+    return {"status": "saved", "n_user_openings": len(payload.user_openings)}
 
 
 # ── Phase M3: Room Detection ──────────────────────────────────────────────────
@@ -1159,9 +1169,29 @@ def save_get_openings(name: str, floor_idx: int):
     save_path = _save_dir(name)
     path = os.path.join(save_path, f"openings_floor_{floor_idx}.json")
     if not os.path.exists(path):
-        return JSONResponse({"status": "not_processed", "openings": []})
+        return JSONResponse({"status": "not_processed", "openings": [], "user_openings": []})
     with open(path) as f:
         return json.load(f)
+
+
+@app.put("/api/saves/{name}/openings/{floor_idx}")
+def save_put_user_openings(name: str, floor_idx: int, payload: UserOpeningsPayload):
+    """
+    Persist manually-placed doors and windows for a named save.
+    Stores in the `user_openings` field of openings_floor_N.json inside the save folder.
+    """
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    path = os.path.join(save_path, f"openings_floor_{floor_idx}.json")
+    existing: dict = {"status": "not_processed", "openings": []}
+    if os.path.exists(path):
+        with open(path) as f:
+            existing = json.load(f)
+    existing["user_openings"] = payload.user_openings
+    with open(path, "w") as f:
+        json.dump(existing, f, indent=2)
+    return {"status": "saved", "n_user_openings": len(payload.user_openings)}
 
 
 @app.get("/api/saves/{name}/svg/{floor_idx}")

@@ -14,6 +14,7 @@ import FloorPlanPanel from "./components/FloorPlanPanel";
 import FloorPlanViewer from "./components/FloorPlanViewer";
 import RoomListPanel from "./components/RoomListPanel";
 import CameraFocuser from "./components/CameraFocuser";
+import RoomEditorPanel from "./components/RoomEditorPanel";
 
 const POLL_MS = 7 * 1000;
 
@@ -30,6 +31,25 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fpFloor, setFpFloor] = useState(0);
   const [activeFloor, setActiveFloor] = useState("all");
+
+  /* ---------- theme ------------------- */
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem("s2f_theme") || "dark";
+    } catch {
+      return "dark";
+    }
+  });
+  const toggleTheme = () => {
+    setTheme((t) => {
+      const next = t === "dark" ? "light" : "dark";
+      try {
+        localStorage.setItem("s2f_theme", next);
+      } catch {}
+      return next;
+    });
+  };
+  const isDark = theme === "dark";
 
   /* ---------- fpv panel width (resizable) --------- */
   const MIN_FPV_WIDTH = 560;
@@ -88,7 +108,8 @@ export default function App() {
   useEffect(() => {
     const targetFloor = (activeFloor === "all" || activeFloor == null) ? 0 : activeFloor;
     let cancelled = false;
-    fetch(`/api/rooms/${targetFloor}`)
+    const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+    fetch(`${apiBase}/rooms/${targetFloor}`)
       .then((r) => r.json())
       .then((d) => {
         if (!cancelled) setRoomsData(d ? { ...d, targetFloor } : null);
@@ -96,8 +117,10 @@ export default function App() {
       .catch(() => {
         if (!cancelled) setRoomsData(null);
       });
-    return () => { cancelled = true; };
-  }, [activeFloor, floorDataVersion]);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeFloor, floorDataVersion, loadedSave]);
 
   // Clear room selection when activeFloor changes
   useEffect(() => {
@@ -105,71 +128,80 @@ export default function App() {
   }, [activeFloor]);
 
   // Derive the full room object for the currently selected room
-  const highlightedRoom = selectedRoomId != null
-    ? (() => {
-        const found = (roomsData?.rooms ?? []).find((r) => r.id === selectedRoomId);
-        return found ? { ...found, floor_idx: roomsData?.targetFloor ?? 0 } : null;
-      })()
-    : null;
+  const highlightedRoom =
+    selectedRoomId != null
+      ? (roomsData?.rooms ?? []).find((r) => r.id === selectedRoomId) ?? null
+      : null;
 
   /* ---------- camera ref -------------- */
-  const controlsRef = useRef();
+  const controlsRef = useRef(null);
 
-  /* ---------- poll backend ------------ */
-  useEffect(() => {
-    const poll = async () => {
-      try {
-        const r = await fetch("/api/status");
-        if (!r.ok) {
-          setBackendStatus("error");
-          return;
-        }
-        const d = await r.json();
-        setBackendStatus(d.status);
-        if (d.info) setModelInfo(d.info);
-      } catch {
-        setBackendStatus("error");
-      }
-    };
-    poll();
-    const id = setInterval(poll, POLL_MS);
-    return () => clearInterval(id);
+  /* ---------- poll server status ------ */
+  const checkStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/status");
+      if (!res.ok) throw new Error("bad status");
+      const data = await res.json();
+      setBackendStatus(data.status); // "idle" | "processing" | "ready"
+      if (data.info) setModelInfo(data.info);
+    } catch {
+      setBackendStatus("error");
+    }
   }, []);
 
-
+  useEffect(() => {
+    checkStatus();
+    const id = setInterval(checkStatus, POLL_MS);
+    return () => clearInterval(id);
+  }, [checkStatus]);
 
   const anyLoading = meshLoading || cloudLoading;
   const loadingLabel = meshLoading
-    ? `Loading OBJ mesh… ${meshProgress}%`
-    : cloudLoading
-      ? "Loading point cloud…"
-      : "";
+    ? `Loading 3D Mesh (${meshProgress}%)`
+    : "Streaming Point Cloud…";
 
   return (
-    <div className="app">
-      {/* ── Top bar ── */}
+    <div className="app" data-theme={theme}>
+      {/* Top navigation bar */}
       <header className="topbar">
-        <a className="logo">
-          <div className="logo-icon">🏗</div>
+        <div className="logo-group">
+          <span className="logo-icon">◈</span>
           <span className="logo-text">Scan2Floor</span>
-          <span className="logo-badge">MVP</span>
-        </a>
+          <span className="logo-tag">3D Studio</span>
+        </div>
+
         <div className="topbar-spacer" />
-        <div className="status-pill">
-          <div
-            className={`status-dot ${backendStatus === "ready" ? "ready" : backendStatus === "error" ? "error" : "loading"}`}
-          />
-          {backendStatus === "ready" && "Point cloud ready"}
-          {backendStatus === "processing" && "Preprocessing…"}
-          {backendStatus === "idle" && "No data — run pipeline"}
-          {backendStatus === "connecting" && "Connecting…"}
-          {backendStatus === "error" && "Backend offline"}
+
+        {/* Theme toggle */}
+        <button
+          className="theme-toggle"
+          onClick={toggleTheme}
+          title={isDark ? "Switch to Light theme" : "Switch to Dark theme"}
+        >
+          <span>{isDark ? "☀" : "🌙"}</span>
+        </button>
+
+        {/* Backend status pill */}
+        <div className={`status-pill status-${backendStatus}`}>
+          <span className="status-dot" />
+          <span className="status-label">
+            {backendStatus === "ready" && "Connected"}
+            {backendStatus === "idle" && "Idle (No Data)"}
+            {backendStatus === "processing" && "Processing…"}
+            {backendStatus === "error" && "Offline"}
+            {backendStatus === "connecting" && "Connecting…"}
+          </span>
         </div>
       </header>
 
-      {/* ── Workspace ── */}
+      {/* Main layout */}
       <div className="workspace">
+        {/* Left sidebar */}
         <Sidebar
+          backendStatus={backendStatus}
+          modelInfo={modelInfo}
+          showMesh={showMesh}
+          setShowMesh={setShowMesh}
           showCloud={showCloud}
           setShowCloud={setShowCloud}
           showFloorPlan={showFloorPlan}
@@ -177,13 +209,12 @@ export default function App() {
           showFloorPlanViewer={showFloorPlanViewer}
           setShowFloorPlanViewer={setShowFloorPlanViewer}
           className={sidebarCollapsed ? "collapsed" : ""}
-          modelInfo={modelInfo}
-          backendStatus={backendStatus}
           cloudPoints={cloudPoints}
-          activeFloor={activeFloor}
-          setActiveFloor={setActiveFloor}
           onReprocessDone={handleReprocessDone}
           onWallsDetected={handleWallsDetected}
+          onRefreshStatus={checkStatus}
+          activeFloor={activeFloor}
+          setActiveFloor={setActiveFloor}
           roomMode={roomMode}
           setRoomMode={setRoomMode}
           onLoadSave={setLoadedSave}
@@ -206,8 +237,8 @@ export default function App() {
               camera={{ position: [30, 15, 30], fov: 50, near: 0.1, far: 2000 }}
               gl={{ antialias: true, localClippingEnabled: true }}
             >
-              <color attach="background" args={["#070b18"]} />
-              <ambientLight intensity={0.6} />
+              <color attach="background" args={[isDark ? "#0f0f0f" : "#f5f5f5"]} />
+              <ambientLight intensity={isDark ? 0.6 : 0.8} />
               <directionalLight
                 position={[20, 30, 10]}
                 intensity={1}
@@ -218,8 +249,8 @@ export default function App() {
               <Grid
                 args={[200, 200]}
                 position={[0, -0.05, 0]}
-                cellColor="#0d1428"
-                sectionColor="#0a2050"
+                cellColor={isDark ? "#1f1f1f" : "#e5e5e5"}
+                sectionColor={isDark ? "#333333" : "#cccccc"}
                 sectionSize={10}
                 fadeDistance={120}
                 infiniteGrid
@@ -270,7 +301,7 @@ export default function App() {
               />
 
               <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
-                <GizmoViewport labelColor="white" axisHeadScale={1} />
+                <GizmoViewport labelColor={isDark ? "white" : "#222222"} axisHeadScale={1} />
               </GizmoHelper>
             </Canvas>
           </div>
@@ -288,21 +319,21 @@ export default function App() {
             <div style={{
               position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
               zIndex: 10, display: "flex", alignItems: "center", gap: 8,
-              background: "rgba(99,102,241,0.18)", backdropFilter: "blur(8px)",
-              border: "1px solid rgba(99,102,241,0.45)", borderRadius: 8,
+              background: "var(--surface-2)",
+              border: "1px solid var(--border-hi)", borderRadius: 8,
               padding: "6px 14px", fontSize: 12, fontWeight: 700,
-              color: "#a5b4fc", fontFamily: "Inter, sans-serif",
-              boxShadow: "0 4px 20px rgba(99,102,241,0.2)",
+              color: "var(--text-1)", fontFamily: "Inter, sans-serif",
+              boxShadow: "0 2px 10px rgba(0,0,0,0.2)",
             }}>
               <span>💾 Viewing saved output:</span>
-              <span style={{ color: "#e0e7ff" }}>{loadedSave}</span>
+              <span style={{ color: "var(--accent)" }}>{loadedSave}</span>
               <button
                 onClick={() => setLoadedSave(null)}
                 title="Return to live data"
                 style={{
-                  marginLeft: 4, background: "rgba(255,255,255,0.08)",
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  borderRadius: 5, color: "#c7d2fe", fontSize: 11,
+                  marginLeft: 4, background: "var(--surface-3)",
+                  border: "1px solid var(--border)",
+                  borderRadius: 5, color: "var(--text-2)", fontSize: 11,
                   padding: "2px 7px", cursor: "pointer",
                 }}
               >✕ Live</button>
@@ -319,9 +350,9 @@ export default function App() {
           {/* Idle banner — no data yet, nothing running */}
           {backendStatus === "idle" && (
             <div className="processing-banner" style={{
-              background: "rgba(6,182,212,0.08)",
-              borderColor: "rgba(6,182,212,0.3)",
-              color: "#67e8f9",
+              background: "var(--surface-2)",
+              borderColor: "var(--border)",
+              color: "var(--text-2)",
             }}>
               📂 No point cloud loaded — select a .xyz file in the sidebar and click <strong>Rerun Full Preprocess Pipeline</strong>
             </div>
@@ -348,12 +379,24 @@ export default function App() {
               dataVersion={floorDataVersion}
               selectedRoomId={selectedRoomId}
               onSelectRoom={setSelectedRoomId}
+              saveName={loadedSave}
             />
           )}
 
           {/* Floor plan panel (Matterport image) */}
           {showFloorPlan && (
             <FloorPlanPanel floor={fpFloor} setFloor={setFpFloor} />
+          )}
+          {/* Room Editor Panel — isolated room editor, shown when a room is selected */}
+          {selectedRoomId != null && highlightedRoom && (
+            <RoomEditorPanel
+              room={highlightedRoom}
+              floor={activeFloor === "all" ? 0 : activeFloor}
+              modelInfo={modelInfo}
+              saveName={loadedSave}
+              onClose={() => setSelectedRoomId(null)}
+              onWallsChanged={handleWallsDetected}
+            />
           )}
         </div>
 

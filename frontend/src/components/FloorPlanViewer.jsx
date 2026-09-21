@@ -14,18 +14,68 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
-// ── Colour constants ───────────────────────────────────────────────────────────
+// ── Colour constants — theme-aware ────────────────────────────────────────────
+// Returns a palette matching the current data-theme on the root .app element.
+function getTheme() {
+  const isDark = !document.querySelector('[data-theme="light"]');
+  return isDark ? {
+    bg:          "#0f0f0f",
+    gridLine:    "#1e1e1e",
+    wall:        "#00c8e0",      wallGlow: "rgba(0,200,224,0.18)",
+    wallUser:    "#fbbf24",      wallUserGlow: "rgba(251,191,36,0.20)",
+    wallHover:   "#ff6b6b",     wallHoverGlow: "rgba(255,107,107,0.25)",
+    wallHidden:  "#4a6080",     wallHiddenGlow: "rgba(74,96,128,0.15)",
+    wallPreview: "#fbbf24",
+    door:        "#fbbf24",
+    window:      "#818cf8",
+    snapEp:      "#fbbf24",
+    snapGrid:    "rgba(200,220,255,0.5)",
+    roomFills: [
+      "rgba(0,200,224,0.07)","rgba(129,140,248,0.07)",
+      "rgba(251,191,36,0.07)","rgba(52,211,153,0.07)",
+      "rgba(251,113,133,0.07)","rgba(167,139,250,0.07)",
+      "rgba(34,211,238,0.07)","rgba(251,146,60,0.07)",
+      "rgba(74,222,128,0.07)","rgba(248,113,113,0.07)",
+    ],
+    roomBorder:  "rgba(255,255,255,0.08)",
+    labelRoom:   "rgba(200,230,255,0.6)",
+    scaleStroke: "rgba(255,255,255,0.6)",
+    scaleFill:   "rgba(255,255,255,0.7)",
+  } : {
+    bg:          "#f5f5f5",
+    gridLine:    "#e0e0e0",
+    wall:        "#0066cc",      wallGlow: "rgba(0,102,204,0.12)",
+    wallUser:    "#d97706",      wallUserGlow: "rgba(217,119,6,0.15)",
+    wallHover:   "#dc2626",     wallHoverGlow: "rgba(220,38,38,0.18)",
+    wallHidden:  "#94a3b8",     wallHiddenGlow: "rgba(148,163,184,0.12)",
+    wallPreview: "#d97706",
+    door:        "#d97706",
+    window:      "#6366f1",
+    snapEp:      "#d97706",
+    snapGrid:    "rgba(30,60,120,0.35)",
+    roomFills: [
+      "rgba(0,102,204,0.07)","rgba(99,102,241,0.07)",
+      "rgba(217,119,6,0.07)","rgba(22,163,74,0.07)",
+      "rgba(220,38,38,0.07)","rgba(124,58,237,0.07)",
+      "rgba(6,182,212,0.07)","rgba(234,88,12,0.07)",
+      "rgba(74,222,128,0.07)","rgba(248,113,113,0.07)",
+    ],
+    roomBorder:  "rgba(0,0,0,0.06)",
+    labelRoom:   "rgba(30,50,80,0.7)",
+    scaleStroke: "rgba(0,0,0,0.55)",
+    scaleFill:   "rgba(0,0,0,0.65)",
+  };
+}
+
+// Legacy alias used in non-canvas JSX parts (badge colours etc.)
 const C = {
-  bg:         "#070b18",
-  gridLine:   "#0a2050",
-  wall:       "#00c8e0",      wallGlow: "rgba(0,200,224,0.18)",
-  wallUser:   "#fbbf24",      wallUserGlow: "rgba(251,191,36,0.20)",
-  wallHover:  "#ff6b6b",      wallHoverGlow: "rgba(255,107,107,0.25)",
-  wallHidden: "#4a6080",      wallHiddenGlow: "rgba(74,96,128,0.15)",
-  wallPreview:"#fbbf24",
+  wall:       "#00c8e0",
+  wallUser:   "#fbbf24",
+  wallHover:  "#ff6b6b",
+  wallHidden: "#4a6080",
   door:       "#fbbf24",
   window:     "#818cf8",
-  snapEp:     "#fbbf24",   // endpoint snap
+  snapEp:     "#fbbf24",
   snapGrid:   "rgba(200,220,255,0.5)",
   roomFills: [
     "rgba(0,200,224,0.07)","rgba(129,140,248,0.07)",
@@ -241,11 +291,11 @@ function drawBoxSelect(ctx, box, mode) {
   ctx.restore();
 }
 
-function drawGrid(ctx, cam, w, h) {
+function drawGrid(ctx, cam, w, h, TC) {
   const step = 5 * cam.scale;
   if (step < 10) return;
   ctx.save();
-  ctx.strokeStyle = C.gridLine; ctx.lineWidth = 0.5; ctx.globalAlpha = 0.5;
+  ctx.strokeStyle = TC.gridLine; ctx.lineWidth = 0.5; ctx.globalAlpha = 0.5;
   let x = ((cam.ox % step) + step) % step;
   for (; x < w; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
   let y = ((cam.oy % step) + step) % step;
@@ -253,14 +303,14 @@ function drawGrid(ctx, cam, w, h) {
   ctx.restore();
 }
 
-function drawRooms(ctx, rooms, cam, highlightedRoomId) {
+function drawRooms(ctx, rooms, cam, highlightedRoomId, TC) {
   if (!rooms?.length) return;
   const hasHighlight = highlightedRoomId != null;
   ctx.save();
   for (const room of rooms) {
     const isHighlighted = room.id === highlightedRoomId;
     const baseAlpha = isHighlighted ? 0.30 : hasHighlight ? 0.03 : 0.07;
-    const fill = C.roomFills[room.id % C.roomFills.length].replace(/[\d.]+\)$/, `${baseAlpha})`);
+    const fill = TC.roomFills[room.id % TC.roomFills.length].replace(/[\d.]+\)$/, `${baseAlpha})`);
 
     // Build the room boundary path — prefer true polygon, fall back to bbox rect
     ctx.beginPath();
@@ -286,24 +336,23 @@ function drawRooms(ctx, rooms, cam, highlightedRoomId) {
 
     if (isHighlighted) {
       ctx.save();
-      ctx.strokeStyle = "rgba(0,200,224,0.6)";
+      ctx.strokeStyle = TC.wall;
       ctx.lineWidth = 2.5;
-      ctx.shadowColor = "rgba(0,200,224,0.5)";
-      ctx.shadowBlur = 12;
+      ctx.shadowColor = TC.wall;
+      ctx.shadowBlur = 10;
       ctx.stroke();
       ctx.restore();
     } else {
-      ctx.strokeStyle = C.roomBorder;
+      ctx.strokeStyle = TC.roomBorder;
       ctx.lineWidth = 0.5;
       ctx.stroke();
     }
 
     const fontSize = Math.max(9, Math.min(13, cam.scale * 0.7));
-    // Draw room label at centroid — always use centroid so it works for any shape
     if (cam.scale > 3) {
       const [centX, centY] = toCanvas(room.centroid_x, room.centroid_z, cam);
       ctx.font = `${fontSize}px "Inter", sans-serif`;
-      ctx.fillStyle = isHighlighted ? "rgba(0,230,255,0.9)" : C.labelRoom;
+      ctx.fillStyle = isHighlighted ? TC.wall : TC.labelRoom;
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(`R${room.id}  ${room.area_m2.toFixed(1)} m²`, centX, centY);
     }
@@ -311,7 +360,7 @@ function drawRooms(ctx, rooms, cam, highlightedRoomId) {
   ctx.restore();
 }
 
-function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, editMode) {
+function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, editMode, TC) {
   // Thinner lines — scale * 0.09 (was 0.18), min 1px
   const lw = Math.max(1.0, cam.scale * 0.09);
 
@@ -321,8 +370,8 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     if (!line.hidden) continue;
     const [[x1, z1], [x2, z2]] = line.pts;
     const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
-    const color = isHovered ? C.wallHover : C.wallHidden;
-    const glow  = isHovered ? C.wallHoverGlow : C.wallHiddenGlow;
+    const color = isHovered ? TC.wallHover : TC.wallHidden;
+    const glow  = isHovered ? TC.wallHoverGlow : TC.wallHiddenGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
@@ -344,8 +393,8 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     if (line.hidden) continue;
     const { pts: [[x1, z1], [x2, z2]], source } = line;
     const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
-    const color     = isHovered ? C.wallHover : source === "user" ? C.wallUser : C.wall;
-    const glow      = isHovered ? C.wallHoverGlow : source === "user" ? C.wallUserGlow : C.wallGlow;
+    const color     = isHovered ? TC.wallHover : source === "user" ? TC.wallUser : TC.wall;
+    const glow      = isHovered ? TC.wallHoverGlow : source === "user" ? TC.wallUserGlow : TC.wallGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
@@ -373,7 +422,7 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
       const cdx = cosA * cam.scale, cdz = sinA * cam.scale;
       ctx.save();
       ctx.setLineDash([4, 8]);
-      ctx.strokeStyle = "rgba(0,200,224,0.18)";
+      ctx.strokeStyle = TC.wall + "30";
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(cax - cdx * FAR, cay - cdz * FAR);
@@ -392,9 +441,9 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
       ctx.font = 'bold 10px "JetBrains Mono", monospace';
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       const tw = ctx.measureText(label).width;
-      ctx.fillStyle = "rgba(7,11,24,0.75)";
+      ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(20,20,20,0.85)" : "rgba(245,245,245,0.9)";
       ctx.fillRect(midCx - tw / 2 - 5, midCy - 9, tw + 10, 18);
-      ctx.fillStyle = "#00c8e0";
+      ctx.fillStyle = TC.wall;
       ctx.fillText(label, midCx, midCy);
       ctx.restore();
     } else {
@@ -409,9 +458,9 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
         ctx.font = '10px "JetBrains Mono", monospace';
         ctx.textAlign = "center"; ctx.textBaseline = "middle";
         const tw = ctx.measureText(label).width;
-        ctx.fillStyle = "rgba(7,11,24,0.65)";
+        ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(20,20,20,0.85)" : "rgba(245,245,245,0.9)";
         ctx.fillRect(midCx - tw / 2 - 4, midCy - 8, tw + 8, 16);
-        ctx.fillStyle = "rgba(251,191,36,0.75)";
+        ctx.fillStyle = TC.wallUser;
         ctx.fillText(label, midCx, midCy);
         ctx.restore();
       }
@@ -420,12 +469,12 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     // Wall preview line
     ctx.save();
     ctx.setLineDash([6, 4]); ctx.lineCap = "round";
-    ctx.strokeStyle = C.wallPreview; ctx.lineWidth = lw;
-    ctx.shadowColor = C.wallPreview; ctx.shadowBlur = 6;
+    ctx.strokeStyle = TC.wallPreview; ctx.lineWidth = lw;
+    ctx.shadowColor = TC.wallPreview; ctx.shadowBlur = 6;
     ctx.beginPath(); ctx.moveTo(cax, cay); ctx.lineTo(csx, csy); ctx.stroke();
     ctx.setLineDash([]);
     // Start point dot
-    ctx.fillStyle = C.wallPreview;
+    ctx.fillStyle = TC.wallPreview;
     ctx.beginPath(); ctx.arc(cax, cay, Math.max(3, lw * 1.5), 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
@@ -436,7 +485,7 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const [csx, csy] = toCanvas(sx, sz, cam);
     const isAngle = snapInfo.kind === "angle";
     const r = snapInfo.kind === "endpoint" ? 7 : 5;
-    const color = snapInfo.kind === "endpoint" ? C.snapEp : isAngle ? "#00c8e0" : C.snapGrid;
+    const color = snapInfo.kind === "endpoint" ? TC.snapEp : isAngle ? TC.wall : TC.snapGrid;
     ctx.save();
     ctx.strokeStyle = color; ctx.lineWidth = snapInfo.kind === "endpoint" ? 2 : 1;
     const cross = r + 4;
@@ -504,19 +553,19 @@ function drawOpenings(ctx, openings, cam) {
   }
 }
 
-function drawScale(ctx, cam, w, h) {
+function drawScale(ctx, cam, w, h, TC) {
   const candidates = [1, 2, 5, 10, 20];
   let chosen = 5;
   for (const c of candidates) { if (c * cam.scale >= 80) { chosen = c; break; } }
   const barPx = chosen * cam.scale, bx = 20, by = h - 28;
   ctx.save();
-  ctx.strokeStyle = "rgba(255,255,255,0.6)"; ctx.lineWidth = 2;
+  ctx.strokeStyle = TC.scaleStroke; ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(bx, by); ctx.lineTo(bx + barPx, by);
   ctx.moveTo(bx, by - 4); ctx.lineTo(bx, by + 4);
   ctx.moveTo(bx + barPx, by - 4); ctx.lineTo(bx + barPx, by + 4);
   ctx.stroke();
-  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  ctx.fillStyle = TC.scaleFill;
   ctx.font = '11px "Inter", sans-serif'; ctx.textAlign = "center";
   ctx.fillText(`${chosen} m`, bx + barPx / 2, by - 8);
   ctx.restore();
@@ -674,12 +723,13 @@ function ModeHint({ mode, addStep, angleConstrained }) {
   return (
     <div style={{
       position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)",
-      background: isLocked ? "rgba(0,30,60,0.88)" : "rgba(7,11,24,0.75)",
-      border: isLocked ? "1px solid rgba(0,200,224,0.35)" : "1px solid rgba(255,255,255,0.07)",
+      background: isLocked ? "var(--surface-3)" : "var(--surface-1)",
+      border: isLocked ? "1px solid var(--border-hi)" : "1px solid var(--border)",
       borderRadius: 6, padding: "4px 12px",
       fontSize: 10,
-      color: isLocked ? "#00c8e0" : mode === "select" ? "rgba(200,220,255,0.4)" : "#fbbf24",
+      color: isLocked ? "var(--accent)" : mode === "select" ? "var(--text-3)" : "#f59e0b",
       fontFamily: "Inter, sans-serif", whiteSpace: "nowrap", pointerEvents: "none",
+      boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
       transition: "all 0.15s",
     }}>
       {text}
@@ -691,38 +741,40 @@ function ModeHint({ mode, addStep, angleConstrained }) {
 
 function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, hiddenCount, lowConfCount }) {
   const visibleAlgo = wallCount - userCount - hiddenCount;
+  const TC = getTheme();
   const items = [
-    { color: C.wall,     label: `Algo walls (${Math.max(0, visibleAlgo)})` },
-    ...(userCount > 0 ? [{ color: C.wallUser, label: `Added walls (${userCount})` }] : []),
-    { color: C.door,   label: `Doors (${doorCount})` },
-    { color: C.window, label: `Windows (${windowCount})` },
-    { color: C.roomFills[0], label: `Rooms (${roomCount})`, fill: true },
+    { color: TC.wall,     label: `Algo walls (${Math.max(0, visibleAlgo)})` },
+    ...(userCount > 0 ? [{ color: TC.wallUser, label: `Added walls (${userCount})` }] : []),
+    { color: TC.door,   label: `Doors (${doorCount})` },
+    { color: TC.window, label: `Windows (${windowCount})` },
+    { color: TC.roomFills[0], label: `Rooms (${roomCount})`, fill: true },
   ];
   return (
     <div style={{
       position: "absolute", bottom: 10, right: 10,
-      background: "rgba(7,11,24,0.82)", backdropFilter: "blur(8px)",
-      border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8,
+      background: "var(--surface-1)",
+      border: "1px solid var(--border)", borderRadius: 8,
       padding: "8px 12px", display: "flex", flexDirection: "column", gap: 5, minWidth: 165,
+      boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
     }}>
       {items.map(({ color, label, fill }) => (
         <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {fill
-            ? <div style={{ width: 14, height: 10, background: "rgba(0,200,224,0.22)", border: `1px solid ${color}`, borderRadius: 2 }} />
+            ? <div style={{ width: 14, height: 10, background: color + "33", border: `1px solid ${color}`, borderRadius: 2 }} />
             : <div style={{ width: 14, height: 2.5, background: color, borderRadius: 2 }} />
           }
-          <span style={{ fontSize: 10.5, color: "rgba(200,220,255,0.7)", fontFamily: "Inter,sans-serif" }}>{label}</span>
+          <span style={{ fontSize: 10.5, color: "var(--text-2)", fontFamily: "Inter,sans-serif" }}>{label}</span>
         </div>
       ))}
       {hiddenCount > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 5, marginTop: 2 }}>
-          <div style={{ width: 14, height: 2, background: C.wallHidden, borderRadius: 2, opacity: 0.6,
-            backgroundImage: `repeating-linear-gradient(90deg,${C.wallHidden} 0 5px,transparent 5px 9px)` }} />
-          <span style={{ fontSize: 10.5, color: "#94a3b8", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>👁 {hiddenCount} hidden</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 5, marginTop: 2 }}>
+          <div style={{ width: 14, height: 2, background: TC.wallHidden, borderRadius: 2, opacity: 0.6,
+            backgroundImage: `repeating-linear-gradient(90deg,${TC.wallHidden} 0 5px,transparent 5px 9px)` }} />
+          <span style={{ fontSize: 10.5, color: "var(--text-3)", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>👁 {hiddenCount} hidden</span>
         </div>
       )}
       {lowConfCount > 0 && (
-        <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid rgba(255,255,255,0.07)", paddingTop: 5, marginTop: 2 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 5, marginTop: 2 }}>
           <div style={{ width: 14, height: 2.5, background: "#fbbf24", borderRadius: 2, backgroundImage: "repeating-linear-gradient(90deg,#fbbf24 0 4px,transparent 4px 7px)" }} />
           <span style={{ fontSize: 10.5, color: "#fbbf24", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>⚠ {lowConfCount} low-confidence</span>
         </div>
@@ -735,11 +787,11 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, hidde
 
 function Badge({ colour, children }) {
   const S = {
-    cyan:   { background: "rgba(0,200,200,0.12)", color: "#00cccc", border: "1px solid rgba(0,200,200,0.3)" },
-    green:  { background: "rgba(0,200,80,0.12)",  color: "#00c850", border: "1px solid rgba(0,200,80,0.3)"  },
-    orange: { background: "rgba(255,160,0,0.12)", color: "#ffa000", border: "1px solid rgba(255,160,0,0.3)" },
-    amber:  { background: "rgba(251,191,36,0.12)",color: "#fbbf24", border: "1px solid rgba(251,191,36,0.3)"},
-    grey:   { background: "rgba(120,140,180,0.12)",color:"#8090b0", border: "1px solid rgba(120,140,180,0.2)"},
+    cyan:   { background: "var(--surface-3)", color: "var(--accent)", border: "1px solid var(--border-hi)" },
+    green:  { background: "var(--surface-3)", color: "#10b981", border: "1px solid var(--border-hi)"  },
+    orange: { background: "var(--surface-3)", color: "#f59e0b", border: "1px solid var(--border-hi)" },
+    amber:  { background: "var(--surface-3)", color: "#f59e0b", border: "1px solid var(--border-hi)"},
+    grey:   { background: "var(--surface-3)", color: "var(--text-3)", border: "1px solid var(--border)"},
   };
   return (
     <span style={{ display:"inline-flex", alignItems:"center", gap:4, padding:"2px 8px", borderRadius:4, fontSize:11, fontWeight:600, ...(S[colour]??S.grey) }}>
@@ -752,9 +804,9 @@ function FloorTab({ active, label, onClick }) {
   return (
     <button onClick={onClick} style={{
       padding: "5px 12px", borderRadius: 5, fontFamily: "Inter, sans-serif",
-      border: active ? "1px solid rgba(0,200,224,0.5)" : "1px solid rgba(255,255,255,0.08)",
-      background: active ? "rgba(0,200,224,0.15)" : "rgba(255,255,255,0.04)",
-      color: active ? C.wall : "rgba(200,220,255,0.55)",
+      border: active ? "1px solid var(--border-hi)" : "1px solid var(--border)",
+      background: active ? "var(--surface-3)" : "var(--surface-1)",
+      color: active ? "var(--text-1)" : "var(--text-3)",
       fontSize: 12, fontWeight: active ? 700 : 400, cursor: "pointer", transition: "all 0.18s",
     }}>
       {label}
@@ -788,38 +840,38 @@ function RoomInfoChip({ room, floorIdx, modelInfo }) {
   return (
     <div style={{
       position: "absolute", top: 12, left: 12,
-      background: "rgba(7,11,24,0.88)", backdropFilter: "blur(10px)",
-      border: "1px solid rgba(0,200,224,0.35)", borderRadius: 10,
+      background: "var(--surface-1)",
+      border: "1px solid var(--border-hi)", borderRadius: 8,
       padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6,
-      boxShadow: "0 0 18px rgba(0,200,224,0.12)",
+      boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
       pointerEvents: "none", minWidth: 160,
       animation: "fadeIn 0.18s ease",
     }}>
       {/* Badge row */}
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <span style={{
-          background: "rgba(0,200,224,0.18)", color: "#00c8e0",
-          border: "1px solid rgba(0,200,224,0.4)", borderRadius: 5,
+          background: "var(--surface-3)", color: "var(--text-1)",
+          border: "1px solid var(--border-hi)", borderRadius: 5,
           padding: "2px 8px", fontSize: 11, fontWeight: 700, fontFamily: "Inter,sans-serif",
         }}>R{room.id}</span>
-        <span style={{ fontSize: 10, color: "rgba(200,220,255,0.45)", fontFamily: "JetBrains Mono, monospace" }}>selected</span>
+        <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "JetBrains Mono, monospace" }}>selected</span>
       </div>
       {/* Metrics */}
       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-          <span style={{ fontSize: 10, color: "rgba(200,220,255,0.45)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Area</span>
-          <span style={{ fontSize: 11, color: "rgba(200,230,255,0.9)", fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>{room.area_m2.toFixed(1)} m²</span>
+          <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Area</span>
+          <span style={{ fontSize: 11, color: "var(--text-1)", fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>{room.area_m2.toFixed(1)} m²</span>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-          <span style={{ fontSize: 10, color: "rgba(200,220,255,0.45)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Size</span>
-          <span style={{ fontSize: 11, color: "rgba(200,230,255,0.9)", fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>
+          <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Size</span>
+          <span style={{ fontSize: 11, color: "var(--text-1)", fontFamily: "JetBrains Mono, monospace", fontWeight: 600 }}>
             {dimA.toFixed(2)} × {dimB.toFixed(2)} m
           </span>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
-          <span style={{ fontSize: 10, color: "rgba(200,220,255,0.45)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Height</span>
+          <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Height</span>
           <span style={{ fontSize: 11, fontFamily: "JetBrains Mono, monospace", fontWeight: 600,
-            color: height ? "rgba(200,230,255,0.9)" : "rgba(150,160,180,0.5)" }}>
+            color: height ? "var(--text-1)" : "var(--text-3)" }}>
             {height ? `≈ ${height.toFixed(2)} m` : "—"}
           </span>
         </div>
@@ -833,10 +885,33 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
   const rafRef    = useRef(null);
 
-  const floors = modelInfo?.floor_levels ?? [];
-
   // Base URL prefix — either live API or a saved output
   const apiBase = saveName ? `/api/saves/${encodeURIComponent(saveName)}` : "/api";
+
+  // ── Save info (when viewing a saved output) ─────────────────────────────────
+  const [saveInfo, setSaveInfo] = useState(null);
+
+  useEffect(() => {
+    if (!saveName) {
+      setSaveInfo(null);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/saves/${encodeURIComponent(saveName)}/info`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!cancelled && d) setSaveInfo(d);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [saveName]);
+
+  const activeModelInfo = saveName ? (saveInfo || modelInfo) : modelInfo;
+  const rawFloors = activeModelInfo?.floor_levels;
+  // If viewing a save and floor_levels is not available yet or empty, default to at least [0]
+  const floors = (rawFloors && rawFloors.length > 0)
+    ? rawFloors
+    : (saveName ? [0] : (modelInfo?.floor_levels ?? []));
 
   // ── Data fetch state ────────────────────────────────────────────────────────
   const [selectedFloor, setSelectedFloor] = useState(0);
@@ -846,11 +921,11 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
   // Keep selected floor in bounds if number of floors changes
   useEffect(() => {
-    const numFloors = modelInfo?.floor_levels?.length || 1;
+    const numFloors = floors.length || 1;
     if (selectedFloor >= numFloors) {
       setSelectedFloor(0);
     }
-  }, [modelInfo?.floor_levels, selectedFloor]);
+  }, [floors, selectedFloor]);
 
   // ── Edit state ──────────────────────────────────────────────────────────────
   // editedLines: [{pts: [[x1,z1],[x2,z2]], source: 'algo'|'user', hidden?: true}]
@@ -984,17 +1059,18 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       const ctx = cvs.getContext("2d");
       const { width: w, height: h } = cvs;
       const cam = camRef.current;
-      ctx.fillStyle = C.bg; ctx.fillRect(0, 0, w, h);
-      drawGrid(ctx, cam, w, h);
-      drawRooms(ctx, roomsData?.rooms, cam, highlightedRoomIdRef.current);
+      const TC = getTheme(); // read current theme each frame
+      ctx.fillStyle = TC.bg; ctx.fillRect(0, 0, w, h);
+      drawGrid(ctx, cam, w, h, TC);
+      drawRooms(ctx, roomsData?.rooms, cam, highlightedRoomIdRef.current, TC);
       drawEditedWalls(
         ctx, editedLinesRef.current, cam,
         hoveredLineRef.current, addStepRef.current, snapRef.current,
-        editModeRef.current,
+        editModeRef.current, TC,
       );
       drawOpenings(ctx, openingsData?.openings, cam);
       drawBoxSelect(ctx, boxSelectRef.current, editModeRef.current);
-      drawScale(ctx, cam, w, h);
+      drawScale(ctx, cam, w, h, TC);
       drawCompass(ctx, w);
     });
   }, [roomsData, openingsData]);
@@ -1511,9 +1587,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
         {/* Loading spinner */}
         {loadState === "loading" && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(7,11,24,0.6)", color: C.wall, gap: 12, fontFamily: "Inter,sans-serif" }}>
-            <div style={{ width: 36, height: 36, borderRadius: "50%", border: `3px solid rgba(0,200,224,0.2)`, borderTopColor: C.wall, animation: "spin 0.8s linear infinite" }} />
-            <span style={{ fontSize: 12, color: "rgba(200,220,255,0.6)" }}>Loading floor {selectedFloor}…</span>
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--surface-1)", opacity: 0.9, color: "var(--text-1)", gap: 12, fontFamily: "Inter,sans-serif" }}>
+            <div style={{ width: 36, height: 36, borderRadius: "50%", border: `3px solid var(--border)`, borderTopColor: "var(--accent)", animation: "spin 0.8s linear infinite" }} />
+            <span style={{ fontSize: 12, color: "var(--text-2)" }}>Loading floor {selectedFloor}…</span>
           </div>
         )}
 
@@ -1547,7 +1623,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
         {/* Room info chip — selected room details */}
         {loadState === "ready" && highlightedRoom && (
-          <RoomInfoChip room={highlightedRoom} floorIdx={selectedFloor} modelInfo={modelInfo} />
+          <RoomInfoChip room={highlightedRoom} floorIdx={selectedFloor} modelInfo={activeModelInfo} />
         )}
 
         {/* Legend */}

@@ -19,16 +19,18 @@ export default function RoomListPanel({
   dataVersion,
   selectedRoomId,
   onSelectRoom,
+  saveName = null,
 }) {
   const [rooms, setRooms] = useState([]);
   const [loading, setLoading] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
-  // Fetch rooms whenever the floor or data version changes
+  // Fetch rooms whenever the floor, data version, or saveName changes
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(`/api/rooms/${floor}`)
+    const apiBase = saveName ? `/api/saves/${encodeURIComponent(saveName)}` : "/api";
+    fetch(`${apiBase}/rooms/${floor}`)
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return;
@@ -44,7 +46,7 @@ export default function RoomListPanel({
     return () => {
       cancelled = true;
     };
-  }, [floor, dataVersion]);
+  }, [floor, dataVersion, saveName]);
 
   const handleClick = (id) => {
     onSelectRoom?.(selectedRoomId === id ? null : id);
@@ -133,7 +135,7 @@ export default function RoomListPanel({
       {/* Hint */}
       {rooms.length > 0 && (
         <div className="room-list-hint">
-          Click a room to highlight it on the floor plan &amp; point cloud
+          Click a room to open the Room Editor — add/edit walls, doors &amp; windows
         </div>
       )}
     </div>

@@ -284,18 +284,18 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
             onClick={() => setShowSaves(v => !v)}
             style={{
               width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
-              background:showSaves?"rgba(99,102,241,0.10)":"rgba(255,255,255,0.03)",
-              border:`1px solid ${showSaves?"rgba(99,102,241,0.35)":"rgba(255,255,255,0.08)"}`,
-              borderRadius:6,color:showSaves?"#a5b4fc":"var(--text-2)",
+              background:showSaves?"var(--surface-3)":"var(--surface-1)",
+              border:`1px solid ${showSaves?"var(--border-hi)":"var(--border)"}`,
+              borderRadius:6,color:showSaves?"var(--text-1)":"var(--text-2)",
               fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4,
             }}
           >
-            <span>💾 Saved Outputs {saves.length > 0 && <span style={{fontSize:10,marginLeft:4,background:"rgba(99,102,241,0.2)",color:"#a5b4fc",borderRadius:10,padding:"0 6px"}}>{saves.length}</span>}</span>
+            <span>💾 Saved Outputs {saves.length > 0 && <span style={{fontSize:10,marginLeft:4,background:"var(--surface-3)",color:"var(--text-1)",border:"1px solid var(--border)",borderRadius:10,padding:"0 6px"}}>{saves.length}</span>}</span>
             <span style={{fontSize:10,opacity:0.7}}>{showSaves?"▲":"▼"}</span>
           </button>
 
           {showSaves && (
-            <div style={{background:"rgba(0,0,0,0.25)",border:"1px solid rgba(99,102,241,0.15)",borderRadius:8,padding:"10px 10px",display:"flex",flexDirection:"column",gap:8}}>
+            <div style={{background:"var(--surface-2)",border:"1px solid var(--border)",borderRadius:8,padding:"10px 10px",display:"flex",flexDirection:"column",gap:8}}>
 
               {/* Save current output */}
               <div>
@@ -308,8 +308,8 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
                     onKeyDown={e => e.key === "Enter" && handleSaveCurrent()}
                     placeholder={derivedSaveName || "output-name"}
                     style={{
-                      flex:1,minWidth:0,background:"var(--surface-2,#111827)",
-                      border:"1px solid var(--border,#1e2d4a)",borderRadius:6,
+                      flex:1,minWidth:0,background:"var(--surface-1)",
+                      border:"1px solid var(--border)",borderRadius:6,
                       color:"var(--text-1)",fontSize:11,padding:"5px 8px",
                       outline:"none",fontFamily:"monospace",
                     }}
@@ -319,8 +319,8 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
                     onClick={handleSaveCurrent}
                     disabled={saveLoading}
                     style={{
-                      background:"rgba(99,102,241,0.15)",border:"1px solid rgba(99,102,241,0.35)",
-                      borderRadius:6,color:"#a5b4fc",fontSize:11,fontWeight:700,
+                      background:"var(--surface-3)",border:"1px solid var(--border-hi)",
+                      borderRadius:6,color:"var(--text-1)",fontSize:11,fontWeight:700,
                       padding:"5px 10px",cursor:saveLoading?"not-allowed":"pointer",
                       whiteSpace:"nowrap",transition:"all 0.15s",flexShrink:0,
                     }}
@@ -332,7 +332,7 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
               </div>
 
               {/* Divider */}
-              <div style={{borderTop:"1px solid rgba(255,255,255,0.06)"}} />
+              <div style={{borderTop:"1px solid var(--border)"}} />
 
               {/* Saved list */}
               <div>
@@ -349,8 +349,8 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
                     style={{
                       display:"flex",alignItems:"center",gap:6,
                       padding:"6px 8px",borderRadius:5,marginBottom:3,
-                      background:"rgba(255,255,255,0.03)",
-                      border:"1px solid rgba(255,255,255,0.07)",
+                      background:"var(--surface-1)",
+                      border:"1px solid var(--border)",
                     }}
                   >
                     <div style={{flex:1,minWidth:0}}>
@@ -366,8 +366,8 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
                       onClick={() => { onLoadSave?.(sv.name); setShowFloorPlanViewer(true); }}
                       title={`View saved output: ${sv.name}`}
                       style={{
-                        background:"rgba(0,200,224,0.12)",border:"1px solid rgba(0,200,224,0.3)",
-                        borderRadius:5,color:"#67e8f9",fontSize:10,fontWeight:700,
+                        background:"var(--surface-3)",border:"1px solid var(--border-hi)",
+                        borderRadius:5,color:"var(--text-1)",fontSize:10,fontWeight:700,
                         padding:"3px 7px",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,
                       }}
                     >▶ Load</button>
@@ -376,8 +376,8 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
                       onClick={() => handleDeleteSave(sv.name)}
                       title={deleteConfirm===sv.name?"Click again to confirm delete":"Delete this save"}
                       style={{
-                        background:deleteConfirm===sv.name?"rgba(239,68,68,0.15)":"rgba(255,255,255,0.04)",
-                        border:deleteConfirm===sv.name?"1px solid rgba(239,68,68,0.4)":"1px solid rgba(255,255,255,0.1)",
+                        background:deleteConfirm===sv.name?"rgba(239,68,68,0.15)":"var(--surface-2)",
+                        border:deleteConfirm===sv.name?"1px solid rgba(239,68,68,0.4)":"1px solid var(--border)",
                         borderRadius:5,
                         color:deleteConfirm===sv.name?"#ef4444":"var(--text-3)",
                         fontSize:10,fontWeight:600,
