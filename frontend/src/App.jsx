@@ -112,7 +112,11 @@ export default function App() {
     fetch(`${apiBase}/rooms/${targetFloor}`)
       .then((r) => r.json())
       .then((d) => {
-        if (!cancelled) setRoomsData(d ? { ...d, targetFloor } : null);
+        if (!cancelled) {
+          const floorIdx = typeof d?.floor_idx === "number" ? d.floor_idx : targetFloor;
+          const roomsWithFloor = (d?.rooms ?? []).map((rm) => ({ ...rm, floor_idx: floorIdx }));
+          setRoomsData(d ? { ...d, rooms: roomsWithFloor, targetFloor } : null);
+        }
       })
       .catch(() => {
         if (!cancelled) setRoomsData(null);
@@ -289,7 +293,7 @@ export default function App() {
                 makeDefault
                 enableDamping
                 dampingFactor={0.08}
-                minDistance={1}
+                minDistance={0.05}
                 maxDistance={500}
               />
 
@@ -298,6 +302,7 @@ export default function App() {
                 highlightedRoom={highlightedRoom}
                 modelInfo={modelInfo}
                 controlsRef={controlsRef}
+                activeFloor={activeFloor}
               />
 
               <GizmoHelper alignment="bottom-right" margin={[60, 60]}>

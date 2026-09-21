@@ -59,18 +59,30 @@ def _resolve_xyz(cli_path: str | None) -> Path:
 
 # ── pointcloud.bin writer ────────────────────────────────────────────────────
 
-def _write_pointcloud_bin(positions: np.ndarray, out_path: Path) -> None:
+def _write_pointcloud_bin(positions: np.ndarray, out_path: Path, floor_levels: list[float] = None) -> None:
     """
     Binary layout expected by the Three.js viewer and preprocess_o3d.py:
       uint32  N          (little-endian)
       float32 N×3        XYZ positions
-      uint8   N×3        RGB colors  (set to 128,128,128 if not available)
+      uint8   N×3        RGB colors: Walls = White (245, 245, 250), Floor/Ceiling = Green (45, 205, 110)
     """
     N = len(positions)
     pos_f32 = positions.astype(np.float32)
 
-    # We have no color in the raw .xyz; use neutral grey so the viewer works
-    colors_u8 = np.full((N, 3), 128, dtype=np.uint8)
+    # Architectural coloring: default white for walls
+    colors_u8 = np.full((N, 3), [245, 245, 250], dtype=np.uint8)
+
+    if floor_levels and len(floor_levels) > 0:
+        y_pts = pos_f32[:, 1]
+        levels = sorted(floor_levels)
+        for k, fl_y in enumerate(levels):
+            ceil_y = levels[k + 1] if k < len(levels) - 1 else fl_y + 2.8
+            # Floor points: within 20cm of floor level
+            floor_mask = np.abs(y_pts - fl_y) < 0.20
+            # Ceiling points: within 25cm of ceiling level
+            ceil_mask = np.abs(y_pts - ceil_y) < 0.25
+            green_mask = floor_mask | ceil_mask
+            colors_u8[green_mask] = [45, 205, 110]
 
     with open(out_path, "wb") as fh:
         fh.write(struct.pack("<I", N))
@@ -312,7 +324,7 @@ def main() -> None:
     # ── Write pointcloud.bin ──────────────────────────────────────────────────
     bin_path = PROCESSED_DIR / "pointcloud.bin"
     print(f"\nWriting {bin_path.name}...")
-    _write_pointcloud_bin(positions, bin_path)
+    _write_pointcloud_bin(positions, bin_path, floor_levels)
 
     # ── Write info.json ───────────────────────────────────────────────────────
     info_path = PROCESSED_DIR / "info.json"
