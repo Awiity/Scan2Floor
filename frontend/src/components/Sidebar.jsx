@@ -23,7 +23,7 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
 const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
-export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave }) {
+export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave, cloudColors, setCloudColors }) {
   const cloudReady = backendStatus === "ready";
   const fmt = n => n?.toLocaleString?.() ?? "—";
 
@@ -35,6 +35,18 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
   const [browseLoading,setBrowseLoading]= useState(false);
   const [browseError,  setBrowseError]  = useState("");
   const [selected,     setSelected]     = useState(null);
+
+  // ── Point Cloud Colors ────────────────────────────────────────────────────
+  const [showColorPanel, setShowColorPanel] = useState(false);
+
+  /** Update a single color key ("wall" | "floor"), persist to localStorage. */
+  const updateColor = (key, value) => {
+    setCloudColors(prev => {
+      const next = { ...prev, [key]: value };
+      try { localStorage.setItem("s2f_cloud_colors", JSON.stringify(next)); } catch {}
+      return next;
+    });
+  };
 
   // ── Saves ─────────────────────────────────────────────────────────────────
   const [saves,          setSaves]          = useState([]);
@@ -78,7 +90,11 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
       const d = await fetch("/api/saves", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: effectiveSaveName }),
+        body: JSON.stringify({
+          name: effectiveSaveName,
+          wall_color:  cloudColors?.wall  ?? "#f5f5f5",
+          floor_color: cloudColors?.floor ?? "#2ed16b",
+        }),
       }).then(r => r.json());
       if (d.status === "ok") {
         setSaveMsg(`✓ Saved as "${d.name}" (${d.files_saved} files)`);
@@ -363,7 +379,19 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
                     </div>
                     <button
                       id={`load-save-${sv.name}`}
-                      onClick={() => { onLoadSave?.(sv.name); setShowFloorPlanViewer(true); }}
+                      onClick={() => {
+                        onLoadSave?.(sv.name);
+                        setShowFloorPlanViewer(true);
+                        // Restore the color scheme saved with this output
+                        if (sv.wall_color || sv.floor_color) {
+                          const restored = {
+                            wall:  sv.wall_color  ?? cloudColors?.wall  ?? "#f5f5f5",
+                            floor: sv.floor_color ?? cloudColors?.floor ?? "#2ed16b",
+                          };
+                          setCloudColors?.(restored);
+                          try { localStorage.setItem("s2f_cloud_colors", JSON.stringify(restored)); } catch {}
+                        }
+                      }}
                       title={`View saved output: ${sv.name}`}
                       style={{
                         background:"var(--surface-3)",border:"1px solid var(--border-hi)",
@@ -682,6 +710,108 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
           <div className="layer-icon" style={{background:"rgba(0,200,224,0.15)"}}>🗺️</div>
           <div style={{flex:1}}><div className="layer-label">Vector Floor Plan</div><div className="layer-sub">{modelInfo?.floor_levels?.length?`${modelInfo.floor_levels.length} floors · walls, rooms & openings`:"Canvas renderer"}</div></div>
           <Toggle checked={!!showFloorPlanViewer} onChange={setShowFloorPlanViewer}/>
+        </div>
+
+        {/* ── Point Cloud Colors ── */}
+        <div style={{marginTop:8}}>
+          <button
+            id="color-scheme-panel-btn"
+            onClick={() => setShowColorPanel(v => !v)}
+            style={{
+              width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
+              background:showColorPanel?"rgba(168,85,247,0.10)":"rgba(255,255,255,0.03)",
+              border:`1px solid ${showColorPanel?"rgba(168,85,247,0.35)":"rgba(255,255,255,0.08)"}`,
+              borderRadius:6,color:showColorPanel?"#c084fc":"var(--text-2)",
+              fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4,
+            }}
+          >
+            <span>🎨 Point Cloud Colors</span>
+            <span style={{fontSize:10,opacity:0.7}}>{showColorPanel?"▲":"▼"}</span>
+          </button>
+
+          {showColorPanel && (
+            <div style={{
+              background:"rgba(0,0,0,0.25)",border:"1px solid rgba(168,85,247,0.18)",
+              borderRadius:8,padding:"10px 12px",display:"flex",flexDirection:"column",gap:10,
+            }}>
+
+              {/* Walls color row */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                <div>
+                  <div style={{fontSize:11,color:"var(--text-2)",fontWeight:600}}>Walls</div>
+                  <div style={{fontSize:10,color:"var(--text-3)"}}>Vertical surfaces</div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{
+                    fontSize:10,fontFamily:"monospace",color:"var(--text-3)",
+                    minWidth:52,textAlign:"right",
+                  }}>{cloudColors?.wall ?? "#f5f5f5"}</span>
+                  <label style={{position:"relative",cursor:"pointer"}}>
+                    <div style={{
+                      width:28,height:28,borderRadius:6,cursor:"pointer",
+                      background: cloudColors?.wall ?? "#f5f5f5",
+                      border:"2px solid rgba(168,85,247,0.4)",
+                      boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
+                      transition:"box-shadow 0.15s",
+                    }} />
+                    <input
+                      id="wall-color-input"
+                      type="color"
+                      value={cloudColors?.wall ?? "#f5f5f5"}
+                      onChange={e => updateColor("wall", e.target.value)}
+                      style={{position:"absolute",opacity:0,width:"100%",height:"100%",top:0,left:0,cursor:"pointer"}}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Floor color row */}
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                <div>
+                  <div style={{fontSize:11,color:"var(--text-2)",fontWeight:600}}>Floor / Ceiling</div>
+                  <div style={{fontSize:10,color:"var(--text-3)"}}>Horizontal surfaces</div>
+                </div>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{
+                    fontSize:10,fontFamily:"monospace",color:"var(--text-3)",
+                    minWidth:52,textAlign:"right",
+                  }}>{cloudColors?.floor ?? "#2ed16b"}</span>
+                  <label style={{position:"relative",cursor:"pointer"}}>
+                    <div style={{
+                      width:28,height:28,borderRadius:6,cursor:"pointer",
+                      background: cloudColors?.floor ?? "#2ed16b",
+                      border:"2px solid rgba(168,85,247,0.4)",
+                      boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
+                      transition:"box-shadow 0.15s",
+                    }} />
+                    <input
+                      id="floor-color-input"
+                      type="color"
+                      value={cloudColors?.floor ?? "#2ed16b"}
+                      onChange={e => updateColor("floor", e.target.value)}
+                      style={{position:"absolute",opacity:0,width:"100%",height:"100%",top:0,left:0,cursor:"pointer"}}
+                    />
+                  </label>
+                </div>
+              </div>
+
+              {/* Reset to defaults */}
+              <button
+                id="cloud-colors-reset-btn"
+                onClick={() => {
+                  const defaults = { wall: "#f5f5f5", floor: "#2ed16b" };
+                  setCloudColors?.(defaults);
+                  try { localStorage.setItem("s2f_cloud_colors", JSON.stringify(defaults)); } catch {}
+                }}
+                style={{
+                  fontSize:10,color:"var(--text-3)",background:"none",
+                  border:"1px solid rgba(255,255,255,0.08)",borderRadius:4,
+                  padding:"3px 8px",cursor:"pointer",alignSelf:"flex-end",
+                }}
+              >↩ Reset defaults</button>
+
+            </div>
+          )}
         </div>
       </div>
 

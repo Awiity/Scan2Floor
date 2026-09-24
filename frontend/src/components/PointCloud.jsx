@@ -5,7 +5,7 @@
  * Binary format: [uint32 N][float32 N*3 positions][uint8 N*3 colors]
  *
  * Features:
- *   - Classifies 3D points: Walls -> White, Floor & Ceiling -> Green
+ *   - Classifies 3D points: Walls -> wallColor, Floor & Ceiling -> floorColor
  *   - Room highlighting: When a room is selected, room points are displayed at full
  *     brightness while outside points are dimmed to 15%.
  *   - Floor-accurate clipping planes based on actual storey elevation.
@@ -15,12 +15,29 @@ import { useEffect, useRef, useState, useMemo } from 'react'
 import { useThree } from '@react-three/fiber'
 import * as THREE   from 'three'
 
+/** Parse a CSS hex color string (#rrggbb or #rgb) to [r, g, b] in 0..1 range. */
+function hexToRgb(hex) {
+  const h = hex.replace('#', '')
+  if (h.length === 3) {
+    return [
+      parseInt(h[0] + h[0], 16) / 255,
+      parseInt(h[1] + h[1], 16) / 255,
+      parseInt(h[2] + h[2], 16) / 255,
+    ]
+  }
+  return [
+    parseInt(h.slice(0, 2), 16) / 255,
+    parseInt(h.slice(2, 4), 16) / 255,
+    parseInt(h.slice(4, 6), 16) / 255,
+  ]
+}
+
 /**
  * Classifies point cloud points into:
- *   - Vertical walls -> White
- *   - Horizontal floors & ceilings -> Green
+ *   - Vertical walls   -> wallColor
+ *   - Horizontal floors & ceilings -> floorColor
  */
-function classifyAndColorPoints(posData, N, floorLevels) {
+function classifyAndColorPoints(posData, N, floorLevels, wallColor, floorColor) {
   const colData = new Float32Array(N * 3)
   const levels = (floorLevels && floorLevels.length > 0)
     ? [...floorLevels].sort((a, b) => a - b)
@@ -41,9 +58,9 @@ function classifyAndColorPoints(posData, N, floorLevels) {
     if (mx === undefined || y > mx) cellMaxY.set(key, y)
   }
 
-  // Colors
-  const wallR = 0.96, wallG = 0.96, wallB = 0.98   // Architectural crisp white
-  const greenR = 0.18, greenG = 0.82, greenB = 0.42 // Architectural emerald green
+  // Colors — derived from props (with safe fallbacks)
+  const [wallR, wallG, wallB]   = hexToRgb(wallColor  || '#f5f5f5')
+  const [greenR, greenG, greenB] = hexToRgb(floorColor || '#2ed16b')
 
   // Pass 2: assign colors based on vertical span and height relative to floor/ceiling
   for (let i = 0; i < N; i++) {
@@ -87,7 +104,11 @@ function classifyAndColorPoints(posData, N, floorLevels) {
   return colData
 }
 
-export default function PointCloud({ modelInfo, activeFloor, onLoadStart, onLoaded, reloadKey, highlightedRoom }) {
+/** Default colors match the original hard-coded palette. */
+const DEFAULT_WALL_COLOR  = '#f5f5f5'
+const DEFAULT_FLOOR_COLOR = '#2ed16b'
+
+export default function PointCloud({ modelInfo, activeFloor, onLoadStart, onLoaded, reloadKey, highlightedRoom, wallColor = DEFAULT_WALL_COLOR, floorColor = DEFAULT_FLOOR_COLOR }) {
   const [points, setPoints] = useState(null)
   const { camera }          = useThree()
   const mounted             = useRef(true)
@@ -114,8 +135,8 @@ export default function PointCloud({ modelInfo, activeFloor, onLoadStart, onLoad
         // Positions: offset 4, N*3 float32
         const posData = new Float32Array(buf, 4, N * 3)
 
-        // Classify points: Walls -> White, Floor/Ceiling -> Green
-        const colData = classifyAndColorPoints(posData, N, modelInfo?.floor_levels)
+        // Classify points: Walls -> wallColor, Floor/Ceiling -> floorColor
+        const colData = classifyAndColorPoints(posData, N, modelInfo?.floor_levels, wallColor, floorColor)
 
         const geo = new THREE.BufferGeometry()
         geo.setAttribute('position', new THREE.BufferAttribute(posData, 3))
@@ -142,21 +163,21 @@ export default function PointCloud({ modelInfo, activeFloor, onLoadStart, onLoad
       })
 
     return () => { mounted.current = false }
-  }, [reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reloadKey, wallColor, floorColor]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Re-classify colors whenever floor_levels become available/change
+  // Re-classify colors whenever floor_levels or user-chosen colors change
   useEffect(() => {
-    if (!points || !modelInfo?.floor_levels) return
+    if (!points) return
     const posAttr = points.getAttribute('position')
     const colAttr = points.getAttribute('color')
     if (!posAttr || !colAttr) return
 
     const N = posAttr.count
     const posData = posAttr.array
-    const newColors = classifyAndColorPoints(posData, N, modelInfo.floor_levels)
+    const newColors = classifyAndColorPoints(posData, N, modelInfo?.floor_levels, wallColor, floorColor)
     colAttr.array.set(newColors)
     colAttr.needsUpdate = true
-  }, [modelInfo?.floor_levels, points])
+  }, [modelInfo?.floor_levels, wallColor, floorColor, points])
 
   // Material refs to trigger needsUpdate when clipping planes change
   const matRef          = useRef(null)

@@ -5,6 +5,8 @@
  * INSIDE the selected room at human eye level (First-Person POV).
  *
  * Features:
+ *   - Fires ONCE per room selection — uses a ref-guard to ignore subsequent
+ *     re-renders that pass the same room with a new object reference.
  *   - Fixes floor level detection so rooms on any floor level are accurately targeted.
  *   - Positions the camera inside the room bounds at human eye height (~1.6m above floor).
  *   - Sets target looking across the room so the user immediately experiences the room POV.
@@ -16,11 +18,35 @@ import { useThree, useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 
 export default function CameraFocuser({ highlightedRoom, modelInfo, controlsRef, activeFloor }) {
-  const animRef = useRef(null);
-  const { camera } = useThree();
+  const animRef       = useRef(null);
+  /**
+   * lastRoomIdRef tracks the id of the last room we animated to.
+   * This is the core fix for the "camera keeps re-centering" bug:
+   *
+   * highlightedRoom is derived in App.jsx via roomsData?.rooms.find(...)
+   * which returns a NEW object reference on every parent re-render, even when
+   * the same room is still selected. Without this guard, the useEffect would
+   * re-fire on every re-render and continuously override any camera movement
+   * the user makes while a room is selected.
+   */
+  const lastRoomIdRef = useRef(null);
+  const { camera }    = useThree();
 
   useEffect(() => {
-    if (!highlightedRoom) return;
+    if (!highlightedRoom) {
+      // Room deselected — reset so the next selection always triggers an animation
+      lastRoomIdRef.current = null;
+      return;
+    }
+
+    // Stable identity for the room (prefer id, fall back to label, then bbox hash)
+    const roomId = highlightedRoom.id
+      ?? highlightedRoom.label
+      ?? JSON.stringify(highlightedRoom.bbox);
+
+    // Skip if this room was already animated — user may have moved the camera freely
+    if (roomId === lastRoomIdRef.current) return;
+    lastRoomIdRef.current = roomId;
 
     const controls = controlsRef?.current;
     if (!controls) return;
@@ -67,18 +93,18 @@ export default function CameraFocuser({ highlightedRoom, modelInfo, controlsRef,
     camera.near = 0.05;
     camera.updateProjectionMatrix();
 
-    const currentTarget = controls.target.clone();
-    const currentPos = camera.position.clone();
-
     animRef.current = {
-      startTarget: currentTarget,
+      startTarget: controls.target.clone(),
       endTarget,
-      startPos: currentPos,
+      startPos: camera.position.clone(),
       endPos,
       t: 0,
       duration: 0.55, // smooth 550 ms transition
     };
-  }, [highlightedRoom, activeFloor, modelInfo]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Depend only on the room's identity fields, NOT the full object reference.
+  // Using highlightedRoom?.id etc. means the effect only re-runs when the
+  // selection genuinely changes — not on every parent re-render.
+  }, [highlightedRoom?.id, highlightedRoom?.label, highlightedRoom?.bbox]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useFrame((_, delta) => {
     const anim = animRef.current;

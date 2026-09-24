@@ -1002,6 +1002,8 @@ def _read_meta(save_path: str) -> dict | None:
 
 class SavePayload(BaseModel):
     name: str | None = None   # None → derive from xyz path
+    wall_color:  str | None = "#f5f5f5"   # CSS hex for wall points
+    floor_color: str | None = "#2ed16b"   # CSS hex for floor/ceiling points
 
 
 @app.get("/api/saves")
@@ -1020,10 +1022,12 @@ def list_saves():
         import glob as _glob
         n_floors = len(_glob.glob(os.path.join(entry.path, "walls_floor_*.json")))
         saves.append({
-            "name":      entry.name,
-            "timestamp": meta.get("timestamp"),
-            "xyz_path":  meta.get("xyz_path", ""),
-            "n_floors":  n_floors,
+            "name":        entry.name,
+            "timestamp":   meta.get("timestamp"),
+            "xyz_path":    meta.get("xyz_path", ""),
+            "n_floors":    n_floors,
+            "wall_color":  meta.get("wall_color",  "#f5f5f5"),
+            "floor_color": meta.get("floor_color", "#2ed16b"),
         })
     return {"saves": saves}
 
@@ -1065,9 +1069,11 @@ def create_save(payload: SavePayload):
     # Write meta
     import time as _time
     meta = {
-        "name":      name,
-        "timestamp": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
-        "xyz_path":  xyz_path,
+        "name":        name,
+        "timestamp":   _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+        "xyz_path":    xyz_path,
+        "wall_color":  payload.wall_color  or "#f5f5f5",
+        "floor_color": payload.floor_color or "#2ed16b",
     }
     with open(os.path.join(save_path, "meta.json"), "w") as fh:
         json.dump(meta, fh, indent=2)

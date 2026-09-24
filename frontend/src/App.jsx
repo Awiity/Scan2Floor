@@ -51,6 +51,16 @@ export default function App() {
   };
   const isDark = theme === "dark";
 
+  /* ---------- point cloud colors ---------- */
+  const [cloudColors, setCloudColors] = useState(() => {
+    try {
+      const stored = localStorage.getItem("s2f_cloud_colors");
+      return stored ? JSON.parse(stored) : { wall: "#f5f5f5", floor: "#2ed16b" };
+    } catch {
+      return { wall: "#f5f5f5", floor: "#2ed16b" };
+    }
+  });
+
   /* ---------- fpv panel width (resizable) --------- */
   const MIN_FPV_WIDTH = 560;
   const [fpvWidth, setFpvWidth] = useState(MIN_FPV_WIDTH);
@@ -222,6 +232,8 @@ export default function App() {
           roomMode={roomMode}
           setRoomMode={setRoomMode}
           onLoadSave={setLoadedSave}
+          cloudColors={cloudColors}
+          setCloudColors={setCloudColors}
         />
 
         {/* Sidebar toggle tab */}
@@ -279,6 +291,8 @@ export default function App() {
                     activeFloor={activeFloor}
                     reloadKey={cloudReloadKey}
                     highlightedRoom={highlightedRoom}
+                    wallColor={cloudColors.wall}
+                    floorColor={cloudColors.floor}
                     onLoadStart={() => setCloudLoading(true)}
                     onLoaded={(n) => {
                       setCloudLoading(false);
