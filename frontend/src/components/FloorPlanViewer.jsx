@@ -218,6 +218,34 @@ function findNearestLine(wx, wz, editedLines, cam, pixThresh = 10) {
 }
 
 /**
+ * Compute the intersection of two infinite lines defined by segments
+ * (x1,z1)→(x2,z2) and (x3,z3)→(x4,z4).
+ * Returns { pt: [ix, iz], t, s } where t and s are the parametric positions
+ * along the first and second segment respectively, or null if parallel.
+ */
+function lineIntersect(x1, z1, x2, z2, x3, z3, x4, z4) {
+  const d1x = x2 - x1, d1z = z2 - z1;
+  const d2x = x4 - x3, d2z = z4 - z3;
+  const denom = d1x * d2z - d1z * d2x;
+  if (Math.abs(denom) < 1e-10) return null; // parallel
+  const t = ((x3 - x1) * d2z - (z3 - z1) * d2x) / denom;
+  const s = ((x3 - x1) * d1z - (z3 - z1) * d1x) / denom;
+  return {
+    pt: [x1 + t * d1x, z1 + t * d1z],
+    t,
+    s,
+  };
+}
+
+/**
+ * Given a wall segment and an intersection point, return which endpoint index
+ * (0 or 1) is nearest to the intersection (i.e., the one to be extended).
+ */
+function nearestEndpointIdx([[x1, z1], [x2, z2]], [ix, iz]) {
+  return Math.hypot(x1 - ix, z1 - iz) <= Math.hypot(x2 - ix, z2 - iz) ? 0 : 1;
+}
+
+/**
  * Returns true if segment (x1,z1)→(x2,z2) intersects or lies within the
  * axis-aligned world-space rectangle [rxMin,rxMax] × [rzMin,rzMax].
  */
@@ -498,6 +526,107 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
   }
 }
 
+/**
+ * Draw the "corner" mode overlay: highlight selected wall, hover wall,
+ * ghost extensions and intersection dot.
+ */
+function drawCornerMode(ctx, editedLines, cam, cornerState, TC) {
+  if (!cornerState) return;
+  const { firstIdx, hoverIdx, intersection } = cornerState;
+  const lw = Math.max(1.0, cam.scale * 0.09);
+  const CORNER_COLOR = "#a78bfa"; // violet
+  const CORNER_GLOW  = "rgba(167,139,250,0.30)";
+
+  // Helper: draw a highlighted wall
+  const hilite = (idx, color, glow, alpha = 1) => {
+    if (idx < 0 || idx >= editedLines.length) return;
+    const [[x1, z1], [x2, z2]] = editedLines[idx].pts;
+    const [cx1, cy1] = toCanvas(x1, z1, cam);
+    const [cx2, cy2] = toCanvas(x2, z2, cam);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = glow; ctx.lineWidth = lw + 8;
+    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    ctx.strokeStyle = color; ctx.lineWidth = lw * 2;
+    ctx.shadowColor = color; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    ctx.restore();
+  };
+
+  // Highlight first selected wall
+  if (firstIdx >= 0) hilite(firstIdx, CORNER_COLOR, CORNER_GLOW);
+  // Highlight hover wall (second candidate)
+  if (hoverIdx >= 0 && hoverIdx !== firstIdx) hilite(hoverIdx, TC.wallHover, TC.wallHoverGlow, 0.7);
+
+  // Draw ghost extension lines and intersection dot
+  if (intersection) {
+    const [ix, iz] = intersection;
+    const [cix, ciy] = toCanvas(ix, iz, cam);
+
+    // Ghost extension for wall 1 → intersection
+    if (firstIdx >= 0) {
+      const pts1 = editedLines[firstIdx].pts;
+      const epIdx1 = nearestEndpointIdx(pts1, [ix, iz]);
+      const [epX1, epZ1] = pts1[epIdx1];
+      const [cepX1, cepY1] = toCanvas(epX1, epZ1, cam);
+      ctx.save();
+      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = CORNER_COLOR; ctx.lineWidth = lw;
+      ctx.globalAlpha = 0.55;
+      ctx.shadowColor = CORNER_COLOR; ctx.shadowBlur = 4;
+      ctx.beginPath(); ctx.moveTo(cepX1, cepY1); ctx.lineTo(cix, ciy); ctx.stroke();
+      ctx.restore();
+    }
+
+    // Ghost extension for wall 2 → intersection
+    if (hoverIdx >= 0 && hoverIdx !== firstIdx) {
+      const pts2 = editedLines[hoverIdx].pts;
+      const epIdx2 = nearestEndpointIdx(pts2, [ix, iz]);
+      const [epX2, epZ2] = pts2[epIdx2];
+      const [cepX2, cepY2] = toCanvas(epX2, epZ2, cam);
+      ctx.save();
+      ctx.setLineDash([5, 5]);
+      ctx.strokeStyle = TC.wallHover; ctx.lineWidth = lw;
+      ctx.globalAlpha = 0.55;
+      ctx.shadowColor = TC.wallHover; ctx.shadowBlur = 4;
+      ctx.beginPath(); ctx.moveTo(cepX2, cepY2); ctx.lineTo(cix, ciy); ctx.stroke();
+      ctx.restore();
+    }
+
+    // Intersection dot
+    ctx.save();
+    ctx.fillStyle = CORNER_COLOR;
+    ctx.shadowColor = CORNER_COLOR; ctx.shadowBlur = 14;
+    ctx.beginPath(); ctx.arc(cix, ciy, Math.max(5, lw * 2), 0, Math.PI * 2); ctx.fill();
+    // Small square inside to signal 90°
+    const sq = Math.max(3, lw * 1.2);
+    ctx.fillStyle = TC.bg;
+    ctx.fillRect(cix - sq / 2, ciy - sq / 2, sq, sq);
+    ctx.restore();
+
+    // Distance label near the intersection dot
+    if (firstIdx >= 0) {
+      const pts1 = editedLines[firstIdx].pts;
+      const epIdx1 = nearestEndpointIdx(pts1, [ix, iz]);
+      const [epX1, epZ1] = pts1[epIdx1];
+      const dist = Math.hypot(epX1 - ix, epZ1 - iz);
+      if (dist > 0.01) {
+        const label = `+${dist.toFixed(2)} m`;
+        ctx.save();
+        ctx.font = 'bold 10px "JetBrains Mono", monospace';
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(20,20,20,0.88)" : "rgba(245,245,245,0.92)";
+        ctx.fillRect(cix - tw / 2 - 5, ciy + 12, tw + 10, 17);
+        ctx.fillStyle = CORNER_COLOR;
+        ctx.fillText(label, cix, ciy + 20);
+        ctx.restore();
+      }
+    }
+  }
+}
+
 // Low-confidence threshold must match backend LOW_CONFIDENCE_THRESHOLD
 const LOW_CONF_THRESHOLD = 0.45;
 
@@ -538,6 +667,180 @@ function drawWindow(ctx, op, cam) {
   ctx.shadowColor = colour; ctx.shadowBlur = lowConf ? 2 : 4;
   ctx.beginPath(); ctx.moveTo(wx1, wy1); ctx.lineTo(wx2, wy2); ctx.stroke();
   ctx.restore();
+}
+
+function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovered = false) {
+  let wi = op.wall_idx;
+  if (wi < 0 || wi >= lines.length) {
+    if (op.wall_x1 != null && op.wall_z1 != null) {
+      let bestDist = 1.0, foundIdx = -1;
+      lines.forEach((l, i) => {
+        const [[x1, z1], [x2, z2]] = l.pts;
+        const d1 = Math.hypot(x1 - op.wall_x1, z1 - op.wall_z1) + Math.hypot(x2 - op.wall_x2, z2 - op.wall_z2);
+        const d2 = Math.hypot(x2 - op.wall_x1, z2 - op.wall_z1) + Math.hypot(x1 - op.wall_x2, z1 - op.wall_z2);
+        const minD = Math.min(d1, d2);
+        if (minD < bestDist) { bestDist = minD; foundIdx = i; }
+      });
+      if (foundIdx >= 0) wi = foundIdx;
+    }
+  }
+  if (wi < 0 || wi >= lines.length) return;
+  const [[x1, z1], [x2, z2]] = lines[wi].pts;
+  const wl = Math.hypot(x2 - x1, z2 - z1);
+  if (wl < 0.001) return;
+
+  const ux = (x2 - x1) / wl, uz = (z2 - z1) / wl;
+  const nx = -uz, nz = ux;
+
+  const t = Math.max(0.02, Math.min(0.98, op.position_t ?? 0.5));
+  const mx = x1 + (x2 - x1) * t, mz = z1 + (z2 - z1) * t;
+
+  const w_m = op.width_m ?? (op.type === "door" ? 0.9 : 1.2);
+  const hw = w_m / 2;
+
+  const jax = mx - ux * hw, jaz = mz - uz * hw;
+  const jbx = mx + ux * hw, jbz = mz + uz * hw;
+
+  const [cjax, cjay] = toCanvas(jax, jaz, cam);
+  const [cjbx, cjby] = toCanvas(jbx, jbz, cam);
+  const [cmx, cmy]   = toCanvas(mx, mz, cam);
+
+  const baseCol   = op.type === "door" ? TC.door : TC.window;
+  const strokeCol = isSelected ? "#38bdf8" : isHovered ? "#fbbf24" : baseCol;
+  const glowCol   = isSelected ? "rgba(56,189,248,0.5)" : isHovered ? "rgba(251,191,36,0.4)" : baseCol;
+
+  if (op.type === "door") {
+    const hingeSide = op.side === -1 ? -1 : 1;
+    const swingDir  = op.swing_dir === -1 ? -1 : 1;
+
+    const hx = hingeSide === 1 ? jax : jbx;
+    const hz = hingeSide === 1 ? jaz : jbz;
+    const ex = hingeSide === 1 ? jbx : jax;
+    const ez = hingeSide === 1 ? jbz : jaz;
+
+    const tx = hx + swingDir * nx * w_m;
+    const tz = hz + swingDir * nz * w_m;
+
+    const [chx, chy]     = toCanvas(hx, hz, cam);
+    const [cex, cey]     = toCanvas(ex, ez, cam);
+    const [ctx_p, cty_p] = toCanvas(tx, tz, cam);
+
+    ctx.save();
+    ctx.lineCap = "round";
+
+    ctx.strokeStyle = TC.wallHidden || "rgba(100,120,150,0.5)";
+    ctx.lineWidth = Math.max(1, cam.scale * 0.04);
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(cjax, cjay);
+    ctx.lineTo(cjbx, cjby);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const tickLen = Math.max(3, cam.scale * 0.08);
+    const cnx = - (cjby - cjay) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
+    const cny =   (cjbx - cjax) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
+
+    ctx.strokeStyle = strokeCol;
+    ctx.lineWidth = Math.max(1.5, cam.scale * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(cjax - cnx * tickLen, cjay - cny * tickLen);
+    ctx.lineTo(cjax + cnx * tickLen, cjay + cny * tickLen);
+    ctx.moveTo(cjbx - cnx * tickLen, cjby - cny * tickLen);
+    ctx.lineTo(cjbx + cnx * tickLen, cjby + cny * tickLen);
+    ctx.stroke();
+
+    ctx.strokeStyle = strokeCol;
+    ctx.lineWidth = isSelected ? Math.max(2.5, cam.scale * 0.12) : Math.max(1.8, cam.scale * 0.09);
+    ctx.shadowColor = glowCol;
+    ctx.shadowBlur = isSelected ? 14 : isHovered ? 8 : 4;
+    ctx.beginPath();
+    ctx.moveTo(chx, chy);
+    ctx.lineTo(ctx_p, cty_p);
+    ctx.stroke();
+
+    const r_px = w_m * cam.scale;
+    const aClosed = Math.atan2(cey - chy, cex - chx);
+    const aOpen   = Math.atan2(cty_p - chy, ctx_p - chx);
+
+    let dAngle = (aOpen - aClosed + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
+    const ccw = dAngle < 0;
+
+    ctx.strokeStyle = strokeCol;
+    ctx.lineWidth = Math.max(1.2, cam.scale * 0.05);
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.arc(chx, chy, r_px, aClosed, aOpen, ccw);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = strokeCol;
+    ctx.beginPath();
+    ctx.arc(chx, chy, Math.max(3, cam.scale * 0.07), 0, Math.PI * 2);
+    ctx.fill();
+
+    if (isSelected || isHovered) {
+      const dimLabel = `${w_m.toFixed(2)} m`;
+      ctx.font = 'bold 10px "JetBrains Mono",monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const tw = ctx.measureText(dimLabel).width;
+      const lx = (chx + ctx_p) / 2 + cnx * 14;
+      const ly = (chy + cty_p) / 2 + cny * 14;
+      ctx.fillStyle = "rgba(10,14,26,0.85)";
+      ctx.fillRect(lx - tw / 2 - 4, ly - 7, tw + 8, 14);
+      ctx.fillStyle = strokeCol;
+      ctx.fillText(dimLabel, lx, ly);
+    }
+
+    ctx.restore();
+  } else if (op.type === "window") {
+    const off_m = 0.05;
+    const [cx1_a, cy1_a] = toCanvas(jax + nx * off_m, jaz + nz * off_m, cam);
+    const [cx2_a, cy2_a] = toCanvas(jbx + nx * off_m, jbz + nz * off_m, cam);
+    const [cx1_b, cy1_b] = toCanvas(jax - nx * off_m, jaz - nz * off_m, cam);
+    const [cx2_b, cy2_b] = toCanvas(jbx - nx * off_m, jbz - nz * off_m, cam);
+
+    ctx.save();
+    ctx.lineCap = "square";
+    ctx.strokeStyle = strokeCol;
+    ctx.lineWidth = isSelected ? Math.max(2.5, cam.scale * 0.12) : Math.max(1.8, cam.scale * 0.09);
+    ctx.shadowColor = glowCol;
+    ctx.shadowBlur = isSelected ? 14 : isHovered ? 8 : 4;
+
+    ctx.beginPath();
+    ctx.moveTo(cx1_a, cy1_a); ctx.lineTo(cx2_a, cy2_a);
+    ctx.moveTo(cx1_b, cy1_b); ctx.lineTo(cx2_b, cy2_b);
+    ctx.moveTo(cx1_a, cy1_a); ctx.lineTo(cx1_b, cy1_b);
+    ctx.moveTo(cx2_a, cy2_a); ctx.lineTo(cx2_b, cy2_b);
+    ctx.stroke();
+
+    ctx.strokeStyle = isSelected ? "#ffffff" : TC.window;
+    ctx.lineWidth = Math.max(1.2, cam.scale * 0.06);
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(cjax, cjay); ctx.lineTo(cjbx, cjby);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (isSelected || isHovered) {
+      const dimLabel = `${w_m.toFixed(2)} m`;
+      ctx.font = 'bold 10px "JetBrains Mono",monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const tw = ctx.measureText(dimLabel).width;
+      const cnx = - (cjby - cjay) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
+      const cny =   (cjbx - cjax) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
+      const lx = cmx + cnx * 14;
+      const ly = cmy + cny * 14;
+      ctx.fillStyle = "rgba(10,14,26,0.85)";
+      ctx.fillRect(lx - tw / 2 - 4, ly - 7, tw + 8, 14);
+      ctx.fillStyle = strokeCol;
+      ctx.fillText(dimLabel, lx, ly);
+    }
+
+    ctx.restore();
+  }
 }
 
 function drawOpenings(ctx, openings, cam) {
@@ -588,15 +891,25 @@ function drawCompass(ctx, w) {
 // ── EditToolbar ────────────────────────────────────────────────────────────────
 
 const TOOLS = [
-  { id: "select", icon: "✋", label: "Pan",       key: "S", title: "Pan & Zoom (S)" },
-  { id: "add",    icon: "✏️",  label: "Add Wall",  key: "A", title: "Add Wall (A)" },
-  { id: "delete", icon: "✂️",  label: "Delete",    key: "D", title: "Delete Wall (D)" },
-  { id: "hide",   icon: "👁",  label: "Hide",      key: "H", title: "Hide/Show Wall (H) — hides from room recalc" },
+  { id: "select",     icon: "✋", label: "Pan",        key: "S", title: "Pan & Zoom (S)" },
+  { id: "add",        icon: "✏️",  label: "Add Wall",   key: "A", title: "Add Wall (A)" },
+  { id: "add-door",   icon: "🚪", label: "Door",       key: "Q", title: "Add Door — click wall (Q)" },
+  { id: "add-window", icon: "🪟", label: "Window",     key: "W", title: "Add Window — click wall (W)" },
+  { id: "delete",     icon: "✂️",  label: "Delete",     key: "D", title: "Delete Wall / Opening (D)" },
+  { id: "hide",       icon: "👁",  label: "Hide",       key: "H", title: "Hide/Show Wall (H) — hides from room recalc" },
+  { id: "corner",     icon: "⌐",  label: "Corner",     key: "C", title: "Extend to Corner (C) — extend two walls to their intersection" },
 ];
 
-function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, onSave, onReset, saveState, wallCount, userCount, hiddenCount }) {
+function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, onSave, onReset, saveState, wallCount, userCount, hiddenCount, cornerStep }) {
   const toolBtn = (id, icon, label, title) => {
-    const isHide = id === "hide";
+    const isHide   = id === "hide";
+    const isCorner = id === "corner";
+    const isDoor   = id === "add-door";
+    const isWindow = id === "add-window";
+    // Corner button shows step indicator when active
+    const cornerLabel = isCorner && mode === "corner"
+      ? (cornerStep === 1 ? "Corner ①" : "Corner ②")
+      : label;
     return (
       <button
         key={id}
@@ -607,19 +920,19 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
           padding: "4px 9px", borderRadius: 5, fontSize: 11,
           fontWeight: mode === id ? 700 : 400,
           background:  mode === id
-            ? (isHide ? "rgba(74,96,128,0.22)" : "rgba(251,191,36,0.15)")
+            ? (isHide ? "rgba(74,96,128,0.22)" : isCorner ? "rgba(167,139,250,0.15)" : isDoor ? "rgba(251,191,36,0.18)" : isWindow ? "rgba(129,140,248,0.18)" : "rgba(251,191,36,0.15)")
             : "rgba(255,255,255,0.04)",
           border:      mode === id
-            ? (isHide ? "1px solid rgba(74,96,128,0.7)" : "1px solid rgba(251,191,36,0.5)")
+            ? (isHide ? "1px solid rgba(74,96,128,0.7)" : isCorner ? "1px solid rgba(167,139,250,0.6)" : isDoor ? "1px solid rgba(251,191,36,0.6)" : isWindow ? "1px solid rgba(129,140,248,0.6)" : "1px solid rgba(251,191,36,0.5)")
             : "1px solid rgba(255,255,255,0.1)",
           color:       mode === id
-            ? (isHide ? "#94a3b8" : "#fbbf24")
+            ? (isHide ? "#94a3b8" : isCorner ? "#a78bfa" : isDoor ? "#fbbf24" : isWindow ? "#818cf8" : "#fbbf24")
             : "rgba(200,220,255,0.6)",
           cursor: "pointer", transition: "all 0.15s",
           fontFamily: "Inter, sans-serif",
         }}
       >
-        <span>{icon}</span><span style={{ fontSize: 10.5 }}>{label}</span>
+        <span>{icon}</span><span style={{ fontSize: 10.5 }}>{cornerLabel}</span>
       </button>
     );
   };
@@ -705,29 +1018,46 @@ const MODE_HINTS = {
   add:    "Click to place first point → click again to draw wall · Esc to cancel",
   delete: "Click a wall to delete · Hold & drag to box-delete all walls in area · Esc to exit",
   hide:   "Click a wall to hide/unhide · Hold & drag to box-hide all walls in area · Esc to exit",
+  corner: "Click first wall → click second wall → both extend to their intersection  ·  Esc to cancel",
 };
-const ADD_HINT_FREE    = "Click to set first point  ·  then click to finish wall  ·  Esc to cancel";
-const ADD_HINT_PLACED  = "Click to finish  ·  Hold Shift → lock to 0°/45°/90°/135° axis  ·  Esc to cancel";
-const ADD_HINT_LOCKED  = "🔒 Angle locked — click to place wall  ·  Release Shift to free-draw  ·  Esc to cancel";
+const ADD_HINT_FREE      = "Click to set first point  ·  then click to finish wall  ·  Esc to cancel";
+const ADD_HINT_PLACED    = "🔒 Snapping to 0°/45°/90°/135°  ·  Hold Shift for free angle  ·  Esc to cancel";
+const ADD_HINT_FREE_DRAW = "✏ Free angle — click to place wall  ·  Release Shift to snap  ·  Esc to cancel";
+const CORNER_HINT_STEP1  = "⌐ Select first wall to extend  ·  Esc to cancel";
+const CORNER_HINT_STEP2  = "⌐ Select second wall — both will extend to intersection  ·  Esc to cancel";
+const CORNER_HINT_NONE   = "⌐ No valid intersection found for these walls";
 
-function ModeHint({ mode, addStep, angleConstrained }) {
+function ModeHint({ mode, addStep, freeDrawMode, cornerStep, cornerHasIntersection }) {
   let text;
   if (mode === "add") {
     if (!addStep)          text = ADD_HINT_FREE;
-    else if (angleConstrained) text = ADD_HINT_LOCKED;
+    else if (freeDrawMode) text = ADD_HINT_FREE_DRAW;
     else                   text = ADD_HINT_PLACED;
+  } else if (mode === "corner") {
+    if (cornerStep === 0)       text = CORNER_HINT_STEP1;
+    else if (cornerStep === 1 && cornerHasIntersection) text = CORNER_HINT_STEP2;
+    else if (cornerStep === 1)  text = CORNER_HINT_NONE;
+    else                        text = MODE_HINTS.corner;
   } else {
-    text = MODE_HINTS[mode];
+    text = MODE_HINTS[mode] ?? "";
   }
-  const isLocked = mode === "add" && angleConstrained;
+  // Locked = default angle-snap mode while drawing
+  const isLocked  = mode === "add" && addStep && !freeDrawMode;
+  const isCorner  = mode === "corner";
+  const isNoInter = mode === "corner" && cornerStep === 1 && !cornerHasIntersection;
   return (
     <div style={{
       position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)",
-      background: isLocked ? "var(--surface-3)" : "var(--surface-1)",
-      border: isLocked ? "1px solid var(--border-hi)" : "1px solid var(--border)",
+      background: isLocked || isCorner ? "var(--surface-3)" : "var(--surface-1)",
+      border: isLocked ? "1px solid var(--border-hi)"
+            : isCorner ? "1px solid rgba(167,139,250,0.5)"
+            : "1px solid var(--border)",
       borderRadius: 6, padding: "4px 12px",
       fontSize: 10,
-      color: isLocked ? "var(--accent)" : mode === "select" ? "var(--text-3)" : "#f59e0b",
+      color: isNoInter ? "#ef4444"
+           : isCorner  ? "#a78bfa"
+           : isLocked  ? "var(--accent)"
+           : mode === "select" ? "var(--text-3)" : "#f59e0b",
       fontFamily: "Inter, sans-serif", whiteSpace: "nowrap", pointerEvents: "none",
       boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
       transition: "all 0.15s",
@@ -880,7 +1210,7 @@ function RoomInfoChip({ room, floorIdx, modelInfo }) {
   );
 }
 
-export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, roomMode = "polygon", saveName = null }) {
+export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, roomMode = "polygon", saveName = null, onWallsSaved }) {
   const canvasRef = useRef(null);
   const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
   const rafRef    = useRef(null);
@@ -950,21 +1280,55 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const boxSelectRef   = useRef(null);
   // Tracks whether Shift is currently held (for angle-snap in add mode)
   const shiftRef       = useRef(false);
-  const [angleConstrained, setAngleConstrained] = useState(false);
+  // freeDrawMode: true when Shift is held to override the default 45° angle-lock
+  const [freeDrawMode, setFreeDrawMode] = useState(false);
+
+  // Corner tool state: { firstIdx } when first wall is selected, null otherwise
+  // cornerState ref for event handlers; cornerStateUi for React re-renders
+  const cornerStateRef = useRef(null); // { firstIdx } | null
+  const [cornerStep, setCornerStep] = useState(0); // 0=pick first, 1=pick second
+  const [cornerHoverIdx, setCornerHoverIdx] = useState(-1);
+  const [cornerIntersection, setCornerIntersection] = useState(null);
+
+  // ── Openings editing state ──────────────────────────────────────────────────
+  const [userOpenings,           setUserOpenings]           = useState([]);
+  const [openingsDirty,          setOpeningsDirty]          = useState(false);
+  const [selectedOpIdx,          setSelectedOpIdx]          = useState(null);
+  const [hoverManualOp,          setHoverManualOp]          = useState(-1);
+  const [hoverOp,                setHoverOp]                = useState(null); // { wallIdx, position_t }
+
+  // Tool parameter defaults
+  const [toolDoorWidth,          setToolDoorWidth]          = useState(0.9);
+  const [toolDoorHingeSide,      setToolDoorHingeSide]      = useState(1);
+  const [toolDoorSwingDir,       setToolDoorSwingDir]       = useState(1);
+  const [toolDoorTopMargin,      setToolDoorTopMargin]      = useState(0.7);
+  const [toolWindowWidth,        setToolWindowWidth]        = useState(1.2);
+  const [toolWindowBottomMargin, setToolWindowBottomMargin] = useState(0.9);
+  const [toolWindowTopMargin,    setToolWindowTopMargin]    = useState(0.7);
+
+  const userOpeningsRef    = useRef([]);
+  const hoverManualOpRef   = useRef(-1);
+  const hoverOpeningRef    = useRef(null);
+  const selectedOpIdxRef   = useRef(null);
 
   useEffect(() => { editModeRef.current    = editMode;    }, [editMode]);
   useEffect(() => { editedLinesRef.current = editedLines; }, [editedLines]);
   useEffect(() => { addStepRef.current     = addStep;     }, [addStep]);
   useEffect(() => { hoveredLineRef.current = hoveredLine; }, [hoveredLine]);
+  useEffect(() => { userOpeningsRef.current  = userOpenings;  }, [userOpenings]);
+  useEffect(() => { hoverManualOpRef.current = hoverManualOp; }, [hoverManualOp]);
+  useEffect(() => { hoverOpeningRef.current  = hoverOp;        }, [hoverOp]);
+  useEffect(() => { selectedOpIdxRef.current = selectedOpIdx; }, [selectedOpIdx]);
 
   // ── Fetch floor data ────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
     setLoadState("loading");
-    setEditedLines([]); setRoomsData(null); setOpeningsData(null);
-    setIsDirty(false); setUndoStack([]); setRedoStack([]);
+    setEditedLines([]); setRoomsData(null); setOpeningsData(null); setUserOpenings([]);
+    setIsDirty(false); setOpeningsDirty(false); setUndoStack([]); setRedoStack([]);
     setAddStep(null); addStepRef.current = null; snapRef.current = null;
     setHoveredLine(-1); hoveredLineRef.current = -1;
+    setSelectedOpIdx(null); setHoverManualOp(-1); setHoverOp(null);
 
     Promise.all([
       fetch(`${apiBase}/walls/${selectedFloor}`).then(r => r.json()),
@@ -976,6 +1340,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         const converted = (w?.lines ?? []).map(pts => ({ pts, source: "algo" }));
         setEditedLines(converted); editedLinesRef.current = converted;
         setRoomsData(r); setOpeningsData(o);
+        const uo = o?.user_openings ?? [];
+        setUserOpenings(uo); userOpeningsRef.current = uo;
+        setOpeningsDirty(false); setSelectedOpIdx(null);
         setLoadState("ready");
         const cvs = canvasRef.current;
         if (cvs && converted.length) {
@@ -1017,34 +1384,94 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Save to backend ─────────────────────────────────────────────────────────
-  const handleSave = useCallback(async () => {
-    if (!isDirty) return;
-    setSaveState("saving");
+  // ── Openings helpers ────────────────────────────────────────────────────────
+  const persistOpenings = useCallback(async (list) => {
     try {
-      // Hidden walls are excluded — they are suppressed from room recalculation
-      const lines = editedLinesRef.current
-        .filter(l => !l.hidden)
-        .map(l => l.pts);
-      // Route to save-specific endpoint if viewing a save
-      const putUrl = `${apiBase}/walls/${selectedFloor}`;
-      const r = await fetch(putUrl, {
+      const putOpUrl = `${apiBase}/openings/${selectedFloor}`;
+      await fetch(putOpUrl, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lines, polygon_rooms: roomMode === "polygon" }),
+        body: JSON.stringify({ user_openings: list }),
       });
-      const d = await r.json();
-      if (!r.ok) { setSaveState("error"); return; }
+      setOpeningsDirty(false);
+      onWallsSaved?.();
+    } catch (err) {
+      console.error("Failed to auto-save openings:", err);
+    }
+  }, [apiBase, selectedFloor, onWallsSaved]);
+
+  const updateSelectedOp = useCallback((changes) => {
+    if (selectedOpIdxRef.current === null) return;
+    const idx = selectedOpIdxRef.current;
+    const list = [...userOpeningsRef.current];
+    if (idx >= 0 && idx < list.length) {
+      const merged = { ...list[idx], ...changes };
+      if (changes.width_m != null) merged.width = changes.width_m;
+      if (changes.width != null) merged.width_m = changes.width;
+      if (changes.position_t != null && merged.wall_x1 != null && merged.wall_x2 != null) {
+        merged.x = merged.wall_x1 + merged.position_t * (merged.wall_x2 - merged.wall_x1);
+        merged.z = merged.wall_z1 + merged.position_t * (merged.wall_z2 - merged.wall_z1);
+      }
+      list[idx] = merged;
+      userOpeningsRef.current = list;
+      setUserOpenings(list);
+      scheduleDraw();
+      persistOpenings(list);
+    }
+  }, [persistOpenings]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const deleteSelectedOp = useCallback(() => {
+    if (selectedOpIdxRef.current === null) return;
+    const idx = selectedOpIdxRef.current;
+    const list = userOpeningsRef.current.filter((_, i) => i !== idx);
+    userOpeningsRef.current = list;
+    setUserOpenings(list);
+    setSelectedOpIdx(null);
+    scheduleDraw();
+    persistOpenings(list);
+  }, [persistOpenings]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Save to backend ─────────────────────────────────────────────────────────
+  const handleSave = useCallback(async () => {
+    if (!isDirty && !openingsDirty) return;
+    setSaveState("saving");
+    try {
+      const reqs = [];
+      if (isDirty) {
+        // Hidden walls are excluded — they are suppressed from room recalculation
+        const lines = editedLinesRef.current
+          .filter(l => !l.hidden)
+          .map(l => l.pts);
+        const putUrl = `${apiBase}/walls/${selectedFloor}`;
+        reqs.push(fetch(putUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lines, polygon_rooms: roomMode === "polygon" }),
+        }));
+      }
+      if (openingsDirty) {
+        const putOpUrl = `${apiBase}/openings/${selectedFloor}`;
+        reqs.push(fetch(putOpUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_openings: userOpeningsRef.current }),
+        }));
+      }
+      const responses = await Promise.all(reqs);
+      const failed = responses.some(r => !r.ok);
+      if (failed) { setSaveState("error"); return; }
       setSaveState("saved");
       setIsDirty(false);
-      // Refresh rooms from updated backend (save or live)
+      setOpeningsDirty(false);
+      onWallsSaved?.();
+      // Refresh rooms from updated backend
       fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => {});
       setTimeout(() => setSaveState("idle"), 3000);
     } catch {
       setSaveState("error");
       setTimeout(() => setSaveState("idle"), 3000);
     }
-  }, [isDirty, selectedFloor]);
+  }, [isDirty, openingsDirty, selectedFloor, apiBase, roomMode, onWallsSaved]);
 
   // ── Draw loop ───────────────────────────────────────────────────────────────
   // Keep a ref for highlightedRoomId to avoid stale closures in scheduleDraw
@@ -1068,15 +1495,55 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         hoveredLineRef.current, addStepRef.current, snapRef.current,
         editModeRef.current, TC,
       );
+      // Corner mode overlay (drawn on top of walls, below openings)
+      if (editModeRef.current === "corner") {
+        const cs = cornerStateRef.current;
+        drawCornerMode(ctx, editedLinesRef.current, cam, {
+          firstIdx:     cs ? cs.firstIdx : -1,
+          hoverIdx:     hoveredLineRef.current,
+          intersection: cornerStateRef.current ? cornerIntersection : null,
+        }, TC);
+      }
+      // Draw auto-detected openings
       drawOpenings(ctx, openingsData?.openings, cam);
+
+      // Draw manual user-placed openings
+      for (let i = 0; i < userOpeningsRef.current.length; i++) {
+        const op = userOpeningsRef.current[i];
+        const isSel = i === selectedOpIdxRef.current;
+        const isHov = i === hoverManualOpRef.current;
+        drawManualOpening(ctx, op, editedLinesRef.current, cam, TC, isSel, isHov);
+      }
+
+      // Draw live ghost preview for door / window placement
+      const em = editModeRef.current;
+      const hOp = hoverOpeningRef.current;
+      if ((em === "add-door" || em === "add-window") && hOp?.wallIdx >= 0 && hOp.wallIdx < editedLinesRef.current.length) {
+        const isDoor = em === "add-door";
+        const ghostOp = {
+          type: isDoor ? "door" : "window",
+          wall_idx: hOp.wallIdx,
+          position_t: hOp.position_t,
+          width_m: isDoor ? toolDoorWidth : toolWindowWidth,
+          side: isDoor ? toolDoorHingeSide : 1,
+          swing_dir: isDoor ? toolDoorSwingDir : 1,
+          top_margin: isDoor ? toolDoorTopMargin : toolWindowTopMargin,
+          bottom_margin: isDoor ? 0 : toolWindowBottomMargin,
+        };
+        ctx.save();
+        ctx.globalAlpha = 0.85;
+        drawManualOpening(ctx, ghostOp, editedLinesRef.current, cam, TC, false, true);
+        ctx.restore();
+      }
+
       drawBoxSelect(ctx, boxSelectRef.current, editModeRef.current);
       drawScale(ctx, cam, w, h, TC);
       drawCompass(ctx, w);
     });
-  }, [roomsData, openingsData]);
+  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
 
   // redraw when data changes
-  useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, highlightedRoomId, scheduleDraw]);
+  useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, userOpenings, selectedOpIdx, hoverManualOp, hoverOp, highlightedRoomId, scheduleDraw]);
 
   // ── Center camera on selected room ──────────────────────────────────────────
   useEffect(() => {
@@ -1125,23 +1592,37 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Z")) { e.preventDefault(); redo(); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); handleSave(); return; }
       if (e.key === "Escape") {
-        if (addStepRef.current) {
+        if (selectedOpIdxRef.current !== null) {
+          setSelectedOpIdx(null); selectedOpIdxRef.current = null; scheduleDraw();
+        } else if (addStepRef.current) {
           addStepRef.current = null; setAddStep(null); snapRef.current = null; scheduleDraw();
+        } else if (editModeRef.current === "corner" && cornerStateRef.current) {
+          cornerStateRef.current = null;
+          setCornerStep(0); setCornerHoverIdx(-1); setCornerIntersection(null);
+          scheduleDraw();
         } else {
-          setEditMode("select"); editModeRef.current = "select";
+          setEditMode("select"); editModeRef.current = "select"; scheduleDraw();
         }
         return;
       }
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedOpIdxRef.current !== null) {
+        e.preventDefault();
+        deleteSelectedOp();
+        return;
+      }
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (e.key === "s" || e.key === "S") { setEditMode("select"); editModeRef.current = "select"; }
-        if (e.key === "a" || e.key === "A") { setEditMode("add");    editModeRef.current = "add"; }
-        if (e.key === "d" || e.key === "D") { setEditMode("delete"); editModeRef.current = "delete"; }
-        if (e.key === "h" || e.key === "H") { setEditMode("hide");   editModeRef.current = "hide"; }
+        if (e.key === "s" || e.key === "S") { setEditMode("select");     editModeRef.current = "select";     scheduleDraw(); }
+        if (e.key === "a" || e.key === "A") { setEditMode("add");        editModeRef.current = "add";        scheduleDraw(); }
+        if (e.key === "q" || e.key === "Q") { setEditMode("add-door");   editModeRef.current = "add-door";   scheduleDraw(); }
+        if (e.key === "w" || e.key === "W") { setEditMode("add-window"); editModeRef.current = "add-window"; scheduleDraw(); }
+        if (e.key === "d" || e.key === "D") { setEditMode("delete");     editModeRef.current = "delete";     scheduleDraw(); }
+        if (e.key === "h" || e.key === "H") { setEditMode("hide");       editModeRef.current = "hide";       scheduleDraw(); }
+        if (e.key === "c" || e.key === "C") { setEditMode("corner");     editModeRef.current = "corner";     scheduleDraw(); }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, handleSave, scheduleDraw]);
+  }, [undo, redo, handleSave, deleteSelectedOp, scheduleDraw]);
 
   // ── Helper: get world pos from mouse event ──────────────────────────────────
   const getWorldFromEvent = useCallback((e) => {
@@ -1206,14 +1687,36 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       const shiftHeld = e.shiftKey;
       shiftRef.current = shiftHeld;
 
-      if (mode === "add" && addStepRef.current && shiftHeld) {
-        // Angle-constrained snap
-        const [ax, az] = addStepRef.current;
-        snapRef.current = computeSnapConstrained(wx, wz, editedLinesRef.current, camRef.current, ax, az);
-        if (!angleConstrained) setAngleConstrained(true);
+      if (mode === "add" && addStepRef.current) {
+        if (shiftHeld) {
+          // Shift held → free-angle (no constraint), just endpoint/grid snap
+          snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current);
+          if (!freeDrawMode) setFreeDrawMode(true);
+        } else {
+          // Default: 45° angle-constrained snap from the first point
+          const [ax, az] = addStepRef.current;
+          snapRef.current = computeSnapConstrained(wx, wz, editedLinesRef.current, camRef.current, ax, az);
+          if (freeDrawMode) setFreeDrawMode(false);
+        }
+      } else if (mode === "corner") {
+        // Corner tool: track which wall is under the cursor
+        const idx = findNearestLine(wx, wz, editedLinesRef.current, camRef.current, 12);
+        hoveredLineRef.current = idx;
+        setCornerHoverIdx(idx);
+
+        // If first wall already selected, compute live intersection preview
+        const cs = cornerStateRef.current;
+        if (cs && idx >= 0 && idx !== cs.firstIdx) {
+          const [ax1, az1, ax2, az2] = [...editedLinesRef.current[cs.firstIdx].pts[0], ...editedLinesRef.current[cs.firstIdx].pts[1]];
+          const [bx1, bz1, bx2, bz2] = [...editedLinesRef.current[idx].pts[0], ...editedLinesRef.current[idx].pts[1]];
+          const hit = lineIntersect(ax1, az1, ax2, az2, bx1, bz1, bx2, bz2);
+          setCornerIntersection(hit ? hit.pt : null);
+        } else {
+          setCornerIntersection(null);
+        }
       } else {
         snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current);
-        if (angleConstrained) setAngleConstrained(false);
+        if (freeDrawMode) setFreeDrawMode(false);
       }
 
       if (mode === "delete" || mode === "hide") {
@@ -1221,12 +1724,77 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         hoveredLineRef.current = idx;
         setHoveredLine(idx);   // for cursor CSS
       }
+
+      if (mode === "add-door" || mode === "add-window") {
+        let bestWall = 18 / camRef.current.scale, idx = -1, t = 0.5;
+        editedLinesRef.current.forEach((l, i) => {
+          if (l.hidden) return;
+          const [[x1, z1], [x2, z2]] = l.pts;
+          const d = distPointToSeg(wx, wz, x1, z1, x2, z2);
+          if (d < bestWall) {
+            bestWall = d; idx = i;
+            const dx = x2 - x1, dz = z2 - z1, len2 = dx * dx + dz * dz;
+            t = len2 > 0 ? Math.max(0.05, Math.min(0.95, ((wx - x1) * dx + (wz - z1) * dz) / len2)) : 0.5;
+          }
+        });
+        const info = idx >= 0 ? { wallIdx: idx, position_t: t } : null;
+        hoverOpeningRef.current = info;
+        setHoverOp(info);
+      }
+
+      // Check hover over manual openings (e.g. for delete or inspect)
+      let bestOp = 16 / camRef.current.scale, hitOpIdx = -1;
+      userOpeningsRef.current.forEach((op, oIdx) => {
+        let wi = op.wall_idx;
+        if (wi < 0 || wi >= editedLinesRef.current.length) {
+          if (op.wall_x1 != null) {
+            editedLinesRef.current.forEach((l, i) => {
+              const [[x1, z1], [x2, z2]] = l.pts;
+              if (Math.hypot(x1 - op.wall_x1, z1 - op.wall_z1) < 0.2) wi = i;
+            });
+          }
+        }
+        if (wi < 0 || wi >= editedLinesRef.current.length) return;
+        const [[x1, z1], [x2, z2]] = editedLinesRef.current[wi].pts;
+        const t = Math.max(0.02, Math.min(0.98, op.position_t ?? 0.5));
+        const mx = x1 + (x2 - x1) * t, mz = z1 + (z2 - z1) * t;
+        const d = Math.hypot(wx - mx, wz - mz);
+        if (d < bestOp) { bestOp = d; hitOpIdx = oIdx; }
+      });
+      hoverManualOpRef.current = hitOpIdx;
+      setHoverManualOp(hitOpIdx);
+
       scheduleDraw();
     } else {
-      // Reset angle lock when not in add mode
-      if (angleConstrained) setAngleConstrained(false);
+      // In select mode: check hover over manual openings so user can click to inspect
+      const [wx, wz] = getWorldFromEvent(e);
+      let bestOp = 16 / camRef.current.scale, hitOpIdx = -1;
+      userOpeningsRef.current.forEach((op, oIdx) => {
+        let wi = op.wall_idx;
+        if (wi < 0 || wi >= editedLinesRef.current.length) {
+          if (op.wall_x1 != null) {
+            editedLinesRef.current.forEach((l, i) => {
+              const [[x1, z1], [x2, z2]] = l.pts;
+              if (Math.hypot(x1 - op.wall_x1, z1 - op.wall_z1) < 0.2) wi = i;
+            });
+          }
+        }
+        if (wi < 0 || wi >= editedLinesRef.current.length) return;
+        const [[x1, z1], [x2, z2]] = editedLinesRef.current[wi].pts;
+        const t = Math.max(0.02, Math.min(0.98, op.position_t ?? 0.5));
+        const mx = x1 + (x2 - x1) * t, mz = z1 + (z2 - z1) * t;
+        const d = Math.hypot(wx - mx, wz - mz);
+        if (d < bestOp) { bestOp = d; hitOpIdx = oIdx; }
+      });
+      if (hitOpIdx !== hoverManualOpRef.current) {
+        hoverManualOpRef.current = hitOpIdx;
+        setHoverManualOp(hitOpIdx);
+        scheduleDraw();
+      }
+      // Reset free-draw flag when not in add mode
+      if (freeDrawMode) setFreeDrawMode(false);
     }
-  }, [scheduleDraw, getWorldFromEvent, angleConstrained]);
+  }, [scheduleDraw, getWorldFromEvent, freeDrawMode]);
 
   const onMouseUp = useCallback((e) => {
     // Pan drag end
@@ -1296,6 +1864,59 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       // A safe guard: if the box ref still exists here it means it was NOT a drag.
     }
 
+    if (mode === "add-door" || mode === "add-window") {
+      const info = hoverOpeningRef.current;
+      if (info?.wallIdx >= 0 && info.wallIdx < editedLinesRef.current.length) {
+        const isDoor = mode === "add-door";
+        const line = editedLinesRef.current[info.wallIdx];
+        const linePts = line?.pts ?? [[0, 0], [0, 0]];
+        const [wx1, wz1] = linePts[0];
+        const [wx2, wz2] = linePts[1];
+        const t = Math.max(0.05, Math.min(0.95, info.position_t ?? 0.5));
+        const opW = isDoor ? toolDoorWidth : toolWindowWidth;
+        const posX = wx1 + t * (wx2 - wx1);
+        const posZ = wz1 + t * (wz2 - wz1);
+        const newOp = {
+          id: `uo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+          type: isDoor ? "door" : "window",
+          wall_idx: info.wallIdx,
+          position_t: t,
+          width: opW,
+          width_m: opW,
+          side: isDoor ? toolDoorHingeSide : 1,
+          swing_dir: isDoor ? toolDoorSwingDir : 1,
+          top_margin: isDoor ? toolDoorTopMargin : toolWindowTopMargin,
+          bottom_margin: isDoor ? 0 : toolWindowBottomMargin,
+          wall_x1: wx1,
+          wall_z1: wz1,
+          wall_x2: wx2,
+          wall_z2: wz2,
+          x: posX,
+          z: posZ,
+        };
+        const nl = [...userOpeningsRef.current, newOp];
+        userOpeningsRef.current = nl;
+        setUserOpenings(nl);
+        setSelectedOpIdx(nl.length - 1);
+        scheduleDraw();
+        persistOpenings(nl);
+      }
+      return;
+    }
+
+    if (mode === "select") {
+      if (hoverManualOpRef.current >= 0) {
+        setSelectedOpIdx(hoverManualOpRef.current);
+        scheduleDraw();
+      } else {
+        if (selectedOpIdxRef.current !== null) {
+          setSelectedOpIdx(null);
+          scheduleDraw();
+        }
+      }
+      return;
+    }
+
     if (mode === "add") {
       const snap = snapRef.current;
       const [wx, wz] = snap ? snap.pt : getWorldFromEvent(e);
@@ -1318,6 +1939,18 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     }
 
     if (mode === "delete") {
+      // First check if an opening was clicked
+      if (hoverManualOpRef.current >= 0) {
+        const delIdx = hoverManualOpRef.current;
+        const nl = userOpeningsRef.current.filter((_, i) => i !== delIdx);
+        userOpeningsRef.current = nl;
+        setUserOpenings(nl);
+        setSelectedOpIdx(null);
+        scheduleDraw();
+        persistOpenings(nl);
+        return;
+      }
+
       // Skip if a box-select drag was just completed (boxSelectRef cleared in onMouseUp)
       if (boxSelectRef.current !== null) return; // still active (shouldn't happen)
       const idx = hoveredLineRef.current;
@@ -1349,6 +1982,57 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       return;
     }
 
+    if (mode === "corner") {
+      const idx = hoveredLineRef.current;
+      if (idx < 0) return; // clicked empty space
+
+      if (!cornerStateRef.current) {
+        // Step 1: select first wall
+        cornerStateRef.current = { firstIdx: idx };
+        setCornerStep(1);
+        scheduleDraw();
+      } else {
+        // Step 2: select second wall, compute intersection and apply
+        const firstIdx = cornerStateRef.current.firstIdx;
+        if (idx === firstIdx) return; // clicked same wall
+
+        const lines = editedLinesRef.current;
+        const [[ax1, az1], [ax2, az2]] = lines[firstIdx].pts;
+        const [[bx1, bz1], [bx2, bz2]] = lines[idx].pts;
+        const hit = lineIntersect(ax1, az1, ax2, az2, bx1, bz1, bx2, bz2);
+
+        if (hit) {
+          const [ix, iz] = hit.pt;
+          // Find which endpoint of each wall to extend to the intersection
+          const ep1 = nearestEndpointIdx(lines[firstIdx].pts, [ix, iz]);
+          const ep2 = nearestEndpointIdx(lines[idx].pts, [ix, iz]);
+
+          const newLines = lines.map((line, i) => {
+            if (i === firstIdx) {
+              const newPts = [line.pts[0].slice(), line.pts[1].slice()];
+              newPts[ep1] = [ix, iz];
+              return { ...line, pts: newPts, source: line.source === "algo" ? "user" : line.source };
+            }
+            if (i === idx) {
+              const newPts = [line.pts[0].slice(), line.pts[1].slice()];
+              newPts[ep2] = [ix, iz];
+              return { ...line, pts: newPts, source: line.source === "algo" ? "user" : line.source };
+            }
+            return line;
+          });
+          pushHistory(lines);
+          setEditedLines(newLines); editedLinesRef.current = newLines;
+          setIsDirty(true);
+        }
+
+        // Reset corner state for next operation
+        cornerStateRef.current = null;
+        setCornerStep(0); setCornerHoverIdx(-1); setCornerIntersection(null);
+        scheduleDraw();
+      }
+      return;
+    }
+
     // In select mode, check if click falls inside a room bbox → toggle selection
     if (mode === "select" && !dragRef.current && onSelectRoom && roomsData?.rooms?.length) {
       const [wx, wz] = getWorldFromEvent(e);
@@ -1364,7 +2048,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         onSelectRoom(null);
       }
     }
-  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData]);
+  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -1428,7 +2112,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const userCount    = editedLines.filter(l => l.source === "user" && !l.hidden).length;
   const hiddenCount  = editedLines.filter(l => l.hidden).length;
   const roomCount    = roomsData?.rooms?.length ?? 0;
-  const openings     = openingsData?.openings ?? [];
+  const openings     = [...(openingsData?.openings ?? []), ...userOpenings];
   const doorCount    = openings.filter(o => o.type === "door").length;
   const windowCount  = openings.filter(o => o.type === "window").length;
   const lowConfCount = openings.filter(o => (o.confidence ?? 1) < LOW_CONF_THRESHOLD).length;
@@ -1448,6 +2132,8 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     ? (dragRef.current ? "grabbing" : "grab")
     : editMode === "add"
     ? "crosshair"
+    : editMode === "corner"
+    ? (cornerHoverIdx >= 0 ? "pointer" : "crosshair")
     : (boxSelectRef.current?.moved
         ? "crosshair"
         : hoveredLine >= 0 ? "pointer" : "crosshair");
@@ -1535,20 +2221,168 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         mode={editMode}
         onMode={(m) => {
           setEditMode(m); editModeRef.current = m;
-          if (m !== "add") { addStepRef.current = null; setAddStep(null); scheduleDraw(); }
+          if (m !== "add")    { addStepRef.current = null; setAddStep(null); scheduleDraw(); }
+          if (m !== "corner") { cornerStateRef.current = null; setCornerStep(0); setCornerHoverIdx(-1); setCornerIntersection(null); }
           if (m !== "delete" && m !== "hide") { hoveredLineRef.current = -1; setHoveredLine(-1); scheduleDraw(); }
           snapRef.current = null;
         }}
         canUndo={canUndo} canRedo={canRedo}
         onUndo={undo} onRedo={redo}
-        isDirty={isDirty}
+        isDirty={isDirty || openingsDirty}
         onSave={handleSave}
         onReset={handleReset}
         saveState={saveState}
         wallCount={wallCount}
         userCount={userCount}
         hiddenCount={hiddenCount}
+        cornerStep={cornerStep}
       />
+
+      {/* ── Door / Window Parameter Subbar ───────────────────────────────────── */}
+      {(editMode === "add-door" || editMode === "add-window") && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "6px 14px",
+          background: "rgba(0,0,0,0.40)",
+          borderBottom: "1px solid rgba(255,255,255,0.08)",
+          flexWrap: "wrap",
+          fontSize: 11,
+          fontFamily: "Inter, sans-serif",
+          zIndex: 5,
+        }}>
+          {editMode === "add-door" ? (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Door Width:</span>
+                {[0.75, 0.8, 0.9, 1.0, 1.2].map(w => (
+                  <button
+                    key={w}
+                    className={`rep-pill-btn${toolDoorWidth === w ? " active" : ""}`}
+                    onClick={() => setToolDoorWidth(w)}
+                  >{w.toFixed(2)}m</button>
+                ))}
+                <input
+                  type="number" min="0.4" max="3.0" step="0.05"
+                  className="rep-subbar-input"
+                  value={toolDoorWidth}
+                  onChange={(e) => setToolDoorWidth(Math.max(0.4, Math.min(3.0, parseFloat(e.target.value) || 0.9)))}
+                />
+                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+              </div>
+
+              <span className="rep-sep" />
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Hinge:</span>
+                <button
+                  className={`rep-pill-btn${toolDoorHingeSide === 1 ? " active" : ""}`}
+                  onClick={() => setToolDoorHingeSide(1)}
+                >◀ Left</button>
+                <button
+                  className={`rep-pill-btn${toolDoorHingeSide === -1 ? " active" : ""}`}
+                  onClick={() => setToolDoorHingeSide(-1)}
+                >Right ▶</button>
+              </div>
+
+              <span className="rep-sep" />
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Swing:</span>
+                <button
+                  className={`rep-pill-btn${toolDoorSwingDir === 1 ? " active" : ""}`}
+                  onClick={() => setToolDoorSwingDir(1)}
+                >↶ Inward</button>
+                <button
+                  className={`rep-pill-btn${toolDoorSwingDir === -1 ? " active" : ""}`}
+                  onClick={() => setToolDoorSwingDir(-1)}
+                >Outward ↷</button>
+              </div>
+
+              <span className="rep-sep" />
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Top Margin:</span>
+                {[0.5, 0.6, 0.7, 0.8].map(m => (
+                  <button
+                    key={m}
+                    className={`rep-pill-btn${toolDoorTopMargin === m ? " active" : ""}`}
+                    onClick={() => setToolDoorTopMargin(m)}
+                  >{m.toFixed(2)}m</button>
+                ))}
+                <input
+                  type="number" min="0.1" max="1.8" step="0.05"
+                  className="rep-subbar-input"
+                  value={toolDoorTopMargin}
+                  onChange={(e) => setToolDoorTopMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.7)))}
+                />
+                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Window Width:</span>
+                {[0.9, 1.2, 1.5, 1.8, 2.4].map(w => (
+                  <button
+                    key={w}
+                    className={`rep-pill-btn${toolWindowWidth === w ? " active" : ""}`}
+                    onClick={() => setToolWindowWidth(w)}
+                  >{w.toFixed(2)}m</button>
+                ))}
+                <input
+                  type="number" min="0.4" max="4.0" step="0.05"
+                  className="rep-subbar-input"
+                  value={toolWindowWidth}
+                  onChange={(e) => setToolWindowWidth(Math.max(0.3, Math.min(5.0, parseFloat(e.target.value) || 1.2)))}
+                />
+                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+              </div>
+
+              <span className="rep-sep" />
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Sill (Bottom):</span>
+                {[0.7, 0.8, 0.9, 1.0, 1.1].map(m => (
+                  <button
+                    key={m}
+                    className={`rep-pill-btn${toolWindowBottomMargin === m ? " active" : ""}`}
+                    onClick={() => setToolWindowBottomMargin(m)}
+                  >{m.toFixed(2)}m</button>
+                ))}
+                <input
+                  type="number" min="0.2" max="1.8" step="0.05"
+                  className="rep-subbar-input"
+                  value={toolWindowBottomMargin}
+                  onChange={(e) => setToolWindowBottomMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.9)))}
+                />
+                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+              </div>
+
+              <span className="rep-sep" />
+
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Top Margin:</span>
+                {[0.5, 0.6, 0.7, 0.8].map(m => (
+                  <button
+                    key={m}
+                    className={`rep-pill-btn${toolWindowTopMargin === m ? " active" : ""}`}
+                    onClick={() => setToolWindowTopMargin(m)}
+                  >{m.toFixed(2)}m</button>
+                ))}
+                <input
+                  type="number" min="0.1" max="1.8" step="0.05"
+                  className="rep-subbar-input"
+                  value={toolWindowTopMargin}
+                  onChange={(e) => setToolWindowTopMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.7)))}
+                />
+                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* ── Canvas area ──────────────────────────────────────────────────────── */}
       <div style={{ flex: 1, position: "relative", overflow: "hidden", background: C.bg }}>
@@ -1577,6 +2411,161 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
         />
+
+        {/* ── Selected Opening Inspector ────────────────────────────────────────── */}
+        {selectedOpIdx !== null && selectedOpIdx >= 0 && selectedOpIdx < userOpenings.length && (() => {
+          const selectedOp = userOpenings[selectedOpIdx];
+          return (
+            <div className="rep-opening-inspector" style={{ position: "absolute", top: 12, right: 12, zIndex: 15 }}>
+              <div className="rep-inspector-header">
+                <span className="rep-inspector-title">
+                  <span>{selectedOp.type === "door" ? "🚪" : "🪟"}</span>
+                  <span>{selectedOp.type === "door" ? "Door" : "Window"} #{selectedOpIdx + 1}</span>
+                </span>
+                <button
+                  className="rep-close"
+                  onClick={() => setSelectedOpIdx(null)}
+                  title="Close Inspector"
+                >✕</button>
+              </div>
+
+              <div className="rep-inspector-body">
+                {/* Width */}
+                <div className="rep-inspector-row">
+                  <div className="rep-inspector-label-line">
+                    <span className="rep-inspector-label">Width:</span>
+                    <span className="rep-inspector-val">{(selectedOp.width_m ?? (selectedOp.type === "door" ? 0.9 : 1.2)).toFixed(2)} m</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      type="number" min="0.4" max="4.0" step="0.05"
+                      className="rep-subbar-input"
+                      style={{ width: "100%", textAlign: "left" }}
+                      value={selectedOp.width_m ?? (selectedOp.type === "door" ? 0.9 : 1.2)}
+                      onChange={(e) => updateSelectedOp({ width_m: parseFloat(e.target.value) || 0.9 })}
+                    />
+                    <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
+                  </div>
+                </div>
+
+                {/* Door orientation */}
+                {selectedOp.type === "door" && (
+                  <>
+                    <div className="rep-inspector-row">
+                      <span className="rep-inspector-label" style={{ marginBottom: 4, display: "block" }}>Hinge Side:</span>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          className={`rep-pill-btn${(selectedOp.side ?? 1) === 1 ? " active" : ""}`}
+                          style={{ flex: 1 }}
+                          onClick={() => updateSelectedOp({ side: 1 })}
+                        >◀ Left</button>
+                        <button
+                          className={`rep-pill-btn${(selectedOp.side ?? 1) === -1 ? " active" : ""}`}
+                          style={{ flex: 1 }}
+                          onClick={() => updateSelectedOp({ side: -1 })}
+                        >Right ▶</button>
+                      </div>
+                    </div>
+
+                    <div className="rep-inspector-row">
+                      <span className="rep-inspector-label" style={{ marginBottom: 4, display: "block" }}>Swing:</span>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          className={`rep-pill-btn${(selectedOp.swing_dir ?? 1) === 1 ? " active" : ""}`}
+                          style={{ flex: 1 }}
+                          onClick={() => updateSelectedOp({ swing_dir: 1 })}
+                        >↶ Inward</button>
+                        <button
+                          className={`rep-pill-btn${(selectedOp.swing_dir ?? 1) === -1 ? " active" : ""}`}
+                          style={{ flex: 1 }}
+                          onClick={() => updateSelectedOp({ swing_dir: -1 })}
+                        >Outward ↷</button>
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                {/* Margins for 3D Viewer */}
+                {selectedOp.type === "window" && (
+                  <div className="rep-inspector-row">
+                    <div className="rep-inspector-label-line">
+                      <span className="rep-inspector-label">Sill (Bottom Margin):</span>
+                      <span className="rep-inspector-val">{(selectedOp.bottom_margin ?? 0.9).toFixed(2)} m</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        type="number" min="0.1" max="2.0" step="0.05"
+                        className="rep-subbar-input"
+                        style={{ width: "100%", textAlign: "left" }}
+                        value={selectedOp.bottom_margin ?? 0.9}
+                        onChange={(e) => updateSelectedOp({ bottom_margin: Math.max(0.1, parseFloat(e.target.value) || 0.9) })}
+                      />
+                      <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="rep-inspector-row">
+                  <div className="rep-inspector-label-line">
+                    <span className="rep-inspector-label">Top Margin (Header):</span>
+                    <span className="rep-inspector-val">{(selectedOp.top_margin ?? 0.7).toFixed(2)} m</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      type="number" min="0.1" max="2.0" step="0.05"
+                      className="rep-subbar-input"
+                      style={{ width: "100%", textAlign: "left" }}
+                      value={selectedOp.top_margin ?? 0.7}
+                      onChange={(e) => updateSelectedOp({ top_margin: Math.max(0.1, parseFloat(e.target.value) || 0.7) })}
+                    />
+                    <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
+                  </div>
+                </div>
+
+                {/* Position along wall */}
+                <div className="rep-inspector-row">
+                  <div className="rep-inspector-label-line">
+                    <span className="rep-inspector-label">Position on Wall:</span>
+                    <span className="rep-inspector-val">{((selectedOp.position_t ?? 0.5) * 100).toFixed(0)}%</span>
+                  </div>
+                  <input
+                    type="range" min="0.05" max="0.95" step="0.01"
+                    className="rep-range-slider"
+                    value={selectedOp.position_t ?? 0.5}
+                    onChange={(e) => updateSelectedOp({ position_t: parseFloat(e.target.value) })}
+                  />
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                  <button className="rep-discard" style={{ flex: 1 }} onClick={deleteSelectedOp}>
+                    🗑 Delete Opening
+                  </button>
+                  <button className="rep-pill-btn active" style={{ flex: 1 }} onClick={() => setSelectedOpIdx(null)}>
+                    ✓ Done
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Placed manual openings chips */}
+        {loadState === "ready" && userOpenings.length > 0 && (
+          <div className="rep-placed-badge" style={{ position: "absolute", bottom: 40, right: 12, zIndex: 4 }}>
+            <span style={{ fontWeight: 600, color: "var(--text-2, #aaa)" }}>Openings:</span>
+            {userOpenings.map((op, idx) => (
+              <span
+                key={op.id || idx}
+                className={`rep-op-chip${selectedOpIdx === idx ? " selected" : ""}`}
+                onClick={() => setSelectedOpIdx(idx === selectedOpIdx ? null : idx)}
+                title={`Click to edit ${op.type} #${idx + 1}`}
+              >
+                {op.type === "door" ? "🚪" : "🪟"} {op.type} {(op.width_m ?? (op.type === "door" ? 0.9 : 1.2)).toFixed(1)}m
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Empty state */}
         {loadState === "idle" && (
@@ -1633,7 +2622,13 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
         {/* Mode hint bar */}
         {loadState === "ready" && wallCount > 0 && (
-          <ModeHint mode={editMode} addStep={addStep} angleConstrained={angleConstrained} />
+          <ModeHint
+            mode={editMode}
+            addStep={addStep}
+            freeDrawMode={freeDrawMode}
+            cornerStep={cornerStep}
+            cornerHasIntersection={cornerIntersection !== null}
+          />
         )}
       </div>
 

@@ -513,42 +513,173 @@ def detect_rooms_for_floor(floor_idx: int, config: dict, processed_dir: str | No
 
 def _manhattan_snap_polygon(
     polygon: list[list[float]],
-    angle_tol_deg: float = 5.0,
+    angle_tol_deg: float = 14.0,
+    min_diag_len: float = 0.85,
 ) -> list[list[float]]:
     """
-    Snap near-horizontal and near-vertical polygon edges to exact 0° / 90°.
+    Robust Manhattanization for room polygons.
 
-    For each consecutive edge (p_i → p_{i+1}):
-      • nearly horizontal  → average both Z values (eliminates vertical drift)
-      • nearly vertical    → average both X values (eliminates horizontal drift)
-
-    The pass is sequential, so each snap propagates to the next vertex.
-    Returns a new list — the input is not modified.
+    Solves irregular corners, chamfers, and stair-step scallops caused by
+    raster contour extraction:
+      1. Classifies edges into Horizontal (H), Vertical (V), Intentional Diagonal (D >= min_diag_len),
+         or Corner Artifacts (A < min_diag_len).
+      2. Resolves sequences of corner artifacts (A) between orthogonal edges into exact 90° intersections
+         (H -> V or V -> H) or clean orthogonal steps (H -> H or V -> V).
+      3. Intersects consecutive orthogonal segments so that all corners meet at exact 90° right angles.
+      4. Removes collinear redundant vertices and duplicates.
     """
     import math
+
     if len(polygon) < 3:
         return polygon
-    tol = math.radians(angle_tol_deg)
-    snapped = [list(pt) for pt in polygon]   # shallow copy of [x, z] pairs
-    n = len(snapped)
+
+    n = len(polygon)
+    edges = []
     for i in range(n):
-        j = (i + 1) % n
-        dx = snapped[j][0] - snapped[i][0]
-        dz = snapped[j][1] - snapped[i][1]
-        if dx == 0 and dz == 0:
+        p1 = list(polygon[i])
+        p2 = list(polygon[(i + 1) % n])
+        dx = p2[0] - p1[0]
+        dz = p2[1] - p1[1]
+        length = math.hypot(dx, dz)
+        if length < 0.005:
             continue
-        ang = abs(math.atan2(dz, dx))
-        if ang < tol or abs(ang - math.pi) < tol:
-            # Nearly horizontal: pull both vertices to the same Z
-            avg_z = (snapped[i][1] + snapped[j][1]) / 2.0
-            snapped[i][1] = round(avg_z, 4)
-            snapped[j][1] = round(avg_z, 4)
-        elif abs(ang - math.pi / 2) < tol:
-            # Nearly vertical: pull both vertices to the same X
-            avg_x = (snapped[i][0] + snapped[j][0]) / 2.0
-            snapped[i][0] = round(avg_x, 4)
-            snapped[j][0] = round(avg_x, 4)
-    return snapped
+        deg = math.degrees(abs(math.atan2(abs(dz), abs(dx))))
+        if deg <= angle_tol_deg:
+            kind = "H"
+            val = (p1[1] + p2[1]) / 2.0
+        elif deg >= 90.0 - angle_tol_deg:
+            kind = "V"
+            val = (p1[0] + p2[0]) / 2.0
+        else:
+            if length >= min_diag_len:
+                kind = "D"  # intentional long diagonal wall
+                val = None
+            else:
+                kind = "A"  # corner artifact / chamfer / scallop
+                val = None
+        edges.append({"p1": p1, "p2": p2, "kind": kind, "val": val, "len": length})
+
+    if not edges:
+        return polygon
+
+    m = len(edges)
+    non_artifacts = [e for e in edges if e["kind"] != "A"]
+    if not non_artifacts:
+        return polygon
+
+    # Rotate list so that first edge is a dominant edge (not an artifact)
+    start_idx = 0
+    while edges[start_idx]["kind"] == "A" and start_idx < m:
+        start_idx += 1
+    if start_idx == m:
+        return polygon
+
+    rot_edges = edges[start_idx:] + edges[:start_idx]
+
+    resolved_segments = []
+    i = 0
+    while i < len(rot_edges):
+        e = rot_edges[i]
+        if e["kind"] != "A":
+            resolved_segments.append(e)
+            i += 1
+        else:
+            # Gather chain of artifact edges
+            a_chain = []
+            while i < len(rot_edges) and rot_edges[i]["kind"] == "A":
+                a_chain.append(rot_edges[i])
+                i += 1
+
+            prev_e = resolved_segments[-1]
+            next_e = rot_edges[i] if i < len(rot_edges) else resolved_segments[0]
+
+            p_start = prev_e["p2"]
+            p_end = next_e["p1"]
+
+            if prev_e["kind"] in ("H", "V") and next_e["kind"] in ("H", "V"):
+                if prev_e["kind"] != next_e["kind"]:
+                    # Corner intersection: extend H and V to their exact 90° intersection
+                    if prev_e["kind"] == "H":
+                        corner = [next_e["val"], prev_e["val"]]
+                    else:
+                        corner = [prev_e["val"], next_e["val"]]
+                    prev_e["p2"] = list(corner)
+                    next_e["p1"] = list(corner)
+                else:
+                    # Parallel step (H -> H or V -> V) at an irregular corner/setback
+                    if prev_e["kind"] == "H":
+                        mid_x = (p_start[0] + p_end[0]) / 2.0
+                        c1 = [mid_x, prev_e["val"]]
+                        c2 = [mid_x, next_e["val"]]
+                        prev_e["p2"] = c1
+                        step_e = {"kind": "V", "val": mid_x, "p1": c1, "p2": c2, "len": abs(c2[1] - c1[1])}
+                        resolved_segments.append(step_e)
+                        next_e["p1"] = c2
+                    else:
+                        mid_z = (p_start[1] + p_end[1]) / 2.0
+                        c1 = [prev_e["val"], mid_z]
+                        c2 = [next_e["val"], mid_z]
+                        prev_e["p2"] = c1
+                        step_e = {"kind": "H", "val": mid_z, "p1": c1, "p2": c2, "len": abs(c2[0] - c1[0])}
+                        resolved_segments.append(step_e)
+                        next_e["p1"] = c2
+            else:
+                prev_e["p2"] = list(p_end)
+
+    # Merge consecutive edges of the same kind (H -> H or V -> V)
+    merged_segs = []
+    for s in resolved_segments:
+        if merged_segs and merged_segs[-1]["kind"] == s["kind"] and s["kind"] in ("H", "V"):
+            merged_segs[-1]["p2"] = s["p2"]
+            l1, l2 = max(1e-3, merged_segs[-1]["len"]), max(1e-3, s["len"])
+            merged_segs[-1]["val"] = (merged_segs[-1]["val"] * l1 + s["val"] * l2) / (l1 + l2)
+            merged_segs[-1]["len"] += s["len"]
+        else:
+            merged_segs.append(dict(s))
+    if len(merged_segs) > 1 and merged_segs[0]["kind"] == merged_segs[-1]["kind"] and merged_segs[0]["kind"] in ("H", "V"):
+        merged_segs[0]["p1"] = merged_segs[-1]["p1"]
+        merged_segs.pop()
+
+    # Intersect all adjacent H and V segments to guarantee exact 90° corners
+    k = len(merged_segs)
+    for j in range(k):
+        s1 = merged_segs[j]
+        s2 = merged_segs[(j + 1) % k]
+        if s1["kind"] in ("H", "V") and s2["kind"] in ("H", "V") and s1["kind"] != s2["kind"]:
+            if s1["kind"] == "H":
+                corner = [s2["val"], s1["val"]]
+            else:
+                corner = [s1["val"], s2["val"]]
+            s1["p2"] = list(corner)
+            s2["p1"] = list(corner)
+
+    out_pts = []
+    for s in merged_segs:
+        out_pts.append([round(s["p1"][0], 4), round(s["p1"][1], 4)])
+
+    # Remove duplicates
+    final_pts = []
+    for pt in out_pts:
+        if not final_pts or math.hypot(pt[0] - final_pts[-1][0], pt[1] - final_pts[-1][1]) > 0.02:
+            final_pts.append(pt)
+    if len(final_pts) > 1 and math.hypot(final_pts[0][0] - final_pts[-1][0], final_pts[0][1] - final_pts[-1][1]) < 0.02:
+        final_pts.pop()
+
+    # Remove collinear redundant vertices
+    res = []
+    num = len(final_pts)
+    for idx in range(num):
+        p_prev = final_pts[(idx - 1) % num]
+        p_curr = final_pts[idx]
+        p_next = final_pts[(idx + 1) % num]
+        d1x, d1z = p_curr[0] - p_prev[0], p_curr[1] - p_prev[1]
+        d2x, d2z = p_next[0] - p_curr[0], p_next[1] - p_curr[1]
+        cross = abs(d1x * d2z - d1z * d2x)
+        if cross < 1e-4:
+            continue
+        res.append(p_curr)
+
+    return res if len(res) >= 3 else polygon
 
 
 def _empty_result(floor_idx: int, processed_dir: str, grid_size: float) -> dict:

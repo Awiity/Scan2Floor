@@ -593,10 +593,13 @@ export default function RoomEditorPanel({
   const [isMinimized,    setIsMinimized]    = useState(false);
 
   // Parameterization tool defaults
-  const [toolDoorWidth,     setToolDoorWidth]     = useState(0.9);
-  const [toolDoorHingeSide, setToolDoorHingeSide] = useState(1);  // 1: left (start), -1: right (end)
-  const [toolDoorSwingDir,  setToolDoorSwingDir]  = useState(1);  // 1: inward/left, -1: outward/right
-  const [toolWindowWidth,   setToolWindowWidth]   = useState(1.2);
+  const [toolDoorWidth,          setToolDoorWidth]          = useState(0.9);
+  const [toolDoorHingeSide,      setToolDoorHingeSide]      = useState(1);  // 1: left (start), -1: right (end)
+  const [toolDoorSwingDir,       setToolDoorSwingDir]       = useState(1);  // 1: inward/left, -1: outward/right
+  const [toolDoorTopMargin,      setToolDoorTopMargin]      = useState(0.7); // top margin / lintel
+  const [toolWindowWidth,        setToolWindowWidth]        = useState(1.2);
+  const [toolWindowBottomMargin, setToolWindowBottomMargin] = useState(0.9); // bottom margin / sill
+  const [toolWindowTopMargin,    setToolWindowTopMargin]    = useState(0.7); // top margin / lintel
 
   const editModeRef       = useRef("select");
   const editedLinesRef    = useRef([]);
@@ -740,7 +743,10 @@ export default function RoomEditorPanel({
         doorWidth: toolDoorWidth,
         doorHingeSide: toolDoorHingeSide,
         doorSwingDir: toolDoorSwingDir,
+        doorTopMargin: toolDoorTopMargin,
         windowWidth: toolWindowWidth,
+        windowBottomMargin: toolWindowBottomMargin,
+        windowTopMargin: toolWindowTopMargin,
       };
 
       drawWalls(ctx, editedLinesRef.current, cam,
@@ -759,7 +765,7 @@ export default function RoomEditorPanel({
       drawBoxSelect(ctx, boxSelectRef.current, editModeRef.current);
       drawScale(ctx, cam, W, H, TC);
     });
-  }, [room, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolWindowWidth]);
+  }, [room, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
 
   useEffect(() => { scheduleDraw(); }, [editedLines, manualOpenings, autoOpenings, selectedOpIdx, hoverManualOp, scheduleDraw]);
 
@@ -927,6 +933,21 @@ export default function RoomEditorPanel({
     if (box) { boxSelectRef.current = null; scheduleDraw(); }
   }, [pushHistory, scheduleDraw, room]);
 
+  // Persist manual openings to backend and trigger 3D update
+  const persistOpenings = useCallback(async (list) => {
+    try {
+      await fetch(`${apiBase}/openings/${floor}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_openings: list }),
+      });
+      setOpeningsDirty(false);
+      onWallsChanged?.();
+    } catch (err) {
+      console.error("Failed to auto-save openings in room editor:", err);
+    }
+  }, [apiBase, floor, onWallsChanged]);
+
   const onClick = useCallback((e) => {
     const mode = editModeRef.current;
 
@@ -985,24 +1006,42 @@ export default function RoomEditorPanel({
       const info = hoverOpeningRef.current;
       if (info?.wallIdx >= 0) {
         const isDoor = mode === "add-door";
+        const line = editedLinesRef.current[info.wallIdx];
+        const linePts = line?.pts ?? [[0, 0], [0, 0]];
+        const [wx1, wz1] = linePts[0];
+        const [wx2, wz2] = linePts[1];
+        const t = Math.max(0.05, Math.min(0.95, info.position_t ?? 0.5));
+        const opW = isDoor ? toolDoorWidth : toolWindowWidth;
+        const posX = wx1 + t * (wx2 - wx1);
+        const posZ = wz1 + t * (wz2 - wz1);
         const newOp = {
+          id: `uo_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
           type: isDoor ? "door" : "window",
           wall_idx: info.wallIdx,
-          position_t: info.position_t,
-          width_m: isDoor ? toolDoorWidth : toolWindowWidth,
+          position_t: t,
+          width: opW,
+          width_m: opW,
           side: isDoor ? toolDoorHingeSide : 1,
           swing_dir: isDoor ? toolDoorSwingDir : 1,
+          top_margin: isDoor ? toolDoorTopMargin : toolWindowTopMargin,
+          bottom_margin: isDoor ? 0 : toolWindowBottomMargin,
+          wall_x1: wx1,
+          wall_z1: wz1,
+          wall_x2: wx2,
+          wall_z2: wz2,
+          x: posX,
+          z: posZ,
         };
         const nl = [...manualOpeningsRef.current, newOp];
         manualOpeningsRef.current = nl;
         setManualOpenings(nl);
         setSelectedOpIdx(nl.length - 1);
-        setOpeningsDirty(true);
         scheduleDraw();
+        persistOpenings(nl);
       }
       return;
     }
-  }, [pushHistory, scheduleDraw, getWorld, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolWindowWidth]);
+  }, [pushHistory, scheduleDraw, getWorld, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, persistOpenings]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -1037,13 +1076,20 @@ export default function RoomEditorPanel({
     const idx = selectedOpIdxRef.current;
     const list = [...manualOpeningsRef.current];
     if (idx >= 0 && idx < list.length) {
-      list[idx] = { ...list[idx], ...changes };
+      const merged = { ...list[idx], ...changes };
+      if (changes.width_m != null) merged.width = changes.width_m;
+      if (changes.width != null) merged.width_m = changes.width;
+      if (changes.position_t != null && merged.wall_x1 != null && merged.wall_x2 != null) {
+        merged.x = merged.wall_x1 + merged.position_t * (merged.wall_x2 - merged.wall_x1);
+        merged.z = merged.wall_z1 + merged.position_t * (merged.wall_z2 - merged.wall_z1);
+      }
+      list[idx] = merged;
       manualOpeningsRef.current = list;
       setManualOpenings(list);
-      setOpeningsDirty(true);
       scheduleDraw();
+      persistOpenings(list);
     }
-  }, [scheduleDraw]);
+  }, [scheduleDraw, persistOpenings]);
 
   // Delete selected opening
   const deleteSelectedOp = useCallback(() => {
@@ -1053,9 +1099,9 @@ export default function RoomEditorPanel({
     manualOpeningsRef.current = list;
     setManualOpenings(list);
     setSelectedOpIdx(null);
-    setOpeningsDirty(true);
     scheduleDraw();
-  }, [scheduleDraw]);
+    persistOpenings(list);
+  }, [scheduleDraw, persistOpenings]);
 
   // ── Derived ───────────────────────────────────────────────────────────────────
   const wallCount   = editedLines.length;
@@ -1268,32 +1314,115 @@ export default function RoomEditorPanel({
                     Outward ↷
                   </button>
                 </div>
+
+                <span className="rep-sep" />
+
+                <div className="rep-subbar-group">
+                  <span className="rep-subbar-label">Top Margin (Header):</span>
+                  <div className="rep-subbar-pills">
+                    {[0.5, 0.6, 0.7, 0.8].map(m => (
+                      <button
+                        key={m}
+                        className={`rep-pill-btn${toolDoorTopMargin === m ? " active" : ""}`}
+                        onClick={() => setToolDoorTopMargin(m)}
+                      >
+                        {m.toFixed(2)}m
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="1.8"
+                    step="0.05"
+                    className="rep-subbar-input"
+                    value={toolDoorTopMargin}
+                    onChange={(e) => setToolDoorTopMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.7)))}
+                  />
+                  <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
+                </div>
               </>
             ) : (
-              <div className="rep-subbar-group">
-                <span className="rep-subbar-label">Window Width:</span>
-                <div className="rep-subbar-pills">
-                  {[0.9, 1.2, 1.5, 1.8, 2.4].map(w => (
-                    <button
-                      key={w}
-                      className={`rep-pill-btn${toolWindowWidth === w ? " active" : ""}`}
-                      onClick={() => setToolWindowWidth(w)}
-                    >
-                      {w.toFixed(2)}m
-                    </button>
-                  ))}
+              <>
+                <div className="rep-subbar-group">
+                  <span className="rep-subbar-label">Window Width:</span>
+                  <div className="rep-subbar-pills">
+                    {[0.9, 1.2, 1.5, 1.8, 2.4].map(w => (
+                      <button
+                        key={w}
+                        className={`rep-pill-btn${toolWindowWidth === w ? " active" : ""}`}
+                        onClick={() => setToolWindowWidth(w)}
+                      >
+                        {w.toFixed(2)}m
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="number"
+                    min="0.4"
+                    max="4.0"
+                    step="0.05"
+                    className="rep-subbar-input"
+                    value={toolWindowWidth}
+                    onChange={(e) => setToolWindowWidth(Math.max(0.3, Math.min(5.0, parseFloat(e.target.value) || 1.2)))}
+                  />
+                  <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
                 </div>
-                <input
-                  type="number"
-                  min="0.4"
-                  max="4.0"
-                  step="0.05"
-                  className="rep-subbar-input"
-                  value={toolWindowWidth}
-                  onChange={(e) => setToolWindowWidth(Math.max(0.3, Math.min(5.0, parseFloat(e.target.value) || 1.2)))}
-                />
-                <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
-              </div>
+
+                <span className="rep-sep" />
+
+                <div className="rep-subbar-group">
+                  <span className="rep-subbar-label">Sill (Bottom):</span>
+                  <div className="rep-subbar-pills">
+                    {[0.7, 0.8, 0.9, 1.0, 1.1].map(m => (
+                      <button
+                        key={m}
+                        className={`rep-pill-btn${toolWindowBottomMargin === m ? " active" : ""}`}
+                        onClick={() => setToolWindowBottomMargin(m)}
+                      >
+                        {m.toFixed(2)}m
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="number"
+                    min="0.2"
+                    max="1.8"
+                    step="0.05"
+                    className="rep-subbar-input"
+                    value={toolWindowBottomMargin}
+                    onChange={(e) => setToolWindowBottomMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.9)))}
+                  />
+                  <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
+                </div>
+
+                <span className="rep-sep" />
+
+                <div className="rep-subbar-group">
+                  <span className="rep-subbar-label">Top Margin (Header):</span>
+                  <div className="rep-subbar-pills">
+                    {[0.5, 0.6, 0.7, 0.8].map(m => (
+                      <button
+                        key={m}
+                        className={`rep-pill-btn${toolWindowTopMargin === m ? " active" : ""}`}
+                        onClick={() => setToolWindowTopMargin(m)}
+                      >
+                        {m.toFixed(2)}m
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="1.8"
+                    step="0.05"
+                    className="rep-subbar-input"
+                    value={toolWindowTopMargin}
+                    onChange={(e) => setToolWindowTopMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.7)))}
+                  />
+                  <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1493,6 +1622,49 @@ export default function RoomEditorPanel({
                     </div>
                   </>
                 )}
+
+                {/* Vertical Margins for 3D Viewer */}
+                {selectedOp.type === "window" && (
+                  <div className="rep-inspector-row">
+                    <div className="rep-inspector-label-line">
+                      <span className="rep-inspector-label">Sill (Bottom Margin):</span>
+                      <span className="rep-inspector-val">{(selectedOp.bottom_margin ?? 0.9).toFixed(2)} m</span>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <input
+                        type="number"
+                        min="0.1"
+                        max="2.0"
+                        step="0.05"
+                        className="rep-subbar-input"
+                        style={{ width: "100%", textAlign: "left" }}
+                        value={selectedOp.bottom_margin ?? 0.9}
+                        onChange={(e) => updateSelectedOp({ bottom_margin: Math.max(0.1, parseFloat(e.target.value) || 0.9) })}
+                      />
+                      <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
+                    </div>
+                  </div>
+                )}
+
+                <div className="rep-inspector-row">
+                  <div className="rep-inspector-label-line">
+                    <span className="rep-inspector-label">Top Margin (Header):</span>
+                    <span className="rep-inspector-val">{(selectedOp.top_margin ?? 0.7).toFixed(2)} m</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    <input
+                      type="number"
+                      min="0.1"
+                      max="2.0"
+                      step="0.05"
+                      className="rep-subbar-input"
+                      style={{ width: "100%", textAlign: "left" }}
+                      value={selectedOp.top_margin ?? 0.7}
+                      onChange={(e) => updateSelectedOp({ top_margin: Math.max(0.1, parseFloat(e.target.value) || 0.7) })}
+                    />
+                    <span style={{ fontSize: 11, color: "var(--text-3, #777)" }}>m</span>
+                  </div>
+                </div>
 
                 {/* Position along wall */}
                 <div className="rep-inspector-row">

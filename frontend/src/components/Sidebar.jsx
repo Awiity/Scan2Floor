@@ -23,7 +23,7 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
 const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
-export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave, cloudColors, setCloudColors }) {
+export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, showBim3D = true, setShowBim3D, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave, cloudColors, setCloudColors }) {
   const cloudReady = backendStatus === "ready";
   const fmt = n => n?.toLocaleString?.() ?? "—";
 
@@ -710,6 +710,11 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
           <div className="layer-icon" style={{background:"rgba(0,200,224,0.15)"}}>🗺️</div>
           <div style={{flex:1}}><div className="layer-label">Vector Floor Plan</div><div className="layer-sub">{modelInfo?.floor_levels?.length?`${modelInfo.floor_levels.length} floors · walls, rooms & openings`:"Canvas renderer"}</div></div>
           <Toggle checked={!!showFloorPlanViewer} onChange={setShowFloorPlanViewer}/>
+        </div>
+        <div className="layer-item" onClick={()=>setShowBim3D?.(v=>!v)} style={{background:showBim3D?"rgba(59,130,246,0.09)":undefined,borderRadius:10}}>
+          <div className="layer-icon" style={{background:"rgba(59,130,246,0.18)"}}>🏛️</div>
+          <div style={{flex:1}}><div className="layer-label">3D Walls & Floors</div><div className="layer-sub">Interactable 3D BIM entities</div></div>
+          <Toggle checked={!!showBim3D} onChange={setShowBim3D}/>
         </div>
 
         {/* ── Point Cloud Colors ── */}

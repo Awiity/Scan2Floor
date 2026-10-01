@@ -12,9 +12,11 @@ import PointCloud from "./components/PointCloud";
 import LoadingOverlay from "./components/LoadingOverlay";
 import FloorPlanPanel from "./components/FloorPlanPanel";
 import FloorPlanViewer from "./components/FloorPlanViewer";
-import RoomListPanel from "./components/RoomListPanel";
+//import RoomListPanel from "./components/RoomListPanel";
 import CameraFocuser from "./components/CameraFocuser";
 import RoomEditorPanel from "./components/RoomEditorPanel";
+import DetectedBim3D from "./components/DetectedBim3D";
+import BimInspectorOverlay from "./components/BimInspectorOverlay";
 
 const POLL_MS = 7 * 1000;
 
@@ -28,6 +30,12 @@ export default function App() {
   const [showCloud, setShowCloud] = useState(false);
   const [showFloorPlan, setShowFloorPlan] = useState(false);
   const [showFloorPlanViewer, setShowFloorPlanViewer] = useState(false);
+  const [showBim3D, setShowBim3D] = useState(true);
+  const [selectedWall, setSelectedWall] = useState(null);
+  const [hoveredWall, setHoveredWall] = useState(null);
+  const [hoveredRoom, setHoveredRoom] = useState(null);
+  const [selectedOpening, setSelectedOpening] = useState(null);
+  const [hoveredOpening, setHoveredOpening] = useState(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fpFloor, setFpFloor] = useState(0);
   const [activeFloor, setActiveFloor] = useState("all");
@@ -45,7 +53,7 @@ export default function App() {
       const next = t === "dark" ? "light" : "dark";
       try {
         localStorage.setItem("s2f_theme", next);
-      } catch {}
+      } catch { }
       return next;
     });
   };
@@ -114,6 +122,86 @@ export default function App() {
   // null = live data; string = name of the loaded save being viewed
   const [loadedSave, setLoadedSave] = useState(null);
 
+  /* ---------- 3D wall deletion ---------- */
+  const handleDeleteWallFrom3D = useCallback(async (wall) => {
+    if (!wall) return;
+    try {
+      const floorIdx = wall.floorIdx;
+      const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+      const res = await fetch(`${apiBase}/walls/${floorIdx}`);
+      if (!res.ok) throw new Error("Failed to fetch walls");
+      const data = await res.json();
+      const currentLines = data.lines || [];
+
+      // Filter out this wall (by index or proximity of endpoints)
+      const filteredLines = currentLines.filter((seg, idx) => {
+        if (idx === wall.wallIdx) return false;
+        const [[x1, z1], [x2, z2]] = seg;
+        const match1 = Math.hypot(x1 - wall.x1, z1 - wall.z1) < 0.04 && Math.hypot(x2 - wall.x2, z2 - wall.z2) < 0.04;
+        const match2 = Math.hypot(x1 - wall.x2, z1 - wall.z2) < 0.04 && Math.hypot(x2 - wall.x1, z2 - wall.z1) < 0.04;
+        return !(match1 || match2);
+      });
+
+      const putRes = await fetch(`${apiBase}/walls/${floorIdx}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lines: filteredLines,
+          polygon_rooms: roomMode === "polygon",
+        }),
+      });
+      if (!putRes.ok) throw new Error("Failed to save walls");
+
+      setSelectedWall(null);
+      handleWallsDetected();
+    } catch (err) {
+      console.error("Failed to delete wall from 3D:", err);
+    }
+  }, [loadedSave, roomMode]);
+
+  /* ---------- 3D opening deletion ---------- */
+  const handleDeleteOpeningFrom3D = useCallback(async (op) => {
+    if (!op) return;
+    try {
+      const floorIdx = op.floorIdx ?? (activeFloor === "all" ? 0 : Number(activeFloor));
+      const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+      const res = await fetch(`${apiBase}/openings/${floorIdx}`);
+      if (!res.ok) throw new Error("Failed to fetch openings");
+      const data = await res.json();
+      const userOps = data.user_openings || [];
+      const autoOps = data.openings || [];
+
+      // Filter out from user_openings
+      const updatedUserOps = userOps.filter((o) => {
+        if (op.id && o.id === op.id) return false;
+        if (o.x != null && op.x != null && Math.hypot(o.x - op.x, o.z - op.z) < 0.25) return false;
+        return true;
+      });
+
+      // Filter out from auto-detected openings if present
+      const updatedAutoOps = autoOps.filter((o) => {
+        if (op.id && o.id === op.id) return false;
+        if (o.x != null && op.x != null && Math.hypot(o.x - op.x, o.z - op.z) < 0.25) return false;
+        return true;
+      });
+
+      const putRes = await fetch(`${apiBase}/openings/${floorIdx}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_openings: updatedUserOps,
+          openings: updatedAutoOps,
+        }),
+      });
+      if (!putRes.ok) throw new Error("Failed to save openings");
+
+      setSelectedOpening(null);
+      handleWallsDetected();
+    } catch (err) {
+      console.error("Failed to delete opening from 3D:", err);
+    }
+  }, [loadedSave, activeFloor]);
+
   // Fetch rooms for the active floor (defaulting to floor 0 when activeFloor is "all")
   useEffect(() => {
     const targetFloor = (activeFloor === "all" || activeFloor == null) ? 0 : activeFloor;
@@ -181,7 +269,7 @@ export default function App() {
         <div className="logo-group">
           <span className="logo-icon">◈</span>
           <span className="logo-text">Scan2Floor</span>
-          <span className="logo-tag">3D Studio</span>
+          <span className="logo-tag">BIM</span>
         </div>
 
         <div className="topbar-spacer" />
@@ -222,6 +310,8 @@ export default function App() {
           setShowFloorPlan={setShowFloorPlan}
           showFloorPlanViewer={showFloorPlanViewer}
           setShowFloorPlanViewer={setShowFloorPlanViewer}
+          showBim3D={showBim3D}
+          setShowBim3D={setShowBim3D}
           className={sidebarCollapsed ? "collapsed" : ""}
           cloudPoints={cloudPoints}
           onReprocessDone={handleReprocessDone}
@@ -252,6 +342,7 @@ export default function App() {
             <Canvas
               camera={{ position: [30, 15, 30], fov: 50, near: 0.1, far: 2000 }}
               gl={{ antialias: true, localClippingEnabled: true }}
+              onPointerMissed={() => setSelectedWall(null)}
             >
               <color attach="background" args={[isDark ? "#0f0f0f" : "#f5f5f5"]} />
               <ambientLight intensity={isDark ? 0.6 : 0.8} />
@@ -300,6 +391,32 @@ export default function App() {
                     }}
                   />
                 )}
+                {showBim3D && (
+                  <DetectedBim3D
+                    modelInfo={modelInfo}
+                    activeFloor={activeFloor}
+                    dataVersion={floorDataVersion}
+                    loadedSave={loadedSave}
+                    selectedRoomId={selectedRoomId}
+                    onSelectRoom={setSelectedRoomId}
+                    selectedWall={selectedWall}
+                    onSelectWall={(w) => {
+                      setSelectedWall(w);
+                      if (w) setSelectedOpening(null);
+                    }}
+                    hoveredWall={hoveredWall}
+                    setHoveredWall={setHoveredWall}
+                    hoveredRoom={hoveredRoom}
+                    setHoveredRoom={setHoveredRoom}
+                    selectedOpening={selectedOpening}
+                    onSelectOpening={(op) => {
+                      setSelectedOpening(op);
+                      if (op) setSelectedWall(null);
+                    }}
+                    hoveredOpening={hoveredOpening}
+                    setHoveredOpening={setHoveredOpening}
+                  />
+                )}
               </Suspense>
 
               <OrbitControls
@@ -324,6 +441,19 @@ export default function App() {
               </GizmoHelper>
             </Canvas>
           </div>
+
+          {/* 3D BIM Inspector Overlay */}
+          <BimInspectorOverlay
+            selectedWall={selectedWall}
+            onCloseWall={() => setSelectedWall(null)}
+            onDeleteWall={handleDeleteWallFrom3D}
+            hoveredWall={hoveredWall}
+            hoveredRoom={hoveredRoom}
+            selectedOpening={selectedOpening}
+            onCloseOpening={() => setSelectedOpening(null)}
+            onDeleteOpening={handleDeleteOpeningFrom3D}
+            hoveredOpening={hoveredOpening}
+          />
 
           {/* Loading overlay */}
           {anyLoading && (
@@ -392,7 +522,7 @@ export default function App() {
           )}
 
           {/* Room list panel — shown when FloorPlanViewer is active */}
-          {showFloorPlanViewer && (
+          {/* {showFloorPlanViewer && (
             <RoomListPanel
               floor={activeFloor === "all" ? 0 : activeFloor}
               dataVersion={floorDataVersion}
@@ -400,7 +530,7 @@ export default function App() {
               onSelectRoom={setSelectedRoomId}
               saveName={loadedSave}
             />
-          )}
+          )} */}
 
           {/* Floor plan panel (Matterport image) */}
           {showFloorPlan && (
@@ -437,6 +567,7 @@ export default function App() {
               onSelectFloor={setActiveFloor}
               roomMode={roomMode}
               saveName={loadedSave}
+              onWallsSaved={handleWallsDetected}
             />
           </div>
         )}

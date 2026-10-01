@@ -1,9 +1,14 @@
 import json
 import os
+import struct
 import subprocess
 import sys
 import threading
 import time
+
+import numpy as np
+
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -292,6 +297,68 @@ def pointcloud():
         path,
         media_type="application/octet-stream",
         headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
+
+
+@app.get("/api/pointcloud/room")
+def pointcloud_room(
+    xmin: float,
+    xmax: float,
+    zmin: float,
+    zmax: float,
+    ymin: float | None = None,
+    ymax: float | None = None,
+    pad:  float = 0.35,
+):
+    """
+    Return a dense subset of pointcloud.bin filtered to the room bounding box.
+
+    The global pointcloud.bin is already a 1-in-100 sample of the raw scan.
+    For a single room that occupies ~1/10 of the floor area the global cloud
+    contributes only ~0.1% of original points to that area.  Returning ALL
+    bin-file points inside the room bbox gives ~10x the spatial density for
+    the room highlight overlay, without touching the original raw scan.
+
+    Binary response format (same as /api/pointcloud):
+        [uint32 N] [float32 N*3 positions]
+    """
+    path = os.path.join(PROCESSED_DIR, "pointcloud.bin")
+    if not os.path.exists(path):
+        raise HTTPException(status_code=404, detail="pointcloud.bin not found")
+
+    # ── Read the full binary ──────────────────────────────────────────────────
+    with open(path, "rb") as fh:
+        (N,) = struct.unpack_from("<I", fh.read(4))
+        pos_bytes = fh.read(N * 3 * 4)  # float32 positions only
+
+    positions = np.frombuffer(pos_bytes, dtype=np.float32).reshape(N, 3)
+    # Coordinate layout in the binary: [X, Y, Z] (Y-up, centred by preprocess)
+
+    # ── Spatial filter ────────────────────────────────────────────────────────
+    x = positions[:, 0]
+    y = positions[:, 1]
+    z = positions[:, 2]
+
+    mask = (
+        (x >= xmin - pad) & (x <= xmax + pad) &
+        (z >= zmin - pad) & (z <= zmax + pad)
+    )
+    if ymin is not None:
+        mask &= (y >= ymin)
+    if ymax is not None:
+        mask &= (y <= ymax)
+
+    dense = positions[mask]  # shape (M, 3)
+    M = len(dense)
+
+    # ── Pack response in the same binary format ───────────────────────────────
+    out = struct.pack("<I", M) + dense.astype(np.float32).tobytes()
+
+    from fastapi.responses import Response
+    return Response(
+        content=out,
+        media_type="application/octet-stream",
+        headers={"Cache-Control": "no-cache"},
     )
 
 
@@ -591,6 +658,7 @@ def get_openings(floor_idx: int):
 
 class UserOpeningsPayload(BaseModel):
     user_openings: list  # list of manually-placed door/window objects
+    openings: Optional[list] = None  # optional list of auto-detected openings if modified/deleted
 
 
 @app.put("/api/openings/{floor_idx}")
@@ -598,7 +666,7 @@ def save_user_openings(floor_idx: int, payload: UserOpeningsPayload):
     """
     Persist manually-placed doors and windows from the Room Editor.
     Stores in the `user_openings` field of openings_floor_N.json,
-    keeping any auto-detected openings intact.
+    keeping any auto-detected openings intact (unless explicitly updated).
     """
     path = os.path.join(PROCESSED_DIR, f"openings_floor_{floor_idx}.json")
     existing: dict = {"status": "not_processed", "openings": []}
@@ -606,6 +674,8 @@ def save_user_openings(floor_idx: int, payload: UserOpeningsPayload):
         with open(path) as f:
             existing = json.load(f)
     existing["user_openings"] = payload.user_openings
+    if payload.openings is not None:
+        existing["openings"] = payload.openings
     with open(path, "w") as f:
         json.dump(existing, f, indent=2)
     return {"status": "saved", "n_user_openings": len(payload.user_openings)}
