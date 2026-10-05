@@ -613,6 +613,11 @@ def export_walls(floor_idx: int):
 
 @app.get("/api/walls/{floor_idx}/download")
 def download_dxf(floor_idx: int):
+    # Ensure DXF is fresh with latest walls + openings
+    try:
+        export_floor_dxf(floor_idx, PROCESSED_DIR)
+    except Exception:
+        pass
     dxf_path = os.path.join(PROCESSED_DIR, f"floor_{floor_idx}.dxf")
     if not os.path.exists(dxf_path):
         raise HTTPException(status_code=404, detail="DXF not generated yet")
@@ -678,6 +683,13 @@ def save_user_openings(floor_idx: int, payload: UserOpeningsPayload):
         existing["openings"] = payload.openings
     with open(path, "w") as f:
         json.dump(existing, f, indent=2)
+
+    # Re-export DXF + SVG so manual openings are immediately reflected in exports
+    try:
+        export_floor_dxf(floor_idx, PROCESSED_DIR)
+    except Exception as exc:
+        print(f"Warning: DXF export failed during opening save: {exc}")
+
     return {"status": "saved", "n_user_openings": len(payload.user_openings)}
 
 
@@ -992,14 +1004,8 @@ def c2b_generate_walls(params: C2BWallParams):
             "n_rooms": 0,
         }
 
-        # TODO: Door/Window detection disabled — results were unreliable.
-        # if params.detect_openings and real_lines:
-        #     try:
-        #         op = detect_openings_for_floor(params.floor_idx, cfg)
-        #         result["n_doors"]   = op["n_doors"]
-        #         result["n_windows"] = op["n_windows"]
-        #     except Exception as exc:
-        #         result["opening_warning"] = str(exc)
+        # Auto door/window detection is disabled — openings come from
+        # manual placement in the Room Editor (user_openings in the JSON).
 
         if params.detect_rooms and real_lines:
             try:
@@ -1128,6 +1134,15 @@ def create_save(payload: SavePayload):
 
     save_path = _save_dir(name)
     os.makedirs(save_path, exist_ok=True)
+
+    # Re-export DXF for all floors before copying so save has latest openings
+    for pat in _glob.glob(os.path.join(PROCESSED_DIR, "walls_floor_*.json")):
+        try:
+            fname = os.path.basename(pat)
+            f_idx = int(fname.split("_")[-1].replace(".json", ""))
+            export_floor_dxf(f_idx, PROCESSED_DIR)
+        except Exception:
+            pass
 
     copied = []
     for pat in _SAVE_PATTERNS:
@@ -1267,6 +1282,13 @@ def save_put_user_openings(name: str, floor_idx: int, payload: UserOpeningsPaylo
     existing["user_openings"] = payload.user_openings
     with open(path, "w") as f:
         json.dump(existing, f, indent=2)
+
+    # Re-export DXF + SVG inside save folder
+    try:
+        export_floor_dxf(floor_idx, save_path)
+    except Exception as exc:
+        print(f"Warning: DXF export failed in save: {exc}")
+
     return {"status": "saved", "n_user_openings": len(payload.user_openings)}
 
 
@@ -1282,6 +1304,10 @@ def save_get_svg(name: str, floor_idx: int):
 @app.get("/api/saves/{name}/download/{floor_idx}")
 def save_download_dxf(name: str, floor_idx: int):
     save_path = _save_dir(name)
+    try:
+        export_floor_dxf(floor_idx, save_path)
+    except Exception:
+        pass
     dxf_path = os.path.join(save_path, f"floor_{floor_idx}.dxf")
     if not os.path.exists(dxf_path):
         raise HTTPException(status_code=404, detail="DXF not found in this save.")

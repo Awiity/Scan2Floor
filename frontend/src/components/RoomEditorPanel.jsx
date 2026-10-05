@@ -693,22 +693,22 @@ export default function RoomEditorPanel({
     if (!isDirty && !openingsDirty) return;
     setSaveState("saving");
     try {
-      const reqs = [];
-      if (isDirty) {
-        const lines = editedLinesRef.current.filter(l => !l.hidden).map(l => l.pts);
-        reqs.push(fetch(`${apiBase}/walls/${floor}`, {
-          method: "PUT", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lines, polygon_rooms: true }),
-        }));
-      }
       if (openingsDirty) {
-        reqs.push(fetch(`${apiBase}/openings/${floor}`, {
+        await fetch(`${apiBase}/openings/${floor}`, {
           method: "PUT", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ user_openings: manualOpeningsRef.current }),
-        }));
+        });
+        setOpeningsDirty(false);
       }
-      await Promise.all(reqs);
-      setSaveState("saved"); setIsDirty(false); setOpeningsDirty(false);
+      if (isDirty) {
+        const lines = editedLinesRef.current.filter(l => !l.hidden).map(l => l.pts);
+        await fetch(`${apiBase}/walls/${floor}`, {
+          method: "PUT", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lines, polygon_rooms: true }),
+        });
+        setIsDirty(false);
+      }
+      setSaveState("saved");
       onWallsChanged?.(); setTimeout(() => setSaveState("idle"), 3000);
     } catch { setSaveState("error"); setTimeout(() => setSaveState("idle"), 3000); }
   }, [isDirty, openingsDirty, floor, apiBase, onWallsChanged]);
@@ -942,11 +942,10 @@ export default function RoomEditorPanel({
         body: JSON.stringify({ user_openings: list }),
       });
       setOpeningsDirty(false);
-      onWallsChanged?.();
     } catch (err) {
       console.error("Failed to auto-save openings in room editor:", err);
     }
-  }, [apiBase, floor, onWallsChanged]);
+  }, [apiBase, floor]);
 
   const onClick = useCallback((e) => {
     const mode = editModeRef.current;
@@ -986,6 +985,12 @@ export default function RoomEditorPanel({
         pushHistory(editedLinesRef.current);
         const nl = editedLinesRef.current.filter((_, i) => i !== idx);
         setEditedLines(nl); editedLinesRef.current = nl;
+        const updatedOps = manualOpeningsRef.current
+          .filter(op => op.wall_idx !== idx)
+          .map(op => op.wall_idx > idx ? { ...op, wall_idx: op.wall_idx - 1 } : op);
+        manualOpeningsRef.current = updatedOps;
+        setManualOpenings(updatedOps);
+        setOpeningsDirty(true);
         hoveredLineRef.current = -1; setHoveredLine(-1); setIsDirty(true); scheduleDraw();
       }
       return;

@@ -334,7 +334,6 @@ def run_pipeline(
             _emit(f"  Detecting walls for floors: {floors_to_run}")
 
             from pipeline.wall_detection_c2b import detect_walls_c2b_for_floor
-            from pipeline.opening_detection  import detect_openings_for_floor
             from pipeline.room_detection     import detect_rooms_for_floor
             from pipeline.dxf_export         import export_floor_dxf
 
@@ -375,12 +374,8 @@ def run_pipeline(
                     _emit(f"  ✗ wall detection floor {fi}: {exc}")
                     continue
 
-                # TODO: Door/Window detection disabled — results were unreliable.
-                # try:
-                #     op = detect_openings_for_floor(fi, cfg)
-                #     _emit(f"  Openings: {op.get('n_doors',0)}D {op.get('n_windows',0)}W")
-                # except Exception as exc:
-                #     _emit(f"  ⚠ opening detection floor {fi}: {exc}")
+                # Auto door/window detection is disabled — openings come from
+                # manual placement in the Room Editor (user_openings in the JSON).
 
                 try:
                     rm = detect_rooms_for_floor(fi, {**cfg, **room_cfg, "floor_idx": fi})

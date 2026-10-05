@@ -981,7 +981,7 @@ export default function DetectedBim3D({
             isHovered={isHovered}
             onHover={setHoveredRoom}
             onUnhover={() => setHoveredRoom(null)}
-            onClick={(r) => onSelectRoom?.(r.id)}
+            onClick={(r) => onSelectRoom?.(r.id, rm.floorIdx, rm)}
           />
         );
       })}

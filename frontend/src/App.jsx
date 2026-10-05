@@ -112,7 +112,21 @@ export default function App() {
 
   /* ---------- room selection ----------- */
   const [selectedRoomId, setSelectedRoomId] = useState(null);
+  const [selectedRoomFloor, setSelectedRoomFloor] = useState(null);
+  const [selectedRoomObj, setSelectedRoomObj] = useState(null);
   const [roomsData, setRoomsData] = useState(null);
+
+  const handleSelectRoom = useCallback((roomId, floorIdx = null, roomObj = null) => {
+    if (roomId == null) {
+      setSelectedRoomId(null);
+      setSelectedRoomFloor(null);
+      setSelectedRoomObj(null);
+    } else {
+      setSelectedRoomId(roomId);
+      if (floorIdx != null) setSelectedRoomFloor(floorIdx);
+      if (roomObj != null) setSelectedRoomObj(roomObj);
+    }
+  }, []);
 
   /* ---------- room shape mode ---------- */
   // 'polygon' = new non-rectangular mode; 'rectangular' = legacy bbox-only mode
@@ -202,6 +216,68 @@ export default function App() {
     }
   }, [loadedSave, activeFloor]);
 
+  /* ---------- 3D opening update (size / position / margins) ---------- */
+  const handleUpdateOpeningFrom3D = useCallback(async (updatedOp) => {
+    if (!updatedOp) return;
+    try {
+      const floorIdx = updatedOp.floorIdx ?? (activeFloor === "all" ? 0 : Number(activeFloor));
+      const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+      const res = await fetch(`${apiBase}/openings/${floorIdx}`);
+      if (!res.ok) throw new Error("Failed to fetch openings");
+      const data = await res.json();
+      const userOps = data.user_openings || [];
+      const autoOps = data.openings || [];
+
+      // Build the patch fields from the updated op
+      const patch = {
+        width: updatedOp.width,
+        width_m: updatedOp.width_m ?? updatedOp.width,
+        top_margin: updatedOp.top_margin,
+        bottom_margin: updatedOp.bottom_margin,
+        position_t: updatedOp.position_t,
+      };
+
+      const matchOp = (o) => {
+        if (updatedOp.id && o.id === updatedOp.id) return true;
+        if (o.x != null && updatedOp.x != null && Math.hypot(o.x - updatedOp.x, (o.z ?? 0) - (updatedOp.z ?? 0)) < 0.25) return true;
+        return false;
+      };
+
+      let updatedUserOps = userOps;
+      let updatedAutoOps = autoOps;
+
+      if (updatedOp.isUser) {
+        // Patch in user_openings; if not found, append as new
+        let found = false;
+        updatedUserOps = userOps.map((o) => {
+          if (matchOp(o)) { found = true; return { ...o, ...patch }; }
+          return o;
+        });
+        if (!found) updatedUserOps = [...userOps, { ...(updatedOp.raw ?? updatedOp), ...patch }];
+      } else {
+        // Patch in auto-detected openings
+        updatedAutoOps = autoOps.map((o) => {
+          if (matchOp(o)) return { ...o, ...patch };
+          return o;
+        });
+      }
+
+      const putRes = await fetch(`${apiBase}/openings/${floorIdx}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          user_openings: updatedUserOps,
+          openings: updatedAutoOps,
+        }),
+      });
+      if (!putRes.ok) throw new Error("Failed to save updated opening");
+
+      handleWallsDetected();
+    } catch (err) {
+      console.error("Failed to update opening from 3D:", err);
+    }
+  }, [loadedSave, activeFloor]);
+
   // Fetch rooms for the active floor (defaulting to floor 0 when activeFloor is "all")
   useEffect(() => {
     const targetFloor = (activeFloor === "all" || activeFloor == null) ? 0 : activeFloor;
@@ -226,14 +302,17 @@ export default function App() {
 
   // Clear room selection when activeFloor changes
   useEffect(() => {
-    setSelectedRoomId(null);
-  }, [activeFloor]);
+    if (selectedRoomFloor != null && activeFloor !== "all" && activeFloor !== selectedRoomFloor) {
+      handleSelectRoom(null);
+    }
+  }, [activeFloor, selectedRoomFloor, handleSelectRoom]);
 
   // Derive the full room object for the currently selected room
   const highlightedRoom =
-    selectedRoomId != null
+    selectedRoomObj ??
+    (selectedRoomId != null
       ? (roomsData?.rooms ?? []).find((r) => r.id === selectedRoomId) ?? null
-      : null;
+      : null);
 
   /* ---------- camera ref -------------- */
   const controlsRef = useRef(null);
@@ -398,7 +477,7 @@ export default function App() {
                     dataVersion={floorDataVersion}
                     loadedSave={loadedSave}
                     selectedRoomId={selectedRoomId}
-                    onSelectRoom={setSelectedRoomId}
+                    onSelectRoom={handleSelectRoom}
                     selectedWall={selectedWall}
                     onSelectWall={(w) => {
                       setSelectedWall(w);
@@ -453,6 +532,7 @@ export default function App() {
             onCloseOpening={() => setSelectedOpening(null)}
             onDeleteOpening={handleDeleteOpeningFrom3D}
             hoveredOpening={hoveredOpening}
+            onUpdateOpening={handleUpdateOpeningFrom3D}
           />
 
           {/* Loading overlay */}
@@ -540,10 +620,10 @@ export default function App() {
           {selectedRoomId != null && highlightedRoom && (
             <RoomEditorPanel
               room={highlightedRoom}
-              floor={activeFloor === "all" ? 0 : activeFloor}
+              floor={selectedRoomFloor ?? (highlightedRoom?.floor_idx ?? (activeFloor === "all" ? 0 : activeFloor))}
               modelInfo={modelInfo}
               saveName={loadedSave}
-              onClose={() => setSelectedRoomId(null)}
+              onClose={() => handleSelectRoom(null)}
               onWallsChanged={handleWallsDetected}
             />
           )}
@@ -563,7 +643,7 @@ export default function App() {
               dataVersion={floorDataVersion}
               onClose={() => setShowFloorPlanViewer(false)}
               highlightedRoomId={selectedRoomId}
-              onSelectRoom={setSelectedRoomId}
+              onSelectRoom={handleSelectRoom}
               onSelectFloor={setActiveFloor}
               roomMode={roomMode}
               saveName={loadedSave}

@@ -1320,9 +1320,24 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   useEffect(() => { hoverOpeningRef.current  = hoverOp;        }, [hoverOp]);
   useEffect(() => { selectedOpIdxRef.current = selectedOpIdx; }, [selectedOpIdx]);
 
+  const isDirtyRef = useRef(false);
+  useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
+  const prevFloorRef = useRef(selectedFloor);
+  const prevSaveRef  = useRef(saveName);
+
   // ── Fetch floor data ────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
+    const floorChanged = prevFloorRef.current !== selectedFloor;
+    const saveChanged  = prevSaveRef.current  !== saveName;
+    prevFloorRef.current = selectedFloor;
+    prevSaveRef.current  = saveName;
+
+    // If only dataVersion changed but user has unsaved edits, do not wipe them
+    if (!floorChanged && !saveChanged && isDirtyRef.current) {
+      return;
+    }
+
     setLoadState("loading");
     setEditedLines([]); setRoomsData(null); setOpeningsData(null); setUserOpenings([]);
     setIsDirty(false); setOpeningsDirty(false); setUndoStack([]); setRedoStack([]);
@@ -1394,11 +1409,10 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         body: JSON.stringify({ user_openings: list }),
       });
       setOpeningsDirty(false);
-      onWallsSaved?.();
     } catch (err) {
       console.error("Failed to auto-save openings:", err);
     }
-  }, [apiBase, selectedFloor, onWallsSaved]);
+  }, [apiBase, selectedFloor]);
 
   const updateSelectedOp = useCallback((changes) => {
     if (selectedOpIdxRef.current === null) return;
@@ -1436,33 +1450,31 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     if (!isDirty && !openingsDirty) return;
     setSaveState("saving");
     try {
-      const reqs = [];
+      if (openingsDirty) {
+        const putOpUrl = `${apiBase}/openings/${selectedFloor}`;
+        const opRes = await fetch(putOpUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_openings: userOpeningsRef.current }),
+        });
+        if (!opRes.ok) { setSaveState("error"); return; }
+        setOpeningsDirty(false);
+      }
       if (isDirty) {
         // Hidden walls are excluded — they are suppressed from room recalculation
         const lines = editedLinesRef.current
           .filter(l => !l.hidden)
           .map(l => l.pts);
         const putUrl = `${apiBase}/walls/${selectedFloor}`;
-        reqs.push(fetch(putUrl, {
+        const wallRes = await fetch(putUrl, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ lines, polygon_rooms: roomMode === "polygon" }),
-        }));
+        });
+        if (!wallRes.ok) { setSaveState("error"); return; }
+        setIsDirty(false);
       }
-      if (openingsDirty) {
-        const putOpUrl = `${apiBase}/openings/${selectedFloor}`;
-        reqs.push(fetch(putOpUrl, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_openings: userOpeningsRef.current }),
-        }));
-      }
-      const responses = await Promise.all(reqs);
-      const failed = responses.some(r => !r.ok);
-      if (failed) { setSaveState("error"); return; }
       setSaveState("saved");
-      setIsDirty(false);
-      setOpeningsDirty(false);
       onWallsSaved?.();
       // Refresh rooms from updated backend
       fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => {});
@@ -1820,9 +1832,21 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         pushHistory(lines);
         let newLines;
         if (mode === "delete") {
-          newLines = lines.filter(({ pts: [[x1, z1], [x2, z2]] }) =>
-            !segIntersectsRect(x1, z1, x2, z2, rxMin, rxMax, rzMin, rzMax)
-          );
+          const keptIndices = [];
+          newLines = [];
+          lines.forEach((line, i) => {
+            const [[x1, z1], [x2, z2]] = line.pts;
+            if (!segIntersectsRect(x1, z1, x2, z2, rxMin, rxMax, rzMin, rzMax)) {
+              keptIndices.push(i);
+              newLines.push(line);
+            }
+          });
+          const updatedOps = userOpeningsRef.current
+            .filter(op => keptIndices.includes(op.wall_idx))
+            .map(op => ({ ...op, wall_idx: keptIndices.indexOf(op.wall_idx) }));
+          userOpeningsRef.current = updatedOps;
+          setUserOpenings(updatedOps);
+          setOpeningsDirty(true);
         } else {
           // hide: toggle hidden flag on all intersecting walls
           // Determine majority state — if most are visible, hide all; otherwise unhide all
@@ -1961,6 +1985,14 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         hoveredLineRef.current = -1; setHoveredLine(-1);
         snapRef.current = null;
         setIsDirty(true);
+
+        const updatedOps = userOpeningsRef.current
+          .filter(op => op.wall_idx !== idx)
+          .map(op => op.wall_idx > idx ? { ...op, wall_idx: op.wall_idx - 1 } : op);
+        userOpeningsRef.current = updatedOps;
+        setUserOpenings(updatedOps);
+        setOpeningsDirty(true);
+
         scheduleDraw();
       }
       return;
@@ -2033,13 +2065,28 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       return;
     }
 
-    // In select mode, check if click falls inside a room bbox → toggle selection
+    // In select mode, check if click falls inside a room polygon / bbox → toggle selection
     if (mode === "select" && !dragRef.current && onSelectRoom && roomsData?.rooms?.length) {
       const [wx, wz] = getWorldFromEvent(e);
       for (const room of roomsData.rooms) {
-        const { x_min, z_min, x_max, z_max } = room.bbox;
-        if (wx >= x_min && wx <= x_max && wz >= z_min && wz <= z_max) {
-          onSelectRoom(highlightedRoomIdRef.current === room.id ? null : room.id);
+        let inside = false;
+        if (room.polygon && room.polygon.length >= 3) {
+          const poly = room.polygon;
+          for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+            const xi = poly[i][0], zi = poly[i][1];
+            const xj = poly[j][0], zj = poly[j][1];
+            const intersect = ((zi > wz) !== (zj > wz)) && (wx < (xj - xi) * (wz - zi) / (zj - zi) + xi);
+            if (intersect) inside = !inside;
+          }
+        }
+        if (!inside && room.bbox) {
+          const { x_min, z_min, x_max, z_max } = room.bbox;
+          if (wx >= x_min && wx <= x_max && wz >= z_min && wz <= z_max) {
+            inside = true;
+          }
+        }
+        if (inside) {
+          onSelectRoom(highlightedRoomIdRef.current === room.id ? null : room.id, selectedFloor, room);
           return;
         }
       }

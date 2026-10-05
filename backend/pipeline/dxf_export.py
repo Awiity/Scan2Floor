@@ -30,39 +30,70 @@ LAYER_ROOM   = "A-ROOM"
 def _add_door_symbol(msp, opening: dict):
     """
     Draw a standard architectural door symbol:
-      - opening gap line (on A-DOOR layer)
-      - quarter-circle arc from one jamb, radius = door width
-    All in the XZ → XY 2-D CAD plane.
+      - door leaf line swung open 90° into the room
+      - opening frame line along wall
+      - 90° quarter-circle swing arc connecting jamb to open leaf tip
+    All in the XZ → XY 2-D CAD plane on LAYER_DOOR.
     """
     hx, hz   = opening["hinge_x"], opening["hinge_z"]
     x1w, z1w = opening["wall_x1"], opening["wall_z1"]
     x2w, z2w = opening["wall_x2"], opening["wall_z2"]
-    width    = opening["width"]
-    wall_len = opening["wall_len"]
+    width    = float(opening["width"])
+    wall_len = float(opening["wall_len"])
 
-    # Unit vector along wall
+    if wall_len < 0.001 or width < 0.05:
+        return
+
     ux = (x2w - x1w) / wall_len
     uz = (z2w - z1w) / wall_len
 
-    # Door leaf end point (along wall from hinge by width)
-    leaf_x = hx + ux * width
-    leaf_z = hz + uz * width
+    hinge_side = int(opening.get("side", 1))
+    swing_dir  = int(opening.get("swing_dir", 1))
+
+    # Direction along wall from hinge to strike jamb
+    # side=1: hinge at start of opening -> closed leaf goes in +u direction
+    # side=-1: hinge at end of opening -> closed leaf goes in -u direction
+    if hinge_side == -1:
+        c_ux, c_uz = -ux, -uz
+    else:
+        c_ux, c_uz = ux, uz
+
+    # Strike jamb position (closed door tip)
+    sx = hx + c_ux * width
+    sz = hz + c_uz * width
+
+    # Normal vector for open door leaf (perpendicular to wall, oriented by swing_dir)
+    nx = -c_uz * swing_dir
+    nz =  c_ux * swing_dir
+
+    # Tip of open door leaf
+    tx = hx + nx * width
+    tz = hz + nz * width
 
     dxf = {"layer": LAYER_DOOR}
 
-    # Gap line (the opening itself)
-    msp.add_line((hx, hz), (leaf_x, leaf_z), dxfattribs=dxf)
+    # 1. Closed opening line along wall (threshold / opening frame)
+    msp.add_line((hx, hz), (sx, sz), dxfattribs=dxf)
 
-    # Arc: centre = hinge, radius = width, 0° → 90° in local wall coords
-    wall_angle_deg = math.degrees(math.atan2(uz, ux))
-    start_angle    = wall_angle_deg
-    end_angle      = wall_angle_deg + 90.0
+    # 2. Open door leaf panel
+    msp.add_line((hx, hz), (tx, tz), dxfattribs=dxf)
+
+    # 3. 90° swing arc connecting strike jamb (sx, sz) to leaf tip (tx, tz)
+    # DXF arcs ALWAYS sweep counter-clockwise (CCW) from start_angle to end_angle.
+    a_closed = math.degrees(math.atan2(sz - hz, sx - hx)) % 360.0
+    a_open   = math.degrees(math.atan2(tz - hz, tx - hx)) % 360.0
+
+    diff = (a_open - a_closed) % 360.0
+    if diff < 180.0:
+        start_ang, end_ang = a_closed, a_open
+    else:
+        start_ang, end_ang = a_open, a_closed
 
     msp.add_arc(
         center=(hx, hz),
         radius=width,
-        start_angle=start_angle,
-        end_angle=end_angle,
+        start_angle=start_ang,
+        end_angle=end_ang,
         dxfattribs=dxf,
     )
 
@@ -70,31 +101,139 @@ def _add_door_symbol(msp, opening: dict):
 def _add_window_symbol(msp, opening: dict):
     """
     Draw an architectural window symbol:
-      two short parallel lines centred on the opening mid-point.
+      - two parallel outer frame lines
+      - central glazing line
+      - jamb end caps
     """
     cx, cz   = opening["x"], opening["z"]
     x1w, z1w = opening["wall_x1"], opening["wall_z1"]
     x2w, z2w = opening["wall_x2"], opening["wall_z2"]
-    wall_len  = opening["wall_len"]
-    width     = opening["width"]
+    wall_len = float(opening["wall_len"])
+    width    = float(opening["width"])
+
+    if wall_len < 0.001 or width < 0.05:
+        return
 
     ux = (x2w - x1w) / wall_len
     uz = (z2w - z1w) / wall_len
 
-    # Perpendicular (normal) direction in XZ plane
+    # Normal direction perpendicular to wall
     nx, nz = -uz, ux
 
-    half = width / 2
-    off  = 0.05   # 5 cm offset between the two parallel lines
+    half = width / 2.0
+    off  = 0.08   # 8 cm offset for outer frame lines
 
-    for sign in (-1, 1):
-        px = cx + sign * nx * off
-        pz = cz + sign * nz * off
-        msp.add_line(
-            (px - ux * half, pz - uz * half),
-            (px + ux * half, pz + uz * half),
-            dxfattribs={"layer": LAYER_WINDOW},
-        )
+    p1_a = (cx - ux * half + nx * off, cz - uz * half + nz * off)
+    p2_a = (cx + ux * half + nx * off, cz + uz * half + nz * off)
+    p1_b = (cx - ux * half - nx * off, cz - uz * half - nz * off)
+    p2_b = (cx + ux * half - nx * off, cz + uz * half - nz * off)
+
+    dxf = {"layer": LAYER_WINDOW}
+
+    # Parallel frame lines
+    msp.add_line(p1_a, p2_a, dxfattribs=dxf)
+    msp.add_line(p1_b, p2_b, dxfattribs=dxf)
+
+    # Centre sill / glass line
+    msp.add_line(
+        (cx - ux * half, cz - uz * half),
+        (cx + ux * half, cz + uz * half),
+        dxfattribs=dxf,
+    )
+
+    # Jamb end caps
+    msp.add_line(p1_a, p1_b, dxfattribs=dxf)
+    msp.add_line(p2_a, p2_b, dxfattribs=dxf)
+
+
+# ── Opening geometry conversion ───────────────────────────────────────────────
+
+def _user_opening_to_dxf(op: dict, wall_lines: list) -> dict | None:
+    """
+    Convert a manually-placed opening (Room Editor format) into the geometry
+    dict consumed by _add_door_symbol / _add_window_symbol.
+
+    Resilient to wall edits/deletions: uses stored wall coordinates or finds
+    the best matching segment in wall_lines rather than crashing on shifted wall_idx.
+    """
+    x1 = op.get("wall_x1")
+    z1 = op.get("wall_z1")
+    x2 = op.get("wall_x2")
+    z2 = op.get("wall_z2")
+
+    wi = op.get("wall_idx", -1)
+    seg = None
+    if isinstance(wi, int) and 0 <= wi < len(wall_lines):
+        seg = wall_lines[wi]
+
+    # If coordinates are missing, take from wall_lines[wi]
+    if (x1 is None or x2 is None) and seg is not None:
+        x1, z1 = seg[0]
+        x2, z2 = seg[1]
+
+    # If still missing, find closest wall in wall_lines
+    if x1 is None or x2 is None:
+        ox = op.get("x")
+        oz = op.get("z")
+        if ox is not None and oz is not None and wall_lines:
+            best_dist = float("inf")
+            best_seg = None
+            for s in wall_lines:
+                mx = (s[0][0] + s[1][0]) / 2.0
+                mz = (s[0][1] + s[1][1]) / 2.0
+                d = math.hypot(float(ox) - mx, float(oz) - mz)
+                if d < best_dist:
+                    best_dist = d
+                    best_seg = s
+            if best_seg is not None and best_dist < 5.0:
+                x1, z1 = best_seg[0]
+                x2, z2 = best_seg[1]
+
+    if x1 is None or x2 is None:
+        return None
+
+    x1, z1 = float(x1), float(z1)
+    x2, z2 = float(x2), float(z2)
+    wall_len = math.hypot(x2 - x1, z2 - z1)
+    if wall_len < 0.01:
+        return None
+
+    ux = (x2 - x1) / wall_len
+    uz = (z2 - z1) / wall_len
+
+    t = float(op.get("position_t", 0.5))
+    w_m = float(op.get("width_m") or op.get("width") or 0.9)
+    half_w = w_m / 2.0
+
+    if op.get("x") is not None and op.get("z") is not None:
+        cx = float(op["x"])
+        cz = float(op["z"])
+    else:
+        cx = x1 + t * (x2 - x1)
+        cz = z1 + t * (z2 - z1)
+
+    hinge_side = int(op.get("side", 1))
+    swing_dir  = int(op.get("swing_dir", 1))
+    if hinge_side == -1:
+        hx = cx + ux * half_w
+        hz = cz + uz * half_w
+    else:
+        hx = cx - ux * half_w
+        hz = cz - uz * half_w
+
+    return {
+        "type":      op.get("type", "door"),
+        "width":     w_m,
+        "wall_len":  wall_len,
+        "x":         cx,         "z":        cz,
+        "wall_x1":   x1,         "wall_z1":  z1,
+        "wall_x2":   x2,         "wall_z2":  z2,
+        "hinge_x":   hx,         "hinge_z":  hz,
+        "side":      hinge_side,
+        "swing_dir": swing_dir,
+        "u_start":   t * wall_len - half_w,
+        "u_end":     t * wall_len + half_w,
+    }
 
 
 # ── Main export ──────────────────────────────────────────────────────────────
@@ -103,6 +242,8 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
     """
     Read walls_floor_<N>.json + openings_floor_<N>.json (optional) and
     export a DXF + companion SVG.  Returns the DXF file path.
+
+    Supports both manually placed (user_openings) and any existing openings.
     """
     wall_path    = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
     opening_path = os.path.join(processed_dir, f"openings_floor_{floor_idx}.json")
@@ -118,11 +259,31 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
     x_min  = wall_data.get("x_min", 0)
     z_min  = wall_data.get("z_min", 0)
 
+    # Load openings: user_openings (manual) + any existing openings
     openings = []
     if os.path.exists(opening_path):
         with open(opening_path) as f:
             op_data = json.load(f)
-        openings = op_data.get("openings", [])
+
+        # 1. Manually-placed user openings
+        for raw in op_data.get("user_openings", []):
+            converted = _user_opening_to_dxf(raw, lines)
+            if converted is not None:
+                openings.append(converted)
+
+        # 2. Existing / imported openings from "openings" field
+        for raw in op_data.get("openings", []):
+            if "hinge_x" in raw and "wall_len" in raw:
+                raw_copy = dict(raw)
+                if "side" not in raw_copy:
+                    raw_copy["side"] = 1
+                if "swing_dir" not in raw_copy:
+                    raw_copy["swing_dir"] = 1
+                openings.append(raw_copy)
+            else:
+                converted = _user_opening_to_dxf(raw, lines)
+                if converted is not None:
+                    openings.append(converted)
 
     rooms = []
     if os.path.exists(room_path):
