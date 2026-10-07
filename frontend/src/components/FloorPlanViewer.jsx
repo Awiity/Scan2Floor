@@ -1158,7 +1158,7 @@ function deriveRoomHeight(modelInfo, floorIdx) {
 }
 
 // ── RoomInfoChip ───────────────────────────────────────────────────────────────
-function RoomInfoChip({ room, floorIdx, modelInfo }) {
+function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect }) {
   if (!room) return null;
   const height = deriveRoomHeight(modelInfo, floorIdx);
   // Derive dimensions from bbox (length = Z span, width = X span)
@@ -1170,21 +1170,34 @@ function RoomInfoChip({ room, floorIdx, modelInfo }) {
   return (
     <div style={{
       position: "absolute", top: 12, left: 12,
-      background: "var(--surface-1)",
-      border: "1px solid var(--border-hi)", borderRadius: 8,
+      background: "var(--surface-1, #131722)",
+      border: "1px solid var(--border-hi, rgba(255,255,255,0.15))", borderRadius: 8,
       padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6,
-      boxShadow: "0 2px 10px rgba(0,0,0,0.18)",
-      pointerEvents: "none", minWidth: 160,
+      boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
+      pointerEvents: "auto", minWidth: 175,
+      zIndex: 20,
       animation: "fadeIn 0.18s ease",
     }}>
       {/* Badge row */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{
-          background: "var(--surface-3)", color: "var(--text-1)",
-          border: "1px solid var(--border-hi)", borderRadius: 5,
-          padding: "2px 8px", fontSize: 11, fontWeight: 700, fontFamily: "Inter,sans-serif",
-        }}>R{room.id}</span>
-        <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "JetBrains Mono, monospace" }}>selected</span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{
+            background: "rgba(0,200,224,0.15)", color: "var(--accent, #00c8e0)",
+            border: "1px solid rgba(0,200,224,0.3)", borderRadius: 5,
+            padding: "2px 8px", fontSize: 11, fontWeight: 700, fontFamily: "Inter,sans-serif",
+          }}>Room {room.id}</span>
+          <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "JetBrains Mono, monospace" }}>selected</span>
+        </div>
+        {onDeselect && (
+          <button
+            onClick={onDeselect}
+            style={{
+              background: "transparent", border: "none", color: "var(--text-3)",
+              cursor: "pointer", fontSize: 12, padding: "2px 4px", borderRadius: 4,
+            }}
+            title="Deselect room"
+          >✕</button>
+        )}
       </div>
       {/* Metrics */}
       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -1206,11 +1219,37 @@ function RoomInfoChip({ room, floorIdx, modelInfo }) {
           </span>
         </div>
       </div>
+
+      {/* Button to open Room Editor */}
+      {onOpenRoomEditor && (
+        <button
+          onClick={onOpenRoomEditor}
+          style={{
+            marginTop: 4,
+            padding: "6px 10px",
+            background: "linear-gradient(135deg, rgba(0,200,224,0.2), rgba(129,140,248,0.2))",
+            border: "1px solid rgba(0,200,224,0.4)",
+            borderRadius: 6,
+            color: "#00e5ff",
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            transition: "all 0.15s ease",
+          }}
+          title="Open isolated Room Editor panel"
+        >
+          <span>🏠</span> Open Room Editor
+        </button>
+      )}
     </div>
   );
 }
 
-export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, roomMode = "polygon", saveName = null, onWallsSaved }) {
+export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, activeFloor = 0, roomMode = "polygon", saveName = null, onWallsSaved }) {
   const canvasRef = useRef(null);
   const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
   const rafRef    = useRef(null);
@@ -1244,10 +1283,22 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     : (saveName ? [0] : (modelInfo?.floor_levels ?? []));
 
   // ── Data fetch state ────────────────────────────────────────────────────────
-  const [selectedFloor, setSelectedFloor] = useState(0);
+  const [selectedFloor, setSelectedFloor] = useState(
+    activeFloor === "all" || activeFloor == null ? 0 : Number(activeFloor)
+  );
   const [roomsData,     setRoomsData]     = useState(null);
   const [openingsData,  setOpeningsData]  = useState(null);
   const [loadState,     setLoadState]     = useState("idle");
+
+  // Keep selected floor in sync with activeFloor when provided
+  useEffect(() => {
+    if (activeFloor !== "all" && activeFloor != null) {
+      const fNum = Number(activeFloor);
+      if (!isNaN(fNum) && fNum !== selectedFloor) {
+        setSelectedFloor(fNum);
+      }
+    }
+  }, [activeFloor]);
 
   // Keep selected floor in bounds if number of floors changes
   useEffect(() => {
@@ -1320,171 +1371,6 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   useEffect(() => { hoverOpeningRef.current  = hoverOp;        }, [hoverOp]);
   useEffect(() => { selectedOpIdxRef.current = selectedOpIdx; }, [selectedOpIdx]);
 
-  const isDirtyRef = useRef(false);
-  useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
-  const prevFloorRef = useRef(selectedFloor);
-  const prevSaveRef  = useRef(saveName);
-
-  // ── Fetch floor data ────────────────────────────────────────────────────────
-  useEffect(() => {
-    let cancelled = false;
-    const floorChanged = prevFloorRef.current !== selectedFloor;
-    const saveChanged  = prevSaveRef.current  !== saveName;
-    prevFloorRef.current = selectedFloor;
-    prevSaveRef.current  = saveName;
-
-    // If only dataVersion changed but user has unsaved edits, do not wipe them
-    if (!floorChanged && !saveChanged && isDirtyRef.current) {
-      return;
-    }
-
-    setLoadState("loading");
-    setEditedLines([]); setRoomsData(null); setOpeningsData(null); setUserOpenings([]);
-    setIsDirty(false); setOpeningsDirty(false); setUndoStack([]); setRedoStack([]);
-    setAddStep(null); addStepRef.current = null; snapRef.current = null;
-    setHoveredLine(-1); hoveredLineRef.current = -1;
-    setSelectedOpIdx(null); setHoverManualOp(-1); setHoverOp(null);
-
-    Promise.all([
-      fetch(`${apiBase}/walls/${selectedFloor}`).then(r => r.json()),
-      fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()),
-      fetch(`${apiBase}/openings/${selectedFloor}`).then(r => r.json()),
-    ])
-      .then(([w, r, o]) => {
-        if (cancelled) return;
-        const converted = (w?.lines ?? []).map(pts => ({ pts, source: "algo" }));
-        setEditedLines(converted); editedLinesRef.current = converted;
-        setRoomsData(r); setOpeningsData(o);
-        const uo = o?.user_openings ?? [];
-        setUserOpenings(uo); userOpeningsRef.current = uo;
-        setOpeningsDirty(false); setSelectedOpIdx(null);
-        setLoadState("ready");
-        const cvs = canvasRef.current;
-        if (cvs && converted.length) {
-          const b = wallsBoundsFromEdited(converted);
-          camRef.current = fitCamera(b, cvs.clientWidth || cvs.width, cvs.clientHeight || cvs.height);
-          scheduleDraw();
-        }
-      })
-      .catch(() => { if (!cancelled) setLoadState("error"); });
-
-    return () => { cancelled = true; };
-  }, [selectedFloor, dataVersion, saveName]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Undo / Redo ─────────────────────────────────────────────────────────────
-  const pushHistory = useCallback((snapshot) => {
-    setUndoStack(prev => [...prev.slice(-49), snapshot]);
-    setRedoStack([]);
-  }, []);
-
-  const undo = useCallback(() => {
-    setUndoStack(prev => {
-      if (!prev.length) return prev;
-      const last = prev[prev.length - 1];
-      setRedoStack(r => [editedLinesRef.current, ...r.slice(0, 49)]);
-      setEditedLines(last); editedLinesRef.current = last;
-      setIsDirty(true); scheduleDraw();
-      return prev.slice(0, -1);
-    });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const redo = useCallback(() => {
-    setRedoStack(prev => {
-      if (!prev.length) return prev;
-      const next = prev[0];
-      setUndoStack(u => [...u.slice(-49), editedLinesRef.current]);
-      setEditedLines(next); editedLinesRef.current = next;
-      setIsDirty(true); scheduleDraw();
-      return prev.slice(1);
-    });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Openings helpers ────────────────────────────────────────────────────────
-  const persistOpenings = useCallback(async (list) => {
-    try {
-      const putOpUrl = `${apiBase}/openings/${selectedFloor}`;
-      await fetch(putOpUrl, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_openings: list }),
-      });
-      setOpeningsDirty(false);
-    } catch (err) {
-      console.error("Failed to auto-save openings:", err);
-    }
-  }, [apiBase, selectedFloor]);
-
-  const updateSelectedOp = useCallback((changes) => {
-    if (selectedOpIdxRef.current === null) return;
-    const idx = selectedOpIdxRef.current;
-    const list = [...userOpeningsRef.current];
-    if (idx >= 0 && idx < list.length) {
-      const merged = { ...list[idx], ...changes };
-      if (changes.width_m != null) merged.width = changes.width_m;
-      if (changes.width != null) merged.width_m = changes.width;
-      if (changes.position_t != null && merged.wall_x1 != null && merged.wall_x2 != null) {
-        merged.x = merged.wall_x1 + merged.position_t * (merged.wall_x2 - merged.wall_x1);
-        merged.z = merged.wall_z1 + merged.position_t * (merged.wall_z2 - merged.wall_z1);
-      }
-      list[idx] = merged;
-      userOpeningsRef.current = list;
-      setUserOpenings(list);
-      scheduleDraw();
-      persistOpenings(list);
-    }
-  }, [persistOpenings]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const deleteSelectedOp = useCallback(() => {
-    if (selectedOpIdxRef.current === null) return;
-    const idx = selectedOpIdxRef.current;
-    const list = userOpeningsRef.current.filter((_, i) => i !== idx);
-    userOpeningsRef.current = list;
-    setUserOpenings(list);
-    setSelectedOpIdx(null);
-    scheduleDraw();
-    persistOpenings(list);
-  }, [persistOpenings]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Save to backend ─────────────────────────────────────────────────────────
-  const handleSave = useCallback(async () => {
-    if (!isDirty && !openingsDirty) return;
-    setSaveState("saving");
-    try {
-      if (openingsDirty) {
-        const putOpUrl = `${apiBase}/openings/${selectedFloor}`;
-        const opRes = await fetch(putOpUrl, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_openings: userOpeningsRef.current }),
-        });
-        if (!opRes.ok) { setSaveState("error"); return; }
-        setOpeningsDirty(false);
-      }
-      if (isDirty) {
-        // Hidden walls are excluded — they are suppressed from room recalculation
-        const lines = editedLinesRef.current
-          .filter(l => !l.hidden)
-          .map(l => l.pts);
-        const putUrl = `${apiBase}/walls/${selectedFloor}`;
-        const wallRes = await fetch(putUrl, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lines, polygon_rooms: roomMode === "polygon" }),
-        });
-        if (!wallRes.ok) { setSaveState("error"); return; }
-        setIsDirty(false);
-      }
-      setSaveState("saved");
-      onWallsSaved?.();
-      // Refresh rooms from updated backend
-      fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => {});
-      setTimeout(() => setSaveState("idle"), 3000);
-    } catch {
-      setSaveState("error");
-      setTimeout(() => setSaveState("idle"), 3000);
-    }
-  }, [isDirty, openingsDirty, selectedFloor, apiBase, roomMode, onWallsSaved]);
-
   // ── Draw loop ───────────────────────────────────────────────────────────────
   // Keep a ref for highlightedRoomId to avoid stale closures in scheduleDraw
   const highlightedRoomIdRef = useRef(highlightedRoomId);
@@ -1553,6 +1439,182 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       drawCompass(ctx, w);
     });
   }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
+
+  const isDirtyRef = useRef(false);
+  useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
+  const openingsDirtyRef = useRef(false);
+  useEffect(() => { openingsDirtyRef.current = openingsDirty; }, [openingsDirty]);
+  const hasFittedCamRef = useRef(false);
+  const didPanRef    = useRef(false);
+  const prevFloorRef = useRef(selectedFloor);
+  const prevSaveRef  = useRef(saveName);
+
+  // ── Fetch floor data when selected floor, dataVersion or saveName changes ──
+  useEffect(() => {
+    let cancelled = false;
+    const floorChanged = prevFloorRef.current !== selectedFloor;
+    const saveChanged  = prevSaveRef.current  !== saveName;
+    prevFloorRef.current = selectedFloor;
+    prevSaveRef.current  = saveName;
+
+    // If floor or save changed, reset everything and show loading
+    if (floorChanged || saveChanged) {
+      hasFittedCamRef.current = false;
+      setLoadState("loading");
+      setEditedLines([]); setRoomsData(null); setOpeningsData(null); setUserOpenings([]);
+      setIsDirty(false); setOpeningsDirty(false); setUndoStack([]); setRedoStack([]);
+      setAddStep(null); addStepRef.current = null; snapRef.current = null;
+      setHoveredLine(-1); hoveredLineRef.current = -1;
+      setSelectedOpIdx(null); setHoverManualOp(-1); setHoverOp(null);
+    }
+
+    const shouldFetchWalls = (floorChanged || saveChanged || !isDirtyRef.current);
+    const shouldFetchOpenings = (floorChanged || saveChanged || !openingsDirtyRef.current);
+
+    Promise.all([
+      shouldFetchWalls ? fetch(`${apiBase}/walls/${selectedFloor}`).then(r => r.json()) : Promise.resolve(null),
+      shouldFetchWalls ? fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()) : Promise.resolve(null),
+      shouldFetchOpenings ? fetch(`${apiBase}/openings/${selectedFloor}`).then(r => r.json()) : Promise.resolve(null),
+    ])
+      .then(([w, r, o]) => {
+        if (cancelled) return;
+
+        if (w) {
+          const converted = (w?.lines ?? []).map(pts => ({ pts, source: "algo" }));
+          setEditedLines(converted); editedLinesRef.current = converted;
+          if (r) setRoomsData(r);
+          setIsDirty(false);
+          const cvs = canvasRef.current;
+          if (cvs && converted.length && (floorChanged || saveChanged || !hasFittedCamRef.current)) {
+            const b = wallsBoundsFromEdited(converted);
+            camRef.current = fitCamera(b, cvs.clientWidth || cvs.width, cvs.clientHeight || cvs.height);
+            hasFittedCamRef.current = true;
+          }
+        }
+
+        if (o) {
+          setOpeningsData(o);
+          const uo = o?.user_openings ?? [];
+          setUserOpenings(uo); userOpeningsRef.current = uo;
+          setOpeningsDirty(false);
+          setSelectedOpIdx(prev => (prev != null && prev >= uo.length ? null : prev));
+        }
+
+        setLoadState("ready");
+        scheduleDraw();
+      })
+      .catch(() => {
+        if (!cancelled && (floorChanged || saveChanged)) setLoadState("error");
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedFloor, dataVersion, saveName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Undo / Redo ─────────────────────────────────────────────────────────────
+  const pushHistory = useCallback((snapshot) => {
+    setUndoStack(prev => [...prev.slice(-49), snapshot]);
+    setRedoStack([]);
+  }, []);
+
+  const undo = useCallback(() => {
+    setUndoStack(prev => {
+      if (!prev.length) return prev;
+      const last = prev[prev.length - 1];
+      setRedoStack(r => [editedLinesRef.current, ...r.slice(0, 49)]);
+      setEditedLines(last); editedLinesRef.current = last;
+      setIsDirty(true); scheduleDraw();
+      return prev.slice(0, -1);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const redo = useCallback(() => {
+    setRedoStack(prev => {
+      if (!prev.length) return prev;
+      const next = prev[0];
+      setUndoStack(u => [...u.slice(-49), editedLinesRef.current]);
+      setEditedLines(next); editedLinesRef.current = next;
+      setIsDirty(true); scheduleDraw();
+      return prev.slice(1);
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Openings helpers ────────────────────────────────────────────────────────
+  const updateSelectedOp = useCallback((changes) => {
+    if (selectedOpIdxRef.current === null) return;
+    const idx = selectedOpIdxRef.current;
+    const list = [...userOpeningsRef.current];
+    if (idx >= 0 && idx < list.length) {
+      const merged = { ...list[idx], ...changes };
+      if (changes.width_m != null) merged.width = changes.width_m;
+      if (changes.width != null) merged.width_m = changes.width;
+      if (changes.position_t != null && merged.wall_x1 != null && merged.wall_x2 != null) {
+        merged.x = merged.wall_x1 + merged.position_t * (merged.wall_x2 - merged.wall_x1);
+        merged.z = merged.wall_z1 + merged.position_t * (merged.wall_z2 - merged.wall_z1);
+      }
+      list[idx] = merged;
+      userOpeningsRef.current = list;
+      setUserOpenings(list);
+      setOpeningsDirty(true);
+      scheduleDraw();
+    }
+  }, [scheduleDraw]);
+
+  const deleteSelectedOp = useCallback(() => {
+    if (selectedOpIdxRef.current === null) return;
+    const idx = selectedOpIdxRef.current;
+    const list = userOpeningsRef.current.filter((_, i) => i !== idx);
+    userOpeningsRef.current = list;
+    setUserOpenings(list);
+    setSelectedOpIdx(null);
+    setOpeningsDirty(true);
+    scheduleDraw();
+  }, [scheduleDraw]);
+
+  // ── Save to backend ─────────────────────────────────────────────────────────
+  const handleSave = useCallback(async () => {
+    if (!isDirty && !openingsDirty) return;
+    setSaveState("saving");
+    try {
+      if (openingsDirty) {
+        const putOpUrl = `${apiBase}/openings/${selectedFloor}`;
+        const body = {
+          user_openings: userOpeningsRef.current,
+        };
+        if (openingsData?.openings) {
+          body.openings = openingsData.openings;
+        }
+        const opRes = await fetch(putOpUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        if (!opRes.ok) { setSaveState("error"); return; }
+        setOpeningsDirty(false);
+      }
+      if (isDirty) {
+        // Hidden walls are excluded — they are suppressed from room recalculation
+        const lines = editedLinesRef.current
+          .filter(l => !l.hidden)
+          .map(l => l.pts);
+        const putUrl = `${apiBase}/walls/${selectedFloor}`;
+        const wallRes = await fetch(putUrl, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ lines, polygon_rooms: roomMode === "polygon" }),
+        });
+        if (!wallRes.ok) { setSaveState("error"); return; }
+        setIsDirty(false);
+      }
+      setSaveState("saved");
+      onWallsSaved?.();
+      // Refresh rooms from updated backend
+      fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => {});
+      setTimeout(() => setSaveState("idle"), 3000);
+    } catch {
+      setSaveState("error");
+      setTimeout(() => setSaveState("idle"), 3000);
+    }
+  }, [isDirty, openingsDirty, selectedFloor, apiBase, roomMode, onWallsSaved, openingsData]);
 
   // redraw when data changes
   useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, userOpenings, selectedOpIdx, hoverManualOp, hoverOp, highlightedRoomId, scheduleDraw]);
@@ -1653,7 +1715,8 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     if (e.button !== 0) return;
     const mode = editModeRef.current;
     if (mode === "select") {
-      dragRef.current = { startX: e.clientX, startY: e.clientY, ox: camRef.current.ox, oy: camRef.current.oy };
+      didPanRef.current = false;
+      dragRef.current = { startX: e.clientX, startY: e.clientY, ox: camRef.current.ox, oy: camRef.current.oy, moved: false };
     } else if (mode === "delete" || mode === "hide") {
       const cvs = canvasRef.current;
       if (!cvs) return;
@@ -1671,6 +1734,10 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     if (mode === "select" && dragRef.current) {
       const dx = e.clientX - dragRef.current.startX;
       const dy = e.clientY - dragRef.current.startY;
+      if (Math.hypot(dx, dy) > 4) {
+        dragRef.current.moved = true;
+        didPanRef.current = true;
+      }
       camRef.current = { ...camRef.current, ox: dragRef.current.ox + dx, oy: dragRef.current.oy + dy };
       scheduleDraw();
       return;
@@ -1810,7 +1877,13 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
   const onMouseUp = useCallback((e) => {
     // Pan drag end
-    if (dragRef.current) { dragRef.current = null; return; }
+    if (dragRef.current) {
+      if (dragRef.current.moved) {
+        didPanRef.current = true;
+      }
+      dragRef.current = null;
+      return;
+    }
 
     // Box-select commit
     const box = boxSelectRef.current;
@@ -1922,20 +1995,56 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         userOpeningsRef.current = nl;
         setUserOpenings(nl);
         setSelectedOpIdx(nl.length - 1);
+        setOpeningsDirty(true);
         scheduleDraw();
-        persistOpenings(nl);
       }
       return;
     }
 
     if (mode === "select") {
+      // If user was panning, do not treat this as a click
+      if (didPanRef.current) {
+        didPanRef.current = false;
+        return;
+      }
       if (hoverManualOpRef.current >= 0) {
         setSelectedOpIdx(hoverManualOpRef.current);
         scheduleDraw();
-      } else {
-        if (selectedOpIdxRef.current !== null) {
-          setSelectedOpIdx(null);
-          scheduleDraw();
+        return;
+      }
+      if (selectedOpIdxRef.current !== null) {
+        setSelectedOpIdx(null);
+        scheduleDraw();
+      }
+
+      // Check if click falls inside a room polygon / bbox → toggle selection
+      if (onSelectRoom && roomsData?.rooms?.length) {
+        const [wx, wz] = getWorldFromEvent(e);
+        for (const room of roomsData.rooms) {
+          let inside = false;
+          if (room.polygon && room.polygon.length >= 3) {
+            const poly = room.polygon;
+            for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+              const xi = poly[i][0], zi = poly[i][1];
+              const xj = poly[j][0], zj = poly[j][1];
+              const intersect = ((zi > wz) !== (zj > wz)) && (wx < (xj - xi) * (wz - zi) / (zj - zi) + xi);
+              if (intersect) inside = !inside;
+            }
+          }
+          if (!inside && room.bbox) {
+            const { x_min, z_min, x_max, z_max } = room.bbox;
+            if (wx >= x_min && wx <= x_max && wz >= z_min && wz <= z_max) {
+              inside = true;
+            }
+          }
+          if (inside) {
+            onSelectRoom(highlightedRoomIdRef.current === room.id ? null : room.id, selectedFloor, { ...room, floor_idx: selectedFloor });
+            return;
+          }
+        }
+        // Clicked outside any room — deselect
+        if (highlightedRoomIdRef.current != null) {
+          onSelectRoom(null);
         }
       }
       return;
@@ -1970,8 +2079,8 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         userOpeningsRef.current = nl;
         setUserOpenings(nl);
         setSelectedOpIdx(null);
+        setOpeningsDirty(true);
         scheduleDraw();
-        persistOpenings(nl);
         return;
       }
 
@@ -2064,38 +2173,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       }
       return;
     }
-
-    // In select mode, check if click falls inside a room polygon / bbox → toggle selection
-    if (mode === "select" && !dragRef.current && onSelectRoom && roomsData?.rooms?.length) {
-      const [wx, wz] = getWorldFromEvent(e);
-      for (const room of roomsData.rooms) {
-        let inside = false;
-        if (room.polygon && room.polygon.length >= 3) {
-          const poly = room.polygon;
-          for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-            const xi = poly[i][0], zi = poly[i][1];
-            const xj = poly[j][0], zj = poly[j][1];
-            const intersect = ((zi > wz) !== (zj > wz)) && (wx < (xj - xi) * (wz - zi) / (zj - zi) + xi);
-            if (intersect) inside = !inside;
-          }
-        }
-        if (!inside && room.bbox) {
-          const { x_min, z_min, x_max, z_max } = room.bbox;
-          if (wx >= x_min && wx <= x_max && wz >= z_min && wz <= z_max) {
-            inside = true;
-          }
-        }
-        if (inside) {
-          onSelectRoom(highlightedRoomIdRef.current === room.id ? null : room.id, selectedFloor, room);
-          return;
-        }
-      }
-      // Clicked outside any room — deselect
-      if (highlightedRoomIdRef.current != null) {
-        onSelectRoom(null);
-      }
-    }
-  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
+  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -2152,7 +2230,14 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       setIsDirty(false); setAddStep(null); addStepRef.current = null;
       scheduleDraw();
     }).catch(() => {});
-  }, [selectedFloor, scheduleDraw]); // eslint-disable-line react-hooks/exhaustive-deps
+    fetch(`${apiBase}/openings/${selectedFloor}`).then(r => r.json()).then(o => {
+      const uo = o?.user_openings ?? [];
+      setUserOpenings(uo); userOpeningsRef.current = uo;
+      setOpeningsData(o);
+      setOpeningsDirty(false); setSelectedOpIdx(null);
+      scheduleDraw();
+    }).catch(() => {});
+  }, [selectedFloor, apiBase, scheduleDraw]);
 
   // ── Derived metrics ─────────────────────────────────────────────────────────
   const wallCount    = editedLines.length;
@@ -2197,6 +2282,14 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     ? `${apiBase}/download/${selectedFloor}`
     : `${apiBase}/walls/${selectedFloor}/download`;
 
+  const ifcUrl = saveName
+    ? `/api/saves/${encodeURIComponent(saveName)}/download-ifc/${selectedFloor}`
+    : `/api/walls/${selectedFloor}/download-ifc`;
+
+  const ifcAllUrl = saveName
+    ? `/api/saves/${encodeURIComponent(saveName)}/download-ifc-all`
+    : `/api/building/download-ifc`;
+
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="floorplan-viewer" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
@@ -2236,6 +2329,14 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
           <a href={dxfUrl} download={`floor_${selectedFloor}.dxf`}
             style={{ background: "rgba(0,200,224,0.12)", border: "1px solid rgba(0,200,224,0.3)", borderRadius: 5, color: C.wall, fontSize: 12, fontWeight: 600, padding: "4px 10px", textDecoration: "none", fontFamily: "Inter,sans-serif" }}
           >↓ DXF</a>
+          <a href={ifcUrl} download={`floor_${selectedFloor}.ifc`}
+            title={`Download IFC 2x3 for Floor ${selectedFloor}`}
+            style={{ background: "rgba(99,102,241,0.14)", border: "1px solid rgba(99,102,241,0.35)", borderRadius: 5, color: "#a5b4fc", fontSize: 12, fontWeight: 600, padding: "4px 10px", textDecoration: "none", fontFamily: "Inter,sans-serif" }}
+          >↓ IFC</a>
+          <a href={ifcAllUrl} download={saveName ? `${saveName}_building.ifc` : "building.ifc"}
+            title="Download full-building IFC 2x3 (all floors)"
+            style={{ background: "rgba(168,85,247,0.12)", border: "1px solid rgba(168,85,247,0.3)", borderRadius: 5, color: "#c084fc", fontSize: 12, fontWeight: 600, padding: "4px 10px", textDecoration: "none", fontFamily: "Inter,sans-serif", whiteSpace: "nowrap" }}
+          >↓ IFC All</a>
         </div>
       </div>
 
@@ -2446,8 +2547,32 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
           }}
           onClick={onClick}
           onWheel={onWheel}
-          onDoubleClick={() => {
+          onDoubleClick={(e) => {
             if (editModeRef.current === "select") {
+              // If double-clicked inside a room, select it (opens Room Editor Panel)
+              if (onSelectRoom && roomsData?.rooms?.length) {
+                const [wx, wz] = getWorldFromEvent(e);
+                for (const room of roomsData.rooms) {
+                  let inside = false;
+                  if (room.polygon && room.polygon.length >= 3) {
+                    const poly = room.polygon;
+                    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+                      const xi = poly[i][0], zi = poly[i][1];
+                      const xj = poly[j][0], zj = poly[j][1];
+                      const intersect = ((zi > wz) !== (zj > wz)) && (wx < (xj - xi) * (wz - zi) / (zj - zi) + xi);
+                      if (intersect) inside = !inside;
+                    }
+                  }
+                  if (!inside && room.bbox) {
+                    const { x_min, z_min, x_max, z_max } = room.bbox;
+                    if (wx >= x_min && wx <= x_max && wz >= z_min && wz <= z_max) inside = true;
+                  }
+                  if (inside) {
+                    onSelectRoom(room.id, selectedFloor, { ...room, floor_idx: selectedFloor });
+                    return;
+                  }
+                }
+              }
               const cvs = canvasRef.current;
               if (!cvs || !editedLinesRef.current.length) return;
               camRef.current = fitCamera(wallsBoundsFromEdited(editedLinesRef.current), cvs.width, cvs.height);
@@ -2659,7 +2784,13 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
         {/* Room info chip — selected room details */}
         {loadState === "ready" && highlightedRoom && (
-          <RoomInfoChip room={highlightedRoom} floorIdx={selectedFloor} modelInfo={activeModelInfo} />
+          <RoomInfoChip
+            room={highlightedRoom}
+            floorIdx={selectedFloor}
+            modelInfo={activeModelInfo}
+            onOpenRoomEditor={() => onSelectRoom?.(highlightedRoom.id, selectedFloor, { ...highlightedRoom, floor_idx: selectedFloor })}
+            onDeselect={() => onSelectRoom?.(null)}
+          />
         )}
 
         {/* Legend */}

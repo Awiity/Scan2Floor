@@ -1041,12 +1041,12 @@ export default function RoomEditorPanel({
         manualOpeningsRef.current = nl;
         setManualOpenings(nl);
         setSelectedOpIdx(nl.length - 1);
+        setOpeningsDirty(true);
         scheduleDraw();
-        persistOpenings(nl);
       }
       return;
     }
-  }, [pushHistory, scheduleDraw, getWorld, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, persistOpenings]);
+  }, [pushHistory, scheduleDraw, getWorld, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -1091,10 +1091,10 @@ export default function RoomEditorPanel({
       list[idx] = merged;
       manualOpeningsRef.current = list;
       setManualOpenings(list);
+      setOpeningsDirty(true);
       scheduleDraw();
-      persistOpenings(list);
     }
-  }, [scheduleDraw, persistOpenings]);
+  }, [scheduleDraw]);
 
   // Delete selected opening
   const deleteSelectedOp = useCallback(() => {
@@ -1104,9 +1104,9 @@ export default function RoomEditorPanel({
     manualOpeningsRef.current = list;
     setManualOpenings(list);
     setSelectedOpIdx(null);
+    setOpeningsDirty(true);
     scheduleDraw();
-    persistOpenings(list);
-  }, [scheduleDraw, persistOpenings]);
+  }, [scheduleDraw]);
 
   // ── Derived ───────────────────────────────────────────────────────────────────
   const wallCount   = editedLines.length;

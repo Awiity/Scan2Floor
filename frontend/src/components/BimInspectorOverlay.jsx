@@ -1,4 +1,4 @@
-﻿import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 
 /* Design tokens */
 const T = {
@@ -215,6 +215,14 @@ function OpeningEditPanel({ op, wallLength, onSave, onClose, onDelete, isSaving,
   const [editBottomMargin, setEditBottomMargin] = useState(isDoor ? 0 : (op.bottom_margin ?? 0.9));
   const [isDirty, setIsDirty] = useState(false);
 
+  useEffect(() => {
+    setEditWidth(op.width ?? op.width_m ?? (isDoor ? 0.9 : 1.2));
+    setEditT(initialT);
+    setEditTopMargin(op.top_margin ?? 0.7);
+    setEditBottomMargin(isDoor ? 0 : (op.bottom_margin ?? 0.9));
+    setIsDirty(false);
+  }, [op.id, op.width, op.width_m, initialT, op.top_margin, op.bottom_margin, isDoor]);
+
   const handleSave = () => onSave({
     ...op,
     width: editWidth, width_m: editWidth,
@@ -336,7 +344,15 @@ export default function BimInspectorOverlay({
   const [isSavingInline, setIsSavingInline] = useState(false);
   const [isDeletingInline, setIsDeletingInline] = useState(false);
 
-  React.useEffect(() => { setWallEditOp(null); }, [activeWall?.id]);
+  React.useEffect(() => {
+    if (!wallEditOp) return;
+    const found = activeWall?.openings?.find((o) => o.id === wallEditOp.id);
+    if (found) {
+      setWallEditOp(found);
+    } else {
+      setWallEditOp(null);
+    }
+  }, [activeWall]);
 
   const handleDeleteWall = async () => {
     if (!activeWall || isDeletingWall) return;
@@ -479,7 +495,7 @@ export default function BimInspectorOverlay({
           {onUpdateOpening ? (
             <OpeningEditPanel
               op={activeOp}
-              wallLength={null}
+              wallLength={activeOp?.wall_len ?? (activeWall?.length ?? null)}
               onSave={async updatedOp => { await onUpdateOpening(updatedOp); onCloseOpening?.(); }}
               onClose={onCloseOpening}
               onDelete={async op => {

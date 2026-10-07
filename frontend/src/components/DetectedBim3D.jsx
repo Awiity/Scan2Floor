@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import * as THREE from "three";
 
 /**
@@ -317,6 +317,12 @@ function WallMesh3D({
         height: voidH,
         top_margin: topMargin,
         bottom_margin: bottomMargin,
+        position_t: typeof op.position_t === "number" ? op.position_t : (length > 1e-4 ? midS / length : 0.5),
+        wall_x1: x1,
+        wall_z1: z1,
+        wall_x2: x2,
+        wall_z2: z2,
+        wall_len: length,
         x: worldX,
         z: worldZ,
         elevation_y: worldElevation,
@@ -699,6 +705,12 @@ export default function DetectedBim3D({
   const [wallsData, setWallsData] = useState([]);
   const [roomsData, setRoomsData] = useState([]);
 
+  const selectedWallRef = useRef(selectedWall);
+  useEffect(() => { selectedWallRef.current = selectedWall; }, [selectedWall]);
+
+  const selectedOpeningRef = useRef(selectedOpening);
+  useEffect(() => { selectedOpeningRef.current = selectedOpening; }, [selectedOpening]);
+
   const apiBase = loadedSave
     ? `/api/saves/${encodeURIComponent(loadedSave)}`
     : "/api";
@@ -896,6 +908,14 @@ export default function DetectedBim3D({
               width_m: opWidth,
               s_start: sStart,
               s_end: sEnd,
+              position_t: typeof op.position_t === "number" ? op.position_t : (length > 1e-4 ? sMid / length : 0.5),
+              wall_x1: x1,
+              wall_z1: z1,
+              wall_x2: x2,
+              wall_z2: z2,
+              wall_len: length,
+              x: posX ?? (x1 + ux * sMid),
+              z: posZ ?? (z1 + uz * sMid),
             });
           });
 
@@ -935,6 +955,67 @@ export default function DetectedBim3D({
 
       setWallsData(processedWalls);
       setRoomsData(processedRooms);
+
+      // Synchronize selected wall if active
+      const curWall = selectedWallRef.current;
+      if (curWall) {
+        let updatedWall = processedWalls.find((w) => w.id === curWall.id);
+        if (!updatedWall) {
+          updatedWall = processedWalls.find((w) =>
+            w.floorIdx === curWall.floorIdx &&
+            ((Math.hypot(w.x1 - curWall.x1, w.z1 - curWall.z1) < 0.30 && Math.hypot(w.x2 - curWall.x2, w.z2 - curWall.z2) < 0.30) ||
+             (Math.hypot(w.x1 - curWall.x2, w.z1 - curWall.z2) < 0.30 && Math.hypot(w.x2 - curWall.x1, w.z2 - curWall.z1) < 0.30))
+          );
+        }
+        onSelectWall?.(updatedWall || null);
+      }
+
+      // Synchronize selected opening if active
+      const curOp = selectedOpeningRef.current;
+      if (curOp) {
+        let updatedOp = null;
+        for (const w of processedWalls) {
+          if (curOp.floorIdx != null && w.floorIdx !== curOp.floorIdx) continue;
+          for (const op of (w.openings || [])) {
+            const sameId = curOp.id && op.id && curOp.id === op.id;
+            const samePos = op.x != null && curOp.x != null && Math.hypot(op.x - curOp.x, op.z - curOp.z) < 0.35;
+            if (sameId || samePos) {
+              updatedOp = { ...op, floorY: w.floorY, wallHeight: w.height };
+              break;
+            }
+          }
+          if (updatedOp) break;
+        }
+
+        if (updatedOp) {
+          const topMargin = Math.max(0.1, Math.min(updatedOp.top_margin ?? 0.70, updatedOp.wallHeight - 0.4));
+          const bottomMargin = updatedOp.type === "door" ? 0 : Math.max(0, Math.min(updatedOp.bottom_margin ?? 0.90, updatedOp.wallHeight - topMargin - 0.3));
+          const voidH = Math.max(0.4, updatedOp.wallHeight - topMargin - bottomMargin);
+          onSelectOpening?.({
+            id: updatedOp.id,
+            isUser: updatedOp.isUser,
+            floorIdx: updatedOp.floorIdx,
+            wallIdx: updatedOp.wallIdx,
+            type: updatedOp.type,
+            width: updatedOp.width,
+            height: voidH,
+            top_margin: topMargin,
+            bottom_margin: bottomMargin,
+            position_t: updatedOp.position_t,
+            wall_x1: updatedOp.wall_x1,
+            wall_z1: updatedOp.wall_z1,
+            wall_x2: updatedOp.wall_x2,
+            wall_z2: updatedOp.wall_z2,
+            wall_len: updatedOp.wall_len,
+            x: updatedOp.x,
+            z: updatedOp.z,
+            elevation_y: updatedOp.floorY + bottomMargin,
+            raw: updatedOp.raw,
+          });
+        } else {
+          onSelectOpening?.(null);
+        }
+      }
     });
 
     return () => {

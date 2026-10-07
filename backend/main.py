@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from pipeline.dxf_export import export_floor_dxf
+from pipeline.ifc_export import export_floor_ifc, export_all_floors_ifc
 from pipeline.opening_detection import detect_openings_for_floor
 from pipeline.room_detection import detect_rooms_for_floor
 from pipeline.wall_detection_c2b import detect_walls_c2b_for_floor
@@ -632,6 +633,44 @@ def get_svg(floor_idx: int):
     if not os.path.exists(svg_path):
         raise HTTPException(status_code=404, detail="SVG not generated yet")
     return FileResponse(svg_path, media_type="image/svg+xml")
+
+
+@app.get("/api/walls/{floor_idx}/download-ifc")
+def download_ifc(floor_idx: int):
+    """Generate (or re-generate) and download an IFC 2x3 file for a single floor."""
+    ifc_path = os.path.join(PROCESSED_DIR, f"floor_{floor_idx}.ifc")
+    try:
+        export_floor_ifc(floor_idx, PROCESSED_DIR, output_path=ifc_path)
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return FileResponse(
+        ifc_path,
+        media_type="application/x-step",
+        filename=f"floor_{floor_idx}.ifc",
+    )
+
+
+@app.get("/api/building/download-ifc")
+def download_building_ifc():
+    """Generate and download a single IFC 2x3 file containing ALL detected floors."""
+    ifc_path = os.path.join(PROCESSED_DIR, "building.ifc")
+    try:
+        export_all_floors_ifc(PROCESSED_DIR, output_path=ifc_path)
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return FileResponse(
+        ifc_path,
+        media_type="application/x-step",
+        filename="building.ifc",
+    )
 
 
 # ── Phase 5: Opening Detection (standalone) ───────────────────────────────────
@@ -1314,6 +1353,50 @@ def save_download_dxf(name: str, floor_idx: int):
     return FileResponse(
         dxf_path, media_type="application/dxf",
         filename=f"{name}_floor_{floor_idx}.dxf"
+    )
+
+
+@app.get("/api/saves/{name}/download-ifc/{floor_idx}")
+def save_download_ifc(name: str, floor_idx: int):
+    """Generate and download an IFC 2x3 file for one floor from a named save."""
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    ifc_path = os.path.join(save_path, f"floor_{floor_idx}.ifc")
+    try:
+        export_floor_ifc(floor_idx, save_path, output_path=ifc_path)
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return FileResponse(
+        ifc_path,
+        media_type="application/x-step",
+        filename=f"{name}_floor_{floor_idx}.ifc",
+    )
+
+
+@app.get("/api/saves/{name}/download-ifc-all")
+def save_download_ifc_all(name: str):
+    """Generate and download a single IFC file with ALL floors from a named save."""
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    ifc_path = os.path.join(save_path, "building.ifc")
+    try:
+        export_all_floors_ifc(save_path, output_path=ifc_path)
+    except ImportError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    return FileResponse(
+        ifc_path,
+        media_type="application/x-step",
+        filename=f"{name}_building.ifc",
     )
 
 

@@ -9,3 +9,4 @@ matplotlib
 open3d
 opencv-python-headless
 ezdxf
+ifcopenshell

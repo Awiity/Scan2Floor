@@ -243,7 +243,8 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
   const [openingQuality, setOpeningQuality] = useState(null);
   useEffect(() => {
     if (activeFloor == null) return;
-    fetch(`/api/openings/${activeFloor}`)
+    const targetFloor = (activeFloor === "all" || isNaN(Number(activeFloor))) ? 0 : Number(activeFloor);
+    fetch(`/api/openings/${targetFloor}`)
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (d && d.openings !== undefined) setOpeningQuality(d);

@@ -1046,9 +1046,9 @@ html, body, #root {
    Room Editor Panel  (RoomEditorPanel.jsx)
 ═══════════════════════════════════════════════════════════════════ */
 
-/* Full-viewport overlay covers the .viewport area */
+/* Full-viewport overlay covers the whole viewport */
 .rep-overlay {
-  position: absolute;
+  position: fixed;
   inset: 0;
   background: rgba(4, 6, 18, 0.72);
   backdrop-filter: blur(6px) saturate(0.85);
@@ -1056,7 +1056,7 @@ html, body, #root {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  z-index: 1000;
   padding: 12px;
 }
 
@@ -1623,7 +1623,7 @@ html, body, #root {
 
 /* ── Minimized Floating Pill ─────────────────────────────────────── */
 .rep-minimized-pill {
-  position: absolute;
+  position: fixed;
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
@@ -1637,7 +1637,7 @@ html, body, #root {
   -webkit-backdrop-filter: blur(12px);
   border: 1px solid rgba(0, 200, 224, 0.35);
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55), 0 0 16px rgba(0, 200, 224, 0.2);
-  z-index: 150;
+  z-index: 1001;
   cursor: pointer;
   animation: rep-toast 0.22s cubic-bezier(0.2,1,0.3,1);
   transition: all 0.18s cubic-bezier(0.2,1,0.3,1);

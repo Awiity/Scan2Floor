@@ -173,6 +173,53 @@ export default function App() {
     }
   }, [loadedSave, roomMode]);
 
+  /* ---------- Helper: match opening across 3D entity and backend JSON ---------- */
+  const isSameOpening = (o, target, idx, floorIdx, listType) => {
+    if (!o || !target) return false;
+    // 1. Direct ID match
+    if (o.id && target.id && o.id === target.id) return true;
+    if (target.raw && (o === target.raw || (o.id && o.id === target.raw.id))) return true;
+
+    // 2. Synthetic ID match (e.g. auto_0_1 or user_0_2)
+    if (target.id && target.id === `${listType}_${floorIdx}_${idx}`) return true;
+
+    // 3. World position coordinates matching
+    const getPos = (item) => {
+      let x = item.x;
+      let z = item.z;
+      if ((x == null || z == null) && item.wall_x1 != null && item.wall_x2 != null && typeof item.position_t === "number") {
+        x = item.wall_x1 + item.position_t * (item.wall_x2 - item.wall_x1);
+        z = item.wall_z1 + item.position_t * (item.wall_z2 - item.wall_z1);
+      }
+      return { x, z };
+    };
+
+    const oPos = getPos(o);
+    const tPos = getPos(target);
+
+    if (oPos.x != null && oPos.z != null && tPos.x != null && tPos.z != null) {
+      if (Math.hypot(oPos.x - tPos.x, oPos.z - tPos.z) < 0.45) {
+        if (!target.type || !o.type || target.type === o.type) return true;
+      }
+    }
+
+    // 4. Wall matching: same wall_idx and matching position along wall
+    const targetWall = target.wall_idx ?? target.wallIdx;
+    if (o.wall_idx != null && targetWall != null && o.wall_idx === targetWall) {
+      if (!target.type || !o.type || target.type === o.type) {
+        if (typeof o.position_t === "number" && typeof target.position_t === "number") {
+          if (Math.abs(o.position_t - target.position_t) < 0.20) return true;
+        }
+        if (o.wall_len && o.u_start != null && o.u_end != null && typeof target.position_t === "number") {
+          const oT = (o.u_start + o.u_end) / (2 * o.wall_len);
+          if (Math.abs(oT - target.position_t) < 0.20) return true;
+        }
+      }
+    }
+
+    return false;
+  };
+
   /* ---------- 3D opening deletion ---------- */
   const handleDeleteOpeningFrom3D = useCallback(async (op) => {
     if (!op) return;
@@ -185,19 +232,9 @@ export default function App() {
       const userOps = data.user_openings || [];
       const autoOps = data.openings || [];
 
-      // Filter out from user_openings
-      const updatedUserOps = userOps.filter((o) => {
-        if (op.id && o.id === op.id) return false;
-        if (o.x != null && op.x != null && Math.hypot(o.x - op.x, o.z - op.z) < 0.25) return false;
-        return true;
-      });
-
-      // Filter out from auto-detected openings if present
-      const updatedAutoOps = autoOps.filter((o) => {
-        if (op.id && o.id === op.id) return false;
-        if (o.x != null && op.x != null && Math.hypot(o.x - op.x, o.z - op.z) < 0.25) return false;
-        return true;
-      });
+      // Filter out from user_openings and auto_detected openings
+      const updatedUserOps = userOps.filter((o, idx) => !isSameOpening(o, op, idx, floorIdx, "user"));
+      const updatedAutoOps = autoOps.filter((o, idx) => !isSameOpening(o, op, idx, floorIdx, "auto"));
 
       const putRes = await fetch(`${apiBase}/openings/${floorIdx}`, {
         method: "PUT",
@@ -228,38 +265,90 @@ export default function App() {
       const userOps = data.user_openings || [];
       const autoOps = data.openings || [];
 
-      // Build the patch fields from the updated op
-      const patch = {
-        width: updatedOp.width,
-        width_m: updatedOp.width_m ?? updatedOp.width,
-        top_margin: updatedOp.top_margin,
-        bottom_margin: updatedOp.bottom_margin,
-        position_t: updatedOp.position_t,
+      const patchOpeningObj = (o) => {
+        const wall_x1 = updatedOp.wall_x1 ?? o.wall_x1;
+        const wall_z1 = updatedOp.wall_z1 ?? o.wall_z1;
+        const wall_x2 = updatedOp.wall_x2 ?? o.wall_x2;
+        const wall_z2 = updatedOp.wall_z2 ?? o.wall_z2;
+        const width = Number(updatedOp.width ?? updatedOp.width_m ?? o.width ?? o.width_m ?? 0.9);
+        const position_t = typeof updatedOp.position_t === "number"
+          ? updatedOp.position_t
+          : (typeof o.position_t === "number" ? o.position_t : 0.5);
+
+        let x = o.x;
+        let z = o.z;
+        let wall_len = o.wall_len;
+        let u_start = o.u_start;
+        let u_end = o.u_end;
+        let hinge_x = o.hinge_x;
+        let hinge_z = o.hinge_z;
+
+        if (wall_x1 != null && wall_x2 != null && wall_z1 != null && wall_z2 != null) {
+          const dx = wall_x2 - wall_x1;
+          const dz = wall_z2 - wall_z1;
+          const wl = Math.hypot(dx, dz);
+          wall_len = wl;
+          if (wl > 1e-4) {
+            const ux = dx / wl;
+            const uz = dz / wl;
+            const midS = position_t * wl;
+            x = wall_x1 + ux * midS;
+            z = wall_z1 + uz * midS;
+            u_start = Math.max(0, midS - width / 2);
+            u_end = Math.min(wl, midS + width / 2);
+            hinge_x = wall_x1 + ux * u_start;
+            hinge_z = wall_z1 + uz * u_start;
+          }
+        } else if (updatedOp.x != null && updatedOp.z != null) {
+          x = updatedOp.x;
+          z = updatedOp.z;
+        }
+
+        return {
+          ...o,
+          width,
+          width_m: width,
+          position_t,
+          top_margin: typeof updatedOp.top_margin === "number" ? updatedOp.top_margin : o.top_margin,
+          bottom_margin: typeof updatedOp.bottom_margin === "number" ? updatedOp.bottom_margin : o.bottom_margin,
+          x,
+          z,
+          wall_x1,
+          wall_z1,
+          wall_x2,
+          wall_z2,
+          wall_len,
+          u_start,
+          u_end,
+          hinge_x,
+          hinge_z,
+        };
       };
 
-      const matchOp = (o) => {
-        if (updatedOp.id && o.id === updatedOp.id) return true;
-        if (o.x != null && updatedOp.x != null && Math.hypot(o.x - updatedOp.x, (o.z ?? 0) - (updatedOp.z ?? 0)) < 0.25) return true;
-        return false;
-      };
+      let userFound = false;
+      let updatedUserOps = userOps.map((o, idx) => {
+        if (isSameOpening(o, updatedOp, idx, floorIdx, "user")) {
+          userFound = true;
+          return patchOpeningObj(o);
+        }
+        return o;
+      });
 
-      let updatedUserOps = userOps;
-      let updatedAutoOps = autoOps;
+      let autoFound = false;
+      let updatedAutoOps = autoOps.map((o, idx) => {
+        if (isSameOpening(o, updatedOp, idx, floorIdx, "auto")) {
+          autoFound = true;
+          return patchOpeningObj(o);
+        }
+        return o;
+      });
 
-      if (updatedOp.isUser) {
-        // Patch in user_openings; if not found, append as new
-        let found = false;
-        updatedUserOps = userOps.map((o) => {
-          if (matchOp(o)) { found = true; return { ...o, ...patch }; }
-          return o;
-        });
-        if (!found) updatedUserOps = [...userOps, { ...(updatedOp.raw ?? updatedOp), ...patch }];
-      } else {
-        // Patch in auto-detected openings
-        updatedAutoOps = autoOps.map((o) => {
-          if (matchOp(o)) return { ...o, ...patch };
-          return o;
-        });
+      if (!userFound && !autoFound) {
+        if (updatedOp.isUser) {
+          updatedUserOps = [...userOps, patchOpeningObj(updatedOp.raw ?? updatedOp)];
+        } else {
+          updatedAutoOps = [...autoOps, patchOpeningObj(updatedOp.raw ?? updatedOp)];
+        }
       }
 
       const putRes = await fetch(`${apiBase}/openings/${floorIdx}`, {
@@ -300,10 +389,14 @@ export default function App() {
     };
   }, [activeFloor, floorDataVersion, loadedSave]);
 
-  // Clear room selection when activeFloor changes
+  // Clear room selection only when user manually changes activeFloor to a different floor
+  const prevActiveFloorRef = useRef(activeFloor);
   useEffect(() => {
-    if (selectedRoomFloor != null && activeFloor !== "all" && activeFloor !== selectedRoomFloor) {
-      handleSelectRoom(null);
+    if (prevActiveFloorRef.current !== activeFloor) {
+      prevActiveFloorRef.current = activeFloor;
+      if (selectedRoomFloor != null && activeFloor !== "all" && activeFloor !== selectedRoomFloor) {
+        handleSelectRoom(null);
+      }
     }
   }, [activeFloor, selectedRoomFloor, handleSelectRoom]);
 
@@ -616,17 +709,6 @@ export default function App() {
           {showFloorPlan && (
             <FloorPlanPanel floor={fpFloor} setFloor={setFpFloor} />
           )}
-          {/* Room Editor Panel — isolated room editor, shown when a room is selected */}
-          {selectedRoomId != null && highlightedRoom && (
-            <RoomEditorPanel
-              room={highlightedRoom}
-              floor={selectedRoomFloor ?? (highlightedRoom?.floor_idx ?? (activeFloor === "all" ? 0 : activeFloor))}
-              modelInfo={modelInfo}
-              saveName={loadedSave}
-              onClose={() => handleSelectRoom(null)}
-              onWallsChanged={handleWallsDetected}
-            />
-          )}
         </div>
 
         {/* Phase 4: 2D Vector Floor Plan Viewer */}
@@ -645,11 +727,24 @@ export default function App() {
               highlightedRoomId={selectedRoomId}
               onSelectRoom={handleSelectRoom}
               onSelectFloor={setActiveFloor}
+              activeFloor={activeFloor}
               roomMode={roomMode}
               saveName={loadedSave}
               onWallsSaved={handleWallsDetected}
             />
           </div>
+        )}
+
+        {/* Room Editor Panel — isolated room editor modal, floating over viewport & vector floor plan */}
+        {selectedRoomId != null && highlightedRoom && (
+          <RoomEditorPanel
+            room={highlightedRoom}
+            floor={selectedRoomFloor ?? (highlightedRoom?.floor_idx ?? (activeFloor === "all" ? 0 : activeFloor))}
+            modelInfo={modelInfo}
+            saveName={loadedSave}
+            onClose={() => handleSelectRoom(null)}
+            onWallsChanged={handleWallsDetected}
+          />
         )}
       </div>
     </div>
