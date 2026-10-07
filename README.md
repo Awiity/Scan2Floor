@@ -1,8 +1,88 @@
 # Scan2Floor
 
-> **Point cloud → vectorized architectural floor plan, end-to-end.**
+> **Point cloud → vectorized architectural floor plan & BIM model, end-to-end.**
 
-Scan2Floor ingests a raw Matterport `.xyz` 3-D point cloud and produces analysis-ready 2-D floor plans — complete with wall segments, door/window openings, room boundaries, area labels, and downloadable DXF/SVG files. A React frontend lets you inspect results in 3-D, fine-tune wall traces on a live canvas, and export at any stage.
+Scan2Floor ingests raw Matterport `.xyz` 3-D point clouds and produces analysis-ready 2-D floor plans and 3-D BIM models — complete with vector wall segments, door/window openings, room boundaries, area calculations, CAD exports (**DXF**, **SVG**), and open BIM (**IFC 2x3**) models. A React frontend provides interactive 3-D point cloud viewing, a 3-D BIM Inspector with bidirectional element selection, and a live 2-D canvas for manual wall adjustments.
+
+---
+
+## ⚡ Quickstart: Running Locally
+
+You can run Scan2Floor directly on your machine without Docker for development, or run it containerized with Docker.
+
+### Option A: Local Development (Recommended for Development)
+
+#### Prerequisites
+- **Python 3.10+** (3.11 or 3.12 recommended)
+- **Node.js 18+** & `npm`
+- (Optional) NVIDIA GPU with CUDA for accelerated point cloud processing
+
+#### 1. Setup & Launch Backend
+
+```bash
+# Navigate to the backend directory
+cd backend
+
+# Create and activate a Python virtual environment
+python -m venv venv
+
+# Windows (Command Prompt / PowerShell):
+.\venv\Scripts\activate
+# macOS / Linux:
+source venv/bin/activate
+
+# Install dependencies (including FastAPI, OpenCV, ezdxf, ifcopenshell, etc.)
+pip install -r requirements.txt
+```
+
+Launch the backend with hot-reload:
+```bash
+# On Windows, you can simply run the root batch script:
+..\start_backend.bat
+
+# Or run manually via uvicorn:
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+- The backend will be live at: **`http://localhost:8000`**
+- Interactive Swagger API docs: **`http://localhost:8000/docs`**
+
+> **Tip:** You can configure where your scan files live by setting the `DATA_ROOT` environment variable in `start_backend.bat` (e.g., `set DATA_ROOT=C:\path\to\scans`).
+
+#### 2. Setup & Launch Frontend
+
+In a separate terminal window:
+```bash
+# Navigate to frontend directory
+cd frontend
+
+# Install Node dependencies
+npm install
+
+# Start Vite development server
+npm run dev
+```
+- The web app will be accessible at: **`http://localhost:5173`**
+- Requests to `/api` and `/model` are automatically proxied to `http://localhost:8000`.
+
+---
+
+### Option B: Docker Deployment (One-Click)
+
+#### Standard CPU Launch:
+```bat
+:: From repository root (Windows):
+docker-build.bat
+
+:: Or using Docker Compose directly:
+docker compose up --build -d
+```
+- The complete application is served at: **`http://localhost:8000`** (or mapped port `http://localhost:9000` depending on compose port settings).
+- To stop the containers: `docker-stop.bat` or `docker compose down`.
+
+#### GPU-Accelerated Docker Launch (NVIDIA):
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d
+```
 
 ---
 
@@ -16,11 +96,12 @@ Scan2Floor ingests a raw Matterport `.xyz` 3-D point cloud and produces analysis
    - [Stage 2 — Built-in C2B Slab Detection](#stage-2--built-in-c2b-slab-detection)
    - [Stage 3 — Import C2B Floor Levels](#stage-3--import-c2b-floor-levels)
    - [Stage 4 — Dense Wall Slices (GPU-accelerated)](#stage-4--dense-wall-slices-gpu-accelerated)
-   - [Stage 5 — Detect Walls, Rooms & Export](#stage-5--detect-walls-rooms--export)
-5. [Algorithms & Techniques](#algorithms--techniques)
-6. [API Reference](#api-reference)
-7. [Frontend](#frontend)
-8. [Getting Started](#getting-started)
+   - [Stage 5 — Detect Walls, Openings & Rooms](#stage-5--detect-walls-openings--rooms)
+   - [Stage 6 — CAD & BIM Export (DXF, SVG, IFC)](#stage-6--cad--bim-export-dxf-svg-ifc)
+5. [BIM & IFC Export](#bim--ifc-export)
+6. [Saves & Version Management](#saves--version-management)
+7. [API Reference](#api-reference)
+8. [Frontend Components & Tools](#frontend-components--tools)
 9. [Configuration](#configuration)
 10. [Data Directory Layout](#data-directory-layout)
 11. [Known Limitations](#known-limitations)
@@ -31,18 +112,19 @@ Scan2Floor ingests a raw Matterport `.xyz` 3-D point cloud and produces analysis
 
 | Capability | Detail |
 |---|---|
-| **3-D Viewer** | Three.js point cloud + OBJ mesh overlay |
-| **Unified 5-stage pipeline** | One-click full run: XYZ → slabs → floors → slices → walls/rooms/DXF |
-| **Built-in slab detection** | Cloud2BIM-compatible `run_c2b.py` — no external tool required |
-| **Wall vectorisation** | 2-D density grid → CV contour → Douglas-Peucker → axis merge |
-| **Opening detection** | Per-wall vertical occupancy profile for doors & windows |
-| **Room bounding** | Morphological closing + connected-component labelling |
-| **GPU acceleration** | CuPy-powered voxel dedup in Stage 4 (1D int64 radix sort, ~3× less VRAM) |
-| **Scan file browser** | Auto-discovers `.xyz` files under mounted `/data` volumes |
-| **Manual editing** | Draw / erase walls on canvas; undo/redo; snap-to-endpoint |
-| **Auto re-calculation** | Saving edits triggers room re-detection and DXF re-export automatically |
-| **CAD export** | Multi-layer DXF (walls, doors, windows, rooms) + SVG preview |
-| **Docker deployment** | Single `docker compose up --build` for CPU; GPU variant via overlay file |
+| **3-D Point Cloud Viewer** | High-performance Three.js point cloud renderer streaming compact binary (`pointcloud.bin`) + optional OBJ/GLB mesh overlays |
+| **3-D BIM Inspector** | Interactive 3D building inspection: real-time extruded walls, 3D door frames/leaves, window panes, and spaces with bidirectional selection sync with 2D views |
+| **Unified 5-Stage Pipeline** | One-click autonomous run: XYZ → Slabs → Floor Levels → Wall Slices → Vector Walls/Openings/Rooms → CAD & BIM |
+| **BIM IFC Export** | Industry standard **IFC 2x3** export (`IfcWallStandardCase`, `IfcDoor`, `IfcWindow`, `IfcSpace`) for single storeys or full multi-storey buildings |
+| **Point Cloud Cleaner** | Filter out foreign objects (furniture, tables, clutter) and isolate structural planes (slabs, ceiling, walls) |
+| **Built-in Slab Detection** | Cloud2BIM-compatible histogram slice detection — no external software required |
+| **Wall Vectorisation** | 2-D density grid projection → OpenCV contour analysis → Douglas-Peucker simplification → Manhattan snapping |
+| **Opening Detection** | Vertical occupancy profile scanning per wall segment for realistic door and window placement |
+| **Room Bounding & Calculation** | Morphological closing + connected component labelling with automatic square metre area calculation |
+| **Interactive 2D Editor** | Live canvas editor to add, move, or delete walls with snap-to-endpoint, undo/redo, and real-time room recomputation |
+| **Project Saves & Snapshots** | Create named snapshots of processed results and edits, switch between saves, and export deliverables at any point |
+| **CAD Export** | Multi-layer DXF (`A-WALL`, `A-DOOR`, `A-WINDOW`, `A-ROOM`) + browser-native SVG vector plans |
+| **GPU Acceleration** | Optional CuPy-powered voxel deduplication in Stage 4 (1D int64 radix sort for ~3× less VRAM) |
 
 ---
 
@@ -51,40 +133,50 @@ Scan2Floor ingests a raw Matterport `.xyz` 3-D point cloud and produces analysis
 ```
 scan2floor/
 ├── backend/
-│   ├── main.py                    # FastAPI application & all REST endpoints
-│   ├── requirements.txt           # Python dependencies
-│   ├── start_backend.bat          # One-click backend launcher (Windows)
+│   ├── main.py                     # FastAPI application & all REST endpoints
+│   ├── requirements.txt            # Python dependencies (ezdxf, ifcopenshell, etc.)
+│   ├── Dockerfile                  # Python container definition
+│   ├── dist/                       # Compiled production frontend (built by Vite)
+│   ├── processed/                  # Working directory for pipeline outputs and saves
 │   └── pipeline/
-│       ├── preprocess_xyz.py      # Stage 1 — coordinate transform & bin export
-│       ├── floor_from_c2b.py      # Stage 2 — Cloud2BIM floor level derivation
-│       ├── preprocess_walls.py    # Stage 3 — chunked XYZ → per-floor npy slices
-│       ├── wall_detection_c2b.py  # Stage 4 — 2-D density → vectorised walls
-│       ├── opening_detection.py   # Stage 5 — door/window gap analysis
-│       ├── room_detection.py      # Stage 6 — connected-component room bounding
-│       ├── dxf_export.py          # Stage 7 — DXF / SVG assembly
-│       ├── preprocess_o3d.py      # (legacy) Open3D-based preprocessing helper
-│       └── convert_glb.py         # GLB mesh conversion utility
+│       ├── run_pipeline.py         # Sequential pipeline coordinator
+│       ├── preprocess_xyz.py       # Stage 1 — coordinate transform & downsampled bin export
+│       ├── clean_pointcloud.py     # Structural filtering & clutter removal
+│       ├── run_c2b.py              # Stage 2 — Cloud2BIM slab detection
+│       ├── floor_from_c2b.py       # Stage 3 — Storey level derivation & pairing
+│       ├── preprocess_walls.py     # Stage 4 — Chunked XYZ → per-floor wall slices (NPY)
+│       ├── wall_detection_c2b.py   # Stage 5a — 2D density grid → vectorised walls
+│       ├── opening_detection.py    # Stage 5b — Door & window gap analysis
+│       ├── room_detection.py       # Stage 5c — Connected-component room polygon bounding
+│       ├── dxf_export.py           # Stage 6a — Multi-layer DXF & SVG generator
+│       ├── ifc_export.py           # Stage 6b — BIM IFC 2x3 exporter (ifcopenshell)
+│       └── convert_glb.py          # GLB/OBJ mesh conversion helper
 │
 ├── frontend/
 │   ├── index.html
-│   ├── vite.config.js
+│   ├── vite.config.js              # Vite configuration (proxies /api to port 8000)
 │   ├── package.json
 │   └── src/
-│       ├── main.jsx               # React entry point
-│       ├── App.jsx                # Root component, routing, status polling
-│       ├── index.css              # Global design system & tokens
-│       ├── App.css
+│       ├── main.jsx                # React entry point
+│       ├── App.jsx                 # Main state coordinator & view tabs
+│       ├── index.css               # Design system & dark mode tokens
 │       └── components/
-│           ├── Sidebar.jsx        # Controls panel (pipeline triggers, settings)
-│           ├── FloorPlanViewer.jsx # 2-D canvas editor (draw / erase / undo)
-│           ├── FloorPlanPanel.jsx  # Floor tab switcher wrapper
-│           ├── PointCloud.jsx     # Three.js point cloud renderer
-│           ├── OBJModel.jsx       # Three.js OBJ/GLB mesh viewer
-│           └── LoadingOverlay.jsx # Processing state overlay
+│           ├── Sidebar.jsx         # Pipeline controls, file browser, saves manager
+│           ├── FloorPlanViewer.jsx # 2-D vector canvas editor & export toolbar
+│           ├── FloorPlanPanel.jsx  # Multi-floor navigation switcher
+│           ├── PointCloud.jsx      # Three.js point cloud renderer
+│           ├── OBJModel.jsx        # 3D textured mesh overlay
+│           ├── DetectedBim3D.jsx   # 3D BIM model viewer with extruded geometry
+│           ├── BimInspectorOverlay.jsx # Inspector HUD & property panels
+│           ├── RoomEditorPanel.jsx # Room metadata & label editor
+│           └── LoadingOverlay.jsx  # Job execution spinner & live log tail
 │
-├── ARCHITECTURE.md                # Technical deep-dive reference
-├── start_backend.bat              # Backend launcher shortcut
-└── README.md                      # ← you are here
+├── docker-compose.yml              # CPU Docker Compose stack
+├── docker-compose.gpu.yml          # GPU Docker Compose override
+├── docker-build.bat                # Windows build & launch script
+├── docker-stop.bat                 # Windows container stop script
+├── start_backend.bat               # Windows local backend launch script
+└── README.md                       # ← Documentation
 ```
 
 ---
@@ -92,365 +184,160 @@ scan2floor/
 ## Tech Stack
 
 ### Backend
-
-| Library | Purpose |
-|---|---|
-| **FastAPI** | REST API framework, async request handling |
-| **Uvicorn** | ASGI server |
-| **NumPy** | Dense array math (voxel grids, projections) |
-| **Pandas** | Chunked streaming of multi-GB XYZ files |
-| **OpenCV (`opencv-python`)** | Morphological ops, contour extraction, connected components |
-| **SciPy** | Histogram peak-finding for floor height estimation |
-| **Open3D** | Point cloud I/O & legacy preprocessing |
-| **ezdxf** | DXF file generation (walls, doors, windows, rooms) |
-| **Matplotlib** | Debug visualisation plots |
-| **aiofiles** | Async file I/O helpers |
-| **tkinter** (stdlib) | Native Windows file picker (spawned as subprocess) |
+- **FastAPI & Uvicorn**: High-performance asynchronous REST API server.
+- **NumPy & Pandas**: Rapid streaming of multi-GB `.xyz` files with chunked C-engine processing.
+- **OpenCV (`opencv-python-headless`)**: Morphological operations, contour extraction, and connected component analysis.
+- **SciPy & Open3D**: Histogram analysis, peak detection, and point cloud transformations.
+- **ifcopenshell**: Industry Foundation Classes (IFC 2x3) generation with complete building hierarchy and geometric representations.
+- **ezdxf**: Multi-layer CAD DXF file construction.
 
 ### Frontend
-
-| Library / Tool | Version | Purpose |
-|---|---|---|
-| **React** | 19 | Component-based UI |
-| **Vite** | 8 | Dev server and bundler |
-| **Three.js** | 0.183 | WebGL scene management |
-| **@react-three/fiber** | 9 | React renderer for Three.js |
-| **@react-three/drei** | 10 | Helpers: OrbitControls, loaders, etc. |
+- **React 19 & Vite 8**: Modern, ultra-responsive user interface.
+- **Three.js & @react-three/fiber / @react-three/drei**: Interactive 3D WebGL viewport for point clouds and BIM geometry.
+- **HTML5 Canvas**: Hardware-accelerated 2D floor plan rendering, selection, and vector editing.
 
 ---
 
 ## Processing Pipeline
 
-The pipeline is sequential. Each stage produces intermediate artefacts consumed by the next. All artefacts land in the `processed_data` Docker volume (mounted at `/processed` inside the container). The unified runner `run_pipeline.py` orchestrates all five stages in a single background thread, triggered by `POST /api/pipeline/run`.
-
 ```
-cloud.xyz  (raw Matterport scan, mounted read-only at /data/…)
+cloud.xyz  (Raw Matterport point cloud)
     │
-    ▼ Stage 1 ─ preprocess_xyz.py       (pandas C engine, 2 passes)
-pointcloud.bin  +  info.json            (bounds, histogram floor levels)
+    ▼ Stage 1 ─ preprocess_xyz.py
+pointcloud.bin + info.json              (Bounds, horizontal centroid, preliminary floors)
     │
-    ▼ Stage 2 ─ run_c2b.py             (built-in slab detector, 3 passes)
-c2b_output/horiz_surface_N.xyz
+    ▼ Stage 2 ─ run_c2b.py
+c2b_output/horiz_surface_N.xyz          (Horizontal slab slice point clouds)
     │
-    ▼ Stage 3 ─ floor_from_c2b.py      (in-process, <1 s)
-info.json  ← updated with precise floor_levels[]
+    ▼ Stage 3 ─ floor_from_c2b.py
+info.json updated                       (Precise floor levels & storey heights)
     │
-    ▼ Stage 4 ─ preprocess_walls.py    (pandas C engine + optional CuPy GPU)
-wall_slice_floor_0.npy
-wall_slice_floor_1.npy  …
+    ▼ Stage 4 ─ preprocess_walls.py     (Streaming C-engine + CuPy / NumPy deduplication)
+wall_slice_floor_N.npy                  (Filtered 5 cm voxel points per floor)
     │
-    ▼ Stage 5 ─ per-floor loop (in-process)
+    ▼ Stage 5 ─ Vectorisation & Analysis
     ├─▶ wall_detection_c2b.py  →  walls_floor_N.json
     ├─▶ opening_detection.py   →  openings_floor_N.json
     ├─▶ room_detection.py      →  rooms_floor_N.json
-    └─▶ dxf_export.py          →  floor_N.dxf + floor_N.svg
+    │
+    ▼ Stage 6 ─ CAD & BIM Export
+    ├─▶ dxf_export.py          →  floor_N.dxf + floor_N.svg
+    └─▶ ifc_export.py          →  floor_N.ifc + building.ifc (IFC 2x3)
 ```
 
-**Typical runtime** (114 M points / ~4.4 GB):
+---
 
-| Stage | CPU | GPU (CuPy) |
-|---|---|---|
-| 1 — Preprocess XYZ | ~2 min | ~2 min |
-| 2 — C2B Slab Detection | ~2 min | ~2 min |
-| 3 — Import Floor Levels | <1 s | <1 s |
-| 4 — Extract Wall Slices | ~3–4 min | ~1–2 min |
-| 5 — Detect Walls & Rooms | ~1–2 min | ~1–2 min |
-| **Total** | **~8–10 min** | **~6 min** |
+## BIM & IFC Export
+
+Scan2Floor can export results to **IFC 2x3** (Industry Foundation Classes) format, making the generated models directly importable into BIM software such as **Autodesk Revit**, **GRAPHISOFT Archicad**, **Solibri**, **BIMcollab**, **FreeCAD**, or **BlenderBIM**.
+
+### Export Features:
+- **Spatial Structure**: Automatically builds the IFC hierarchy:
+  `IfcProject` → `IfcSite` → `IfcBuilding` → `IfcBuildingStorey`
+- **Standardized Walls (`IfcWallStandardCase`)**: Extruded solid geometry derived from midline wall vectors, storey height, and assigned wall thickness.
+- **Doors & Windows (`IfcDoor`, `IfcWindow`)**: Positioned accurately along wall hosts with precise width and height.
+- **Rooms & Spaces (`IfcSpace`)**: 3D spatial volumes with floor area attributes.
+- **Two Export Modes**:
+  1. **Single Floor IFC**: Exports an individual storey (`floor_{idx}.ifc`).
+  2. **Full Building IFC**: Merges all storeys into a single coordinated BIM file (`building.ifc`).
+
+Export buttons (**↓ IFC** and **↓ IFC All**) are accessible directly from the Floor Plan Viewer toolbar and the REST API.
 
 ---
 
-### Stage 1 — XYZ Preprocessing
+## Saves & Version Management
 
-**Script:** `pipeline/preprocess_xyz.py`
+Scan2Floor supports creating named snapshots of your project. Each save encapsulates:
+- Vector wall coordinates (`walls_floor_*.json`)
+- Room boundaries & areas (`rooms_floor_*.json`)
+- Door and window openings (`openings_floor_*.json`)
+- Exported CAD files (`floor_*.dxf`, `floor_*.svg`)
+- Exported BIM models (`floor_*.ifc`, `building.ifc`)
+- Metadata (`info.json` and `meta.json`)
 
-- Reads the raw Matterport `.xyz` file in two streaming passes using `pandas.read_csv(engine="c", sep=" ")` — the C engine processes ~8–12 M rows/s.
-- **Pass 1:** Streams all X/Y values to compute the horizontal centroid (`cx`, `cy`) without loading the full file into RAM.
-- **Pass 2:** Applies the coordinate transform (`y_yup = z_raw`), centres on `(cx, cy)`, downsamples 1-in-N points for the viewer, and accumulates all heights for floor detection.
-- **Downsampled binary:** Exports `pointcloud.bin` (uint32 count + float32 XYZ + uint8 RGB).
-- **Metadata:** Writes `info.json` with 3-D bounding box, centroid, sample rate, and preliminary `floor_levels[]` from a Y-axis density histogram peak finder.
+### Storage Location:
+- **Local Run**: `backend/processed/saves/<save_name>/`
+- **Docker Run**: `/processed/saves/<save_name>/` inside the persistent `processed_data` volume.
 
----
-
-### Stage 2 — Built-in C2B Slab Detection
-
-**Script:** `pipeline/run_c2b.py`
-
-Reimplements Cloud2BIM's `identify_slabs()` algorithm internally — **no external Cloud2BIM installation required**.
-
-- **Pass 1a:** Reads only column Z to determine the global Z range.
-- **Pass 1b:** Builds a Z-axis histogram (`Z_STEP = 0.15 m`). Identifies contiguous bands above 60% of the peak density and merges adjacent bands.
-- **Pass 2:** Extracts XYZ points for each surface band.
-- **Output:** `c2b_output/horiz_surface_N.xyz` in Cloud2BIM-compatible tab-separated format.
-
-### Stage 3 — Import C2B Floor Levels
-
-**Script:** `pipeline/floor_from_c2b.py`
-
-- Computes the **median Z-height** of each `horiz_surface_N.xyz`.
-- **Slab pairing:** Pairs adjacent planes within typical slab thickness. The lower face = confirmed floor level.
-- Updates `info.json → floor_levels[]` with `{ floor_y, ceiling_y, storey_height }` per floor, replacing the Stage 1 histogram estimate.
-
----
-
-### Stage 4 — Dense Wall Slices (GPU-accelerated)
-
-**Script:** `pipeline/preprocess_walls.py`
-
-Streams the full `.xyz` with `pandas.read_csv(engine="c")` in 2 M-line chunks. For each floor, retains points within `[floor_y − 0.05 m, floor_y + 2.65 m]` and converts to 5 cm voxel integer indices.
-
-**Voxel deduplication** runs every 4 chunks to bound RAM/VRAM:
-- **GPU (CuPy):** Three `int32` indices are packed into one `int64` key (`21 bits × 3 = 63 bits`), then `cp.unique` runs a native GPU radix sort on the 1D array. This uses ~3× less VRAM and runs 5–10× faster than the naïve `cp.unique(array, axis=0)` on a 2D array (which has no GPU kernel and falls back to a lexicographic sort).
-- **CPU fallback:** `np.unique` on the same 1D int64 key, also faster than 2D unique.
-
-Saves each floor's slice as `wall_slice_floor_N.npy` (float32 `(M, 3)` voxel-centred coordinates).
-
----
-
-### Stage 5 — Detect Walls, Rooms & Export
-
-Runs per-floor in-process. Three sub-stages plus export:
-
-**5a Wall Detection** (`wall_detection_c2b.py`) — Cloud2BIM-style 2D density projection:
-1. Height band filter: mid-storey fraction (0.30 → 0.90 × storey height) to exclude floor/ceiling clutter.
-2. 2D grid projection onto a configurable 2–5 cm/cell XZ raster.
-3. Local relative thresholding (`threshold_frac × max_density`) → binary occupancy grid.
-4. `cv2.morphologyEx` (5×5 kernel) stitches broken scan gaps.
-5. `cv2.findContours` + `cv2.approxPolyDP` (Douglas-Peucker) → linear segments.
-6. Collinear merge + face pairing (parallel pairs within `max_wall_thickness`) → midline wall axis.
-7. Manhattan snapping to 0°/90°.
-
-**Output:** `walls_floor_N.json` — `[[x1,z1],[x2,z2]]` metric endpoint pairs.
-
-**Tunable parameters:**
-
-| Parameter | Default | Effect |
-|---|---|---|
-| `grid_size` | 0.02 m | Voxel resolution; finer = better detail, more RAM |
-| `threshold_frac` | 0.01 | Density cutoff fraction |
-| `dp_tolerance` | 0.04 m | Douglas-Peucker line simplification |
-| `max_wall_thickness` | 0.75 m | Max separation for face-pair grouping |
-| `min_wall_m` | 0.40 m | Minimum segment length to keep |
-| `snap_to_axis` | `true` | Enable Manhattan snapping |
-
----
-
-### Stage 5 — Opening Detection
-
-**Script:** `pipeline/opening_detection.py`
-
-For every detected wall segment:
-
-1. **Point projection:** Collects nearby floor-slice points within `±wall_thickness`. Projects them onto the wall's local UV coordinate frame (U = along wall, V = vertical).
-2. **Occupancy grid:** Builds a 2-D grid in the (U, V) plane.
-3. **Column scanning:** Scans each U-column for vertical empty spans:
-   - **Door:** Column is mostly empty from `~0.15 m` to `~1.85 m` height.
-   - **Window:** Solid sill below `~0.65 m`, gap to `~2.05 m`.
-4. **Clustering:** Merges adjacent positive columns into single opening regions.
-
-**Output:** `openings_floor_N.json` — list of openings with type, position, width, and height.
-
----
-
-### Stage 6 — Room Detection
-
-**Script:** `pipeline/room_detection.py`
-
-Uses **image processing** rather than computational geometry to avoid polygon union complexity.
-
-1. **Rasterisation:** Renders `walls_floor_N.json` as thick white lines on a large OpenCV canvas (typically 2–5 cm/px).  
-   Endpoints are slightly extended to seal T-junctions.
-2. **Iterative morphological closing:** Applies kernels of increasing size (10 cm → 50 cm) to close any remaining gaps.
-3. **Inversion + connected components:** Inverts so interior space becomes foreground. `cv2.connectedComponentsWithStats` (8-connectivity) labels each enclosed region.
-4. **Filtering:**
-   - Drops the **exterior** (the largest blob touching the image boundary).
-   - Rejects blobs below `min_room_m2` (noise) or above `max_room_m2` (open space).
-   - Rejects corridor-like regions narrower than `min_room_width_m`.
-5. **Metric conversion:** Converts pixel bounding boxes and areas back to metres.
-
-**Output:** `rooms_floor_N.json` — list of rooms with bounding box, centroid, and area (m²).
-
----
-
-### Stage 7 — DXF / SVG Export
-
-**Script:** `pipeline/dxf_export.py`
-
-Combines the JSON artefacts into industry-standard 2-D CAD files using **ezdxf**.
-
-| DXF Layer | Contents |
-|---|---|
-| `A-WALL` | Wall centre-line segments |
-| `A-DOOR` | Door gap lines + swing arc (architectural convention) |
-| `A-WINDOW` | Window pane offset lines |
-| `A-ROOM` | Room bounding rectangle + area text annotation (m²) |
-
-Both a `.dxf` (for CAD) and `.svg` (for browser preview) are generated per floor.
+Users can create saves, switch between the current working buffer and previous snapshots, delete old saves, or export deliverables directly from any saved state.
 
 ---
 
 ## API Reference
 
-The FastAPI server runs on `http://localhost:8000`. All endpoints are prefixed with `/api/`.
+The backend API operates at `http://localhost:8000/api`.
 
-### Unified Pipeline
-
+### Pipeline Execution
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/pipeline/run` | Start the full 5-stage pipeline for a given `.xyz` path |
-| `GET` | `/api/pipeline/status` | Poll running/done/error, current stage, elapsed time, log tail |
-| `POST` | `/api/pipeline/cancel` | Placeholder (not yet implemented) |
+| `POST` | `/api/pipeline/run` | Start full pipeline execution for selected `.xyz` |
+| `GET` | `/api/pipeline/status` | Poll job state, progress percentage, current stage, and log output |
+| `POST` | `/api/pipeline/cancel` | Cancel current background job |
 
-### Scan File Browser
-
+### Scan File Selection
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/scan/browse` | Walk `SCAN_ROOTS` dirs and return grouped `.xyz` file listings |
+| `GET` | `/api/scan/browse` | Discover available `.xyz` point cloud files |
+| `GET` | `/api/xyz-path` | Get the currently selected scan file path |
+| `POST` | `/api/xyz-path` | Set the active scan file path |
 
-### XYZ Path (manual override)
-
+### Walls & CAD/BIM Exports
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/xyz-path` | Return the currently configured `.xyz` path |
-| `POST` | `/api/xyz-path` | Persist a new `.xyz` container-internal path |
-
-### Legacy Single-Stage Endpoints
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `POST` | `/api/reprocess` | Clear outputs and rerun Stage 1 only |
-| `GET` | `/api/reprocess/status` | Poll Stage 1 reprocess job |
-| `POST` | `/api/preprocess-walls` | Run Stage 4 (wall slices) in background |
-| `GET` | `/api/preprocess-walls/status` | Poll wall-slice job |
-| `GET` | `/api/c2b/status` | List `horiz_surface_*.xyz` files |
-| `POST` | `/api/c2b/floors` | Derive floor levels from C2B output |
-| `POST` | `/api/c2b/walls` | Run wall detection for one floor (advanced panel) |
-
-### Walls
-
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/api/walls/{floor_idx}` | Retrieve vectorised wall data |
-| `PUT` | `/api/walls/{floor_idx}` | Save user-edited walls → auto re-detect rooms → re-export |
-| `POST` | `/api/walls/{floor_idx}/export` | Regenerate DXF/SVG |
-| `GET` | `/api/walls/{floor_idx}/download` | Download `.dxf` file |
-| `GET` | `/api/walls/{floor_idx}/svg` | Get `.svg` preview |
+| `GET` | `/api/walls/{floor_idx}` | Retrieve detected wall segments for a floor |
+| `PUT` | `/api/walls/{floor_idx}` | Save manual edits (triggers automatic room recalculation) |
+| `GET` | `/api/walls/{floor_idx}/download` | Download DXF file for single floor |
+| `GET` | `/api/walls/{floor_idx}/download-ifc` | Download IFC 2x3 BIM file for single floor |
+| `GET` | `/api/building/download-ifc` | Download full multi-storey IFC 2x3 building model |
+| `GET` | `/api/walls/{floor_idx}/svg` | Retrieve SVG floor plan preview |
 
 ### Openings & Rooms
-
 | Method | Endpoint | Description |
 |---|---|---|
-| `POST` | `/api/openings` | Run opening detection for a floor |
-| `GET` | `/api/openings/{floor_idx}` | Retrieve opening data |
-| `POST` | `/api/rooms` | Run room detection for a floor |
-| `GET` | `/api/rooms/{floor_idx}` | Retrieve room data |
+| `GET` | `/api/openings/{floor_idx}` | Retrieve detected door and window openings |
+| `PUT` | `/api/openings/{floor_idx}` | Update opening properties |
+| `GET` | `/api/rooms/{floor_idx}` | Retrieve detected room polygons and areas |
 
-### Status / Point Cloud
-
+### Saves & Snapshots
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/status` | Overall readiness check (pointcloud.bin + info.json presence) |
-| `GET` | `/api/pointcloud` | Stream `pointcloud.bin` to frontend |
-| `GET` | `/api/info` | Return `info.json` contents |
+| `GET` | `/api/saves` | List all saved snapshots |
+| `POST` | `/api/saves` | Create a new named snapshot of the current state |
+| `DELETE` | `/api/saves/{name}` | Delete a saved snapshot |
+| `GET` | `/api/saves/{name}/info` | Retrieve metadata for a specific save |
+| `GET` | `/api/saves/{name}/download/{floor_idx}` | Download DXF from a saved snapshot |
+| `GET` | `/api/saves/{name}/download-ifc/{floor_idx}` | Download single-floor IFC from a saved snapshot |
+| `GET` | `/api/saves/{name}/download-ifc-all` | Download multi-storey IFC from a saved snapshot |
 
 ---
 
-## Frontend
+## Frontend Components & Tools
 
-Built with **React 19 + Vite 8**.
-
-### Components
-
-| Component | Role |
-|---|---|
-| `App.jsx` | Root layout, status polling loop, 3-D/2-D view switching |
-| `Sidebar.jsx` | XYZ file selection, pipeline trigger buttons, parameter controls, progress display |
-| `FloorPlanViewer.jsx` | HTML5 `<canvas>` based 2-D floor plan editor |
-| `FloorPlanPanel.jsx` | Tab switcher for multiple floors |
-| `PointCloud.jsx` | Three.js point cloud renderer (reads `pointcloud.bin`) |
-| `OBJModel.jsx` | Three.js OBJ/GLB mesh overlay |
-| `LoadingOverlay.jsx` | Fullscreen overlay shown during background jobs |
-
-### FloorPlanViewer Canvas Editor
-
-The 2-D editing toolkit in `FloorPlanViewer.jsx` supports:
-
-- **Pan / Zoom** — mouse wheel + middle-click drag
-- **Add Wall** — click two endpoints to draw a new segment
-- **Delete Wall** — click near a segment to remove it
-- **Snap to Endpoint** — new walls snap to existing endpoints within a configurable pixel radius
-- **Undo / Redo** — full history stack
-- **Save** — persists edits to the backend, triggers automatic room re-detection and DXF re-export
-
----
-
-## Getting Started
-
-### Prerequisites
-
-- **Docker Desktop** (Windows/macOS/Linux)
-- An NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for the GPU variant (optional)
-- A Matterport `.xyz` scan file on the host
-
-### CPU deployment (standard)
-
-```bat
-:: From the scan2floor\ directory:
-docker compose up --build -d
-:: App available at http://localhost:8000
-```
-
-### GPU deployment
-
-```bat
-docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build -d
-```
-
-### Mounting scan data
-
-Edit `docker-compose.yml` and add one volume line per scan location:
-
-```yaml
-volumes:
-  - C:/scans/project_A:/data/project_A:ro
-  - D:/archive/building_2:/data/building_2:ro
-```
-
-The `SCAN_ROOTS=/data` environment variable tells the backend where to walk. Add extra roots (comma-separated) if you mount outside `/data`.
-
-### Running the Full Pipeline
-
-1. Open `http://localhost:8000` in a browser.
-2. In the **Scan File** panel, click **↺ Refresh** — discovered `.xyz` files under mounted `/data` volumes appear automatically. Click one to select it.
-3. Click **▶ Run Full Pipeline** — all 5 stages run sequentially with live stage progress and a log tail.
-4. When complete, switch to the **Vector Floor Plan** layer to inspect results.
-5. Optionally fine-tune walls on the canvas and click **Save Edits**.
-6. Download `.dxf` per floor for use in AutoCAD / Revit / QGIS.
+- **`FloorPlanViewer.jsx`**:
+  Interactive 2D vector editor supporting canvas pan/zoom, drawing new walls, segment deletion, endpoint snapping, undo/redo stacks, and CAD/BIM download links.
+- **`DetectedBim3D.jsx` & `BimInspectorOverlay.jsx`**:
+  A 3D spatial BIM viewer that extrudes 2D walls into solid geometry with textured finishes, generates 3D doors and windows, and highlights selected elements across both 2D and 3D views.
+- **`PointCloud.jsx`**:
+  Three.js point cloud renderer streaming compact binary representations with customizable point size and height color ramps.
+- **`Sidebar.jsx`**:
+  Provides controls for pipeline execution, scan file selection, density threshold tuning, and save management.
 
 ---
 
 ## Configuration
 
-### Wall detection parameters (adjustable in the Sidebar UI)
+### Tunable Pipeline Parameters (Sidebar UI)
+- **`grid_size`** (`default: 0.02 m`): 2-D raster projection cell size.
+- **`threshold_frac`** (`default: 0.01`): Relative density cutoff fraction.
+- **`dp_tolerance`** (`default: 0.04 m`): Douglas-Peucker simplification tolerance.
+- **`max_wall_thickness`** (`default: 0.75 m`): Maximum wall face pairing distance.
+- **`min_wall_m`** (`default: 0.40 m`): Minimum wall length to retain.
+- **`snap_to_axis`** (`default: true`): Manhattan orthogonal angle snapping.
 
-| Parameter | Default | Description |
-|---|---|---|
-| `grid_size` | `0.02` m | 2-D projection cell size |
-| `dp_tolerance` | `0.04` m | Douglas-Peucker simplification tolerance |
-| `threshold_frac` | `0.01` | Density binarisation fraction |
-| `max_wall_thickness` | `0.75` m | Max face-pair separation |
-| `min_wall_m` | `0.40` m | Minimum wall segment length |
-| `snap_to_axis` | `true` | Manhattan grid snapping |
-
-### Docker environment variables (`docker-compose.yml`)
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `PROCESSED_DIR` | `/processed` | Named volume mount — all pipeline outputs |
-| `DATA_DIR` | `/data/matterpak` | Default scan folder fallback |
-| `C2B_DIR` | `/processed/c2b_output` | C2B surface output location |
-| `SCAN_ROOTS` | `/data` | Comma-separated roots for scan file browser |
-
-The active `.xyz` path is persisted to `xyz_path.json` inside `PROCESSED_DIR`.
+### Environment Variables
+- `PROCESSED_DIR`: Directory where output files and saves are written (`default: backend/processed`).
+- `DATA_DIR`: Fallback path to default scan directory (`default: data/matterpak`).
+- `SCAN_ROOTS`: Comma-separated paths searched by the scan browser.
 
 ---
 
@@ -458,26 +345,28 @@ The active `.xyz` path is persisted to `xyz_path.json` inside `PROCESSED_DIR`.
 
 ```
 backend/processed/
-├── xyz_path.json              # Persisted XYZ file path config
-├── pointcloud.bin             # Downsampled binary for frontend viewer
-├── info.json                  # Metadata: bounds, floor_levels[], etc.
-├── wall_slice_floor_0.npy     # Dense point arrays per floor
-├── wall_slice_floor_1.npy
-├── walls_floor_0.json         # Vectorised wall segments
-├── walls_floor_1.json
-├── openings_floor_0.json      # Door/window openings
-├── rooms_floor_0.json         # Room bounding boxes + areas
-├── floor_0.dxf                # Exportable CAD file
-├── floor_0.svg                # Browser-renderable preview
-└── (debug .png images)        # Saved when save_debug=true
+├── pointcloud.bin             # Downsampled binary point cloud
+├── info.json                  # Metadata, storey elevations, bounds
+├── wall_slice_floor_0.npy     # Filtered voxel slices per floor
+├── walls_floor_0.json         # Vector wall segments
+├── openings_floor_0.json      # Door & window definitions
+├── rooms_floor_0.json         # Room boundary polygons & areas
+├── floor_0.dxf                # AutoCAD-compatible DXF
+├── floor_0.svg                # Browser SVG preview
+├── floor_0.ifc                # IFC 2x3 single-floor BIM file
+├── building.ifc               # IFC 2x3 multi-floor full BIM file
+└── saves/                     # Named snapshots
+    └── <save_name>/
+        ├── meta.json
+        ├── info.json
+        ├── walls_floor_*.json
+        └── ...
 ```
 
 ---
 
 ## Known Limitations
 
-- **Large file I/O:** Files over ~8 GB may cause high memory spikes during Stage 4 chunked streaming even with the C engine; consider reducing `CHUNK_LINES` if OOM errors occur.
-- **Curved walls:** The algorithm assumes rectilinear or near-rectilinear architecture; circular walls are approximated as polygons.
-- **Stairwells / voids:** Open vertical elements may be misclassified as very tall rooms and require manual deletion.
-- **GPU requirement for best speed:** Stage 4 runs on CPU if CuPy is unavailable (CPU-only container); runtime increases from ~1–2 min to ~3–4 min for a 114 M point file.
-- **Single-space XYZ delimiter:** The pandas C engine (`sep=" "`) assumes single-space-delimited `.xyz` files (standard Matterport output). Files with irregular whitespace or tabs would need the Python engine re-enabled.
+- **Rectilinear Bias**: Wall vectorization and snapping optimize for Manhattan or orthogonal geometry; curved walls will be represented as simplified polygonal chains.
+- **Dense Scan Memory Spikes**: Extremely large scans (>100M points) should use chunked streaming (enabled by default) to stay within RAM limits.
+- **Single-Space XYZ Format**: Default streaming uses fast C-engine parsing assuming space-delimited coordinates.
