@@ -19,73 +19,73 @@ import { useState, useEffect, useRef, useCallback } from "react";
 function getTheme() {
   const isDark = !document.querySelector('[data-theme="light"]');
   return isDark ? {
-    bg:          "#0f0f0f",
-    gridLine:    "#1e1e1e",
-    wall:        "#00c8e0",      wallGlow: "rgba(0,200,224,0.18)",
-    wallUser:    "#fbbf24",      wallUserGlow: "rgba(251,191,36,0.20)",
-    wallHover:   "#ff6b6b",     wallHoverGlow: "rgba(255,107,107,0.25)",
-    wallHidden:  "#4a6080",     wallHiddenGlow: "rgba(74,96,128,0.15)",
+    bg: "#0f0f0f",
+    gridLine: "#1e1e1e",
+    wall: "#00c8e0", wallGlow: "rgba(0,200,224,0.18)",
+    wallUser: "#fbbf24", wallUserGlow: "rgba(251,191,36,0.20)",
+    wallHover: "#ff6b6b", wallHoverGlow: "rgba(255,107,107,0.25)",
+    wallHidden: "#4a6080", wallHiddenGlow: "rgba(74,96,128,0.15)",
     wallPreview: "#fbbf24",
-    door:        "#fbbf24",
-    window:      "#818cf8",
-    snapEp:      "#fbbf24",
-    snapGrid:    "rgba(200,220,255,0.5)",
+    door: "#fbbf24",
+    window: "#818cf8",
+    snapEp: "#fbbf24",
+    snapGrid: "rgba(200,220,255,0.5)",
     roomFills: [
-      "rgba(0,200,224,0.07)","rgba(129,140,248,0.07)",
-      "rgba(251,191,36,0.07)","rgba(52,211,153,0.07)",
-      "rgba(251,113,133,0.07)","rgba(167,139,250,0.07)",
-      "rgba(34,211,238,0.07)","rgba(251,146,60,0.07)",
-      "rgba(74,222,128,0.07)","rgba(248,113,113,0.07)",
+      "rgba(0,200,224,0.07)", "rgba(129,140,248,0.07)",
+      "rgba(251,191,36,0.07)", "rgba(52,211,153,0.07)",
+      "rgba(251,113,133,0.07)", "rgba(167,139,250,0.07)",
+      "rgba(34,211,238,0.07)", "rgba(251,146,60,0.07)",
+      "rgba(74,222,128,0.07)", "rgba(248,113,113,0.07)",
     ],
-    roomBorder:  "rgba(255,255,255,0.08)",
-    labelRoom:   "rgba(200,230,255,0.6)",
+    roomBorder: "rgba(255,255,255,0.08)",
+    labelRoom: "rgba(200,230,255,0.6)",
     scaleStroke: "rgba(255,255,255,0.6)",
-    scaleFill:   "rgba(255,255,255,0.7)",
+    scaleFill: "rgba(255,255,255,0.7)",
   } : {
-    bg:          "#f5f5f5",
-    gridLine:    "#e0e0e0",
-    wall:        "#0066cc",      wallGlow: "rgba(0,102,204,0.12)",
-    wallUser:    "#d97706",      wallUserGlow: "rgba(217,119,6,0.15)",
-    wallHover:   "#dc2626",     wallHoverGlow: "rgba(220,38,38,0.18)",
-    wallHidden:  "#94a3b8",     wallHiddenGlow: "rgba(148,163,184,0.12)",
+    bg: "#f5f5f5",
+    gridLine: "#e0e0e0",
+    wall: "#0066cc", wallGlow: "rgba(0,102,204,0.12)",
+    wallUser: "#d97706", wallUserGlow: "rgba(217,119,6,0.15)",
+    wallHover: "#dc2626", wallHoverGlow: "rgba(220,38,38,0.18)",
+    wallHidden: "#94a3b8", wallHiddenGlow: "rgba(148,163,184,0.12)",
     wallPreview: "#d97706",
-    door:        "#d97706",
-    window:      "#6366f1",
-    snapEp:      "#d97706",
-    snapGrid:    "rgba(30,60,120,0.35)",
+    door: "#d97706",
+    window: "#6366f1",
+    snapEp: "#d97706",
+    snapGrid: "rgba(30,60,120,0.35)",
     roomFills: [
-      "rgba(0,102,204,0.07)","rgba(99,102,241,0.07)",
-      "rgba(217,119,6,0.07)","rgba(22,163,74,0.07)",
-      "rgba(220,38,38,0.07)","rgba(124,58,237,0.07)",
-      "rgba(6,182,212,0.07)","rgba(234,88,12,0.07)",
-      "rgba(74,222,128,0.07)","rgba(248,113,113,0.07)",
+      "rgba(0,102,204,0.07)", "rgba(99,102,241,0.07)",
+      "rgba(217,119,6,0.07)", "rgba(22,163,74,0.07)",
+      "rgba(220,38,38,0.07)", "rgba(124,58,237,0.07)",
+      "rgba(6,182,212,0.07)", "rgba(234,88,12,0.07)",
+      "rgba(74,222,128,0.07)", "rgba(248,113,113,0.07)",
     ],
-    roomBorder:  "rgba(0,0,0,0.06)",
-    labelRoom:   "rgba(30,50,80,0.7)",
+    roomBorder: "rgba(0,0,0,0.06)",
+    labelRoom: "rgba(30,50,80,0.7)",
     scaleStroke: "rgba(0,0,0,0.55)",
-    scaleFill:   "rgba(0,0,0,0.65)",
+    scaleFill: "rgba(0,0,0,0.65)",
   };
 }
 
 // Legacy alias used in non-canvas JSX parts (badge colours etc.)
 const C = {
-  wall:       "#00c8e0",
-  wallUser:   "#fbbf24",
-  wallHover:  "#ff6b6b",
+  wall: "#00c8e0",
+  wallUser: "#fbbf24",
+  wallHover: "#ff6b6b",
   wallHidden: "#4a6080",
-  door:       "#fbbf24",
-  window:     "#818cf8",
-  snapEp:     "#fbbf24",
-  snapGrid:   "rgba(200,220,255,0.5)",
+  door: "#fbbf24",
+  window: "#818cf8",
+  snapEp: "#fbbf24",
+  snapGrid: "rgba(200,220,255,0.5)",
   roomFills: [
-    "rgba(0,200,224,0.07)","rgba(129,140,248,0.07)",
-    "rgba(251,191,36,0.07)","rgba(52,211,153,0.07)",
-    "rgba(251,113,133,0.07)","rgba(167,139,250,0.07)",
-    "rgba(34,211,238,0.07)","rgba(251,146,60,0.07)",
-    "rgba(74,222,128,0.07)","rgba(248,113,113,0.07)",
+    "rgba(0,200,224,0.07)", "rgba(129,140,248,0.07)",
+    "rgba(251,191,36,0.07)", "rgba(52,211,153,0.07)",
+    "rgba(251,113,133,0.07)", "rgba(167,139,250,0.07)",
+    "rgba(34,211,238,0.07)", "rgba(251,146,60,0.07)",
+    "rgba(74,222,128,0.07)", "rgba(248,113,113,0.07)",
   ],
   roomBorder: "rgba(255,255,255,0.08)",
-  labelRoom:  "rgba(200,230,255,0.6)",
+  labelRoom: "rgba(200,230,255,0.6)",
 };
 
 // ── Coordinate utilities ───────────────────────────────────────────────────────
@@ -128,18 +128,23 @@ function distPointToSeg(px, pz, x1, z1, x2, z2) {
   return Math.hypot(px - (x1 + t * dx), pz - (z1 + t * dz));
 }
 
-/** Snap world point to nearest endpoint (within pixThresh px) or 0.5m grid. */
-function computeSnap(wx, wz, editedLines, cam, pixThresh = 14) {
-  const worldThresh = pixThresh / cam.scale;
-  let best = worldThresh, snapped = null;
-  for (const { pts: [[x1, z1], [x2, z2]] } of editedLines) {
-    const d1 = Math.hypot(wx - x1, wz - z1);
-    const d2 = Math.hypot(wx - x2, wz - z2);
-    if (d1 < best) { best = d1; snapped = { pt: [x1, z1], kind: "endpoint" }; }
-    if (d2 < best) { best = d2; snapped = { pt: [x2, z2], kind: "endpoint" }; }
+/** Snap world point to nearest endpoint (within pixThresh px) or configured grid step. */
+function computeSnap(wx, wz, editedLines, cam, pixThresh = 14, gridStep = 0.05, snapToVertices = true) {
+  if (snapToVertices) {
+    const worldThresh = pixThresh / cam.scale;
+    let best = worldThresh, snapped = null;
+    for (const { pts: [[x1, z1], [x2, z2]] } of editedLines) {
+      const d1 = Math.hypot(wx - x1, wz - z1);
+      const d2 = Math.hypot(wx - x2, wz - z2);
+      if (d1 < best) { best = d1; snapped = { pt: [x1, z1], kind: "endpoint" }; }
+      if (d2 < best) { best = d2; snapped = { pt: [x2, z2], kind: "endpoint" }; }
+    }
+    if (snapped) return snapped;
   }
-  if (snapped) return snapped;
-  const g = 0.5;
+  if (!gridStep || gridStep <= 0) {
+    return { pt: [wx, wz], kind: "free" };
+  }
+  const g = gridStep;
   return { pt: [Math.round(wx / g) * g, Math.round(wz / g) * g], kind: "grid" };
 }
 
@@ -154,7 +159,7 @@ function applyAngleConstraint(wx, wz, fromX, fromZ) {
   const snapAngle = Math.round(raw / (Math.PI / 4)) * (Math.PI / 4);
   const dist = Math.hypot(dx, dz);
   return {
-    pt:    [fromX + Math.cos(snapAngle) * dist, fromZ + Math.sin(snapAngle) * dist],
+    pt: [fromX + Math.cos(snapAngle) * dist, fromZ + Math.sin(snapAngle) * dist],
     angle: snapAngle,
     dist,
   };
@@ -165,40 +170,58 @@ function applyAngleConstraint(wx, wz, fromX, fromZ) {
  * Endpoint snapping is restricted to points within `epPixThresh` of the
  * constrained ray (so you can still snap-to-endpoint along the axis).
  */
-function computeSnapConstrained(wx, wz, editedLines, cam, fromX, fromZ, pixThresh = 14) {
+function computeSnapConstrained(wx, wz, editedLines, cam, fromX, fromZ, pixThresh = 14, gridStep = 0.05, snapToVertices = true) {
   const { pt: [cx, cz], angle, dist } = applyAngleConstraint(wx, wz, fromX, fromZ);
   const cosA = Math.cos(angle), sinA = Math.sin(angle);
   // Try to find an endpoint close to the constrained ray
-  const worldEpThresh = pixThresh / cam.scale;
-  let bestEp = worldEpThresh, epPt = null;
-  for (const { pts: [[x1, z1], [x2, z2]] } of editedLines) {
-    for (const [ex, ez] of [[x1, z1], [x2, z2]]) {
-      // Project endpoint onto the constrained axis
-      const tPt = (ex - fromX) * cosA + (ez - fromZ) * sinA; // scalar along ray
-      if (tPt < 0) continue; // behind start point
-      const projX = fromX + tPt * cosA;
-      const projZ = fromZ + tPt * sinA;
-      const perpDist = Math.hypot(ex - projX, ez - projZ);
-      if (perpDist < worldEpThresh && perpDist < bestEp) {
-        // Snap to the endpoint projected onto the ray (keeps the angle exact)
-        bestEp = perpDist;
-        epPt = [projX, projZ]; // stay on the constrained axis
+  let epPt = null;
+  if (snapToVertices) {
+    const worldEpThresh = pixThresh / cam.scale;
+    let bestEp = worldEpThresh;
+    for (const { pts: [[x1, z1], [x2, z2]] } of editedLines) {
+      for (const [ex, ez] of [[x1, z1], [x2, z2]]) {
+        // Project endpoint onto the constrained axis
+        const tPt = (ex - fromX) * cosA + (ez - fromZ) * sinA; // scalar along ray
+        if (tPt < 0) continue; // behind start point
+        const projX = fromX + tPt * cosA;
+        const projZ = fromZ + tPt * sinA;
+        const perpDist = Math.hypot(ex - projX, ez - projZ);
+        if (perpDist < worldEpThresh && perpDist < bestEp) {
+          // Snap to the endpoint projected onto the ray (keeps the angle exact)
+          bestEp = perpDist;
+          epPt = [projX, projZ]; // stay on the constrained axis
+        }
       }
     }
   }
-  const finalPt = epPt ?? cx !== undefined ? (epPt ?? [cx, cz]) : [cx, cz];
-  // Grid-snap along the constrained ray when no endpoint found
-  let snappedPt;
+
   if (epPt) {
-    snappedPt = epPt;
-  } else {
-    const g = 0.5;
-    const tSnapped = Math.round(dist / g) * g;
-    snappedPt = [fromX + Math.cos(angle) * tSnapped, fromZ + Math.sin(angle) * tSnapped];
+    return {
+      pt: epPt,
+      kind: "endpoint",
+      angle,
+      dist: Math.hypot(epPt[0] - fromX, epPt[1] - fromZ),
+      fromPt: [fromX, fromZ],
+    };
   }
+
+  if (!gridStep || gridStep <= 0) {
+    return {
+      pt: [cx, cz],
+      kind: "angle",
+      angle,
+      dist,
+      fromPt: [fromX, fromZ],
+    };
+  }
+
+  // Grid-snap along the constrained ray when no endpoint found
+  const g = gridStep;
+  const tSnapped = Math.round(dist / g) * g;
+  const snappedPt = [fromX + Math.cos(angle) * tSnapped, fromZ + Math.sin(angle) * tSnapped];
   return {
-    pt:   snappedPt,
-    kind: epPt ? "endpoint" : "angle",
+    pt: snappedPt,
+    kind: "angle",
     angle,
     dist: Math.hypot(snappedPt[0] - fromX, snappedPt[1] - fromZ),
     fromPt: [fromX, fromZ],
@@ -282,9 +305,9 @@ function drawBoxSelect(ctx, box, mode) {
   const w = Math.abs(cx2 - cx1), h = Math.abs(cy2 - cy1);
   if (w < 2 && h < 2) return;
   const isDelete = mode === "delete";
-  const strokeCol = isDelete ? "rgba(255,80,80,0.9)"   : "rgba(74,160,220,0.9)";
-  const fillCol   = isDelete ? "rgba(255,60,60,0.08)"  : "rgba(74,140,220,0.08)";
-  const glowCol   = isDelete ? "rgba(255,80,80,0.25)"  : "rgba(74,160,220,0.25)";
+  const strokeCol = isDelete ? "rgba(255,80,80,0.9)" : "rgba(74,160,220,0.9)";
+  const fillCol = isDelete ? "rgba(255,60,60,0.08)" : "rgba(74,140,220,0.08)";
+  const glowCol = isDelete ? "rgba(255,80,80,0.25)" : "rgba(74,160,220,0.25)";
   ctx.save();
   // Glow layer
   ctx.strokeStyle = glowCol;
@@ -307,7 +330,7 @@ function drawBoxSelect(ctx, box, mode) {
   ctx.strokeStyle = strokeCol;
   ctx.lineWidth = 2;
   const corners = [[x, y], [x + w, y], [x, y + h], [x + w, y + h]];
-  const dirs = [[ 1, 1], [-1, 1], [ 1,-1], [-1,-1]];
+  const dirs = [[1, 1], [-1, 1], [1, -1], [-1, -1]];
   for (let i = 0; i < 4; i++) {
     const [cx, cy] = corners[i];
     const [dx, dy] = dirs[i];
@@ -319,15 +342,39 @@ function drawBoxSelect(ctx, box, mode) {
   ctx.restore();
 }
 
-function drawGrid(ctx, cam, w, h, TC) {
-  const step = 5 * cam.scale;
-  if (step < 10) return;
+function drawGrid(ctx, cam, w, h, TC, gridStep = 0.05) {
   ctx.save();
-  ctx.strokeStyle = TC.gridLine; ctx.lineWidth = 0.5; ctx.globalAlpha = 0.5;
-  let x = ((cam.ox % step) + step) % step;
-  for (; x < w; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-  let y = ((cam.oy % step) + step) % step;
-  for (; y < h; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+
+  // 1. Minor grid lines (matching configured snap resolution if zoomed in enough)
+  if (gridStep > 0) {
+    const minorStep = gridStep * cam.scale;
+    if (minorStep >= 8) {
+      ctx.strokeStyle = TC.gridLine;
+      ctx.lineWidth = 0.5;
+      ctx.globalAlpha = 0.20;
+      let x = ((cam.ox % minorStep) + minorStep) % minorStep;
+      for (; x < w; x += minorStep) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+      let y = ((cam.oy % minorStep) + minorStep) % minorStep;
+      for (; y < h; y += minorStep) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+    }
+  }
+
+  // 2. Major grid lines (1m if scale >= 18, 5m if scale >= 6, else 10m)
+  let majorM = 1.0;
+  if (cam.scale < 6) majorM = 10.0;
+  else if (cam.scale < 18) majorM = 5.0;
+
+  const majorStep = majorM * cam.scale;
+  if (majorStep >= 10) {
+    ctx.strokeStyle = TC.gridLine;
+    ctx.lineWidth = majorM === 1.0 ? 0.75 : 1.0;
+    ctx.globalAlpha = 0.55;
+    let x = ((cam.ox % majorStep) + majorStep) % majorStep;
+    for (; x < w; x += majorStep) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    let y = ((cam.oy % majorStep) + majorStep) % majorStep;
+    for (; y < h; y += majorStep) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  }
+
   ctx.restore();
 }
 
@@ -399,7 +446,7 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const [[x1, z1], [x2, z2]] = line.pts;
     const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
     const color = isHovered ? TC.wallHover : TC.wallHidden;
-    const glow  = isHovered ? TC.wallHoverGlow : TC.wallHiddenGlow;
+    const glow = isHovered ? TC.wallHoverGlow : TC.wallHiddenGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
@@ -421,8 +468,8 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     if (line.hidden) continue;
     const { pts: [[x1, z1], [x2, z2]], source } = line;
     const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
-    const color     = isHovered ? TC.wallHover : source === "user" ? TC.wallUser : TC.wall;
-    const glow      = isHovered ? TC.wallHoverGlow : source === "user" ? TC.wallUserGlow : TC.wallGlow;
+    const color = isHovered ? TC.wallHover : source === "user" ? TC.wallUser : TC.wall;
+    const glow = isHovered ? TC.wallHoverGlow : source === "user" ? TC.wallUserGlow : TC.wallGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
@@ -512,16 +559,25 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const [sx, sz] = snapInfo.pt;
     const [csx, csy] = toCanvas(sx, sz, cam);
     const isAngle = snapInfo.kind === "angle";
-    const r = snapInfo.kind === "endpoint" ? 7 : 5;
-    const color = snapInfo.kind === "endpoint" ? TC.snapEp : isAngle ? TC.wall : TC.snapGrid;
+    const isEp = snapInfo.kind === "endpoint";
+    const isFree = snapInfo.kind === "free";
+    const r = isEp ? 7 : isFree ? 3.5 : 5;
+    const color = isEp ? TC.snapEp : isAngle ? TC.wall : isFree ? "rgba(255,255,255,0.45)" : TC.snapGrid;
     ctx.save();
-    ctx.strokeStyle = color; ctx.lineWidth = snapInfo.kind === "endpoint" ? 2 : 1;
-    const cross = r + 4;
-    ctx.beginPath();
-    ctx.moveTo(csx - cross, csy); ctx.lineTo(csx + cross, csy);
-    ctx.moveTo(csx, csy - cross); ctx.lineTo(csx, csy + cross);
-    ctx.stroke();
-    ctx.beginPath(); ctx.arc(csx, csy, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = isEp ? 2 : 1;
+    if (isFree) {
+      // Subtle precision dot for free placement
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(csx, csy, 2.5, 0, Math.PI * 2); ctx.fill();
+    } else {
+      const cross = r + 4;
+      ctx.beginPath();
+      ctx.moveTo(csx - cross, csy); ctx.lineTo(csx + cross, csy);
+      ctx.moveTo(csx, csy - cross); ctx.lineTo(csx, csy + cross);
+      ctx.stroke();
+      ctx.beginPath(); ctx.arc(csx, csy, r, 0, Math.PI * 2); ctx.stroke();
+    }
     ctx.restore();
   }
 }
@@ -535,7 +591,7 @@ function drawCornerMode(ctx, editedLines, cam, cornerState, TC) {
   const { firstIdx, hoverIdx, intersection } = cornerState;
   const lw = Math.max(1.0, cam.scale * 0.09);
   const CORNER_COLOR = "#a78bfa"; // violet
-  const CORNER_GLOW  = "rgba(167,139,250,0.30)";
+  const CORNER_GLOW = "rgba(167,139,250,0.30)";
 
   // Helper: draw a highlighted wall
   const hilite = (idx, color, glow, alpha = 1) => {
@@ -632,14 +688,14 @@ const LOW_CONF_THRESHOLD = 0.45;
 
 function drawDoor(ctx, op, cam) {
   const lowConf = (op.confidence ?? 1) < LOW_CONF_THRESHOLD;
-  const colour  = lowConf ? "#fbbf24" : C.door;   // amber vs green
-  const lw      = Math.max(1, cam.scale * 0.08);
+  const colour = lowConf ? "#fbbf24" : C.door;   // amber vs green
+  const lw = Math.max(1, cam.scale * 0.08);
   const [cx, cy] = toCanvas(op.x, op.z, cam);
   const [hx, hy] = toCanvas(op.hinge_x, op.hinge_z, cam);
-  const radius   = Math.hypot(cx - hx, cy - hy);
+  const radius = Math.hypot(cx - hx, cy - hy);
   ctx.save();
   ctx.strokeStyle = colour;
-  ctx.lineWidth   = lw;
+  ctx.lineWidth = lw;
   if (lowConf) ctx.setLineDash([5, 4]);
   ctx.shadowColor = colour; ctx.shadowBlur = lowConf ? 3 : 6;
   ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(cx, cy); ctx.stroke();
@@ -652,8 +708,8 @@ function drawDoor(ctx, op, cam) {
 }
 
 function drawWindow(ctx, op, cam) {
-  const lowConf  = (op.confidence ?? 1) < LOW_CONF_THRESHOLD;
-  const colour   = lowConf ? "#fbbf24" : C.window;  // amber vs indigo
+  const lowConf = (op.confidence ?? 1) < LOW_CONF_THRESHOLD;
+  const colour = lowConf ? "#fbbf24" : C.window;  // amber vs indigo
   const [cx1, cz1] = toCanvas(op.wall_x1, op.wall_z1, cam);
   const [cx2, cz2] = toCanvas(op.wall_x2, op.wall_z2, cam);
   const dx = cx2 - cx1, dz = cz2 - cz1;
@@ -662,7 +718,7 @@ function drawWindow(ctx, op, cam) {
   const wx2 = cx1 + dx * t2, wy2 = cz1 + dz * t2;
   ctx.save();
   ctx.strokeStyle = colour;
-  ctx.lineWidth   = Math.max(1.5, cam.scale * 0.12);
+  ctx.lineWidth = Math.max(1.5, cam.scale * 0.12);
   ctx.setLineDash(lowConf ? [3, 4] : [4, 3]);
   ctx.shadowColor = colour; ctx.shadowBlur = lowConf ? 2 : 4;
   ctx.beginPath(); ctx.moveTo(wx1, wy1); ctx.lineTo(wx2, wy2); ctx.stroke();
@@ -703,15 +759,15 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
 
   const [cjax, cjay] = toCanvas(jax, jaz, cam);
   const [cjbx, cjby] = toCanvas(jbx, jbz, cam);
-  const [cmx, cmy]   = toCanvas(mx, mz, cam);
+  const [cmx, cmy] = toCanvas(mx, mz, cam);
 
-  const baseCol   = op.type === "door" ? TC.door : TC.window;
+  const baseCol = op.type === "door" ? TC.door : TC.window;
   const strokeCol = isSelected ? "#38bdf8" : isHovered ? "#fbbf24" : baseCol;
-  const glowCol   = isSelected ? "rgba(56,189,248,0.5)" : isHovered ? "rgba(251,191,36,0.4)" : baseCol;
+  const glowCol = isSelected ? "rgba(56,189,248,0.5)" : isHovered ? "rgba(251,191,36,0.4)" : baseCol;
 
   if (op.type === "door") {
     const hingeSide = op.side === -1 ? -1 : 1;
-    const swingDir  = op.swing_dir === -1 ? -1 : 1;
+    const swingDir = op.swing_dir === -1 ? -1 : 1;
 
     const hx = hingeSide === 1 ? jax : jbx;
     const hz = hingeSide === 1 ? jaz : jbz;
@@ -721,8 +777,8 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
     const tx = hx + swingDir * nx * w_m;
     const tz = hz + swingDir * nz * w_m;
 
-    const [chx, chy]     = toCanvas(hx, hz, cam);
-    const [cex, cey]     = toCanvas(ex, ez, cam);
+    const [chx, chy] = toCanvas(hx, hz, cam);
+    const [cex, cey] = toCanvas(ex, ez, cam);
     const [ctx_p, cty_p] = toCanvas(tx, tz, cam);
 
     ctx.save();
@@ -739,7 +795,7 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
 
     const tickLen = Math.max(3, cam.scale * 0.08);
     const cnx = - (cjby - cjay) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
-    const cny =   (cjbx - cjax) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
+    const cny = (cjbx - cjax) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
 
     ctx.strokeStyle = strokeCol;
     ctx.lineWidth = Math.max(1.5, cam.scale * 0.06);
@@ -761,7 +817,7 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
 
     const r_px = w_m * cam.scale;
     const aClosed = Math.atan2(cey - chy, cex - chx);
-    const aOpen   = Math.atan2(cty_p - chy, ctx_p - chx);
+    const aOpen = Math.atan2(cty_p - chy, ctx_p - chx);
 
     let dAngle = (aOpen - aClosed + 3 * Math.PI) % (2 * Math.PI) - Math.PI;
     const ccw = dAngle < 0;
@@ -830,7 +886,7 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
       ctx.textBaseline = "middle";
       const tw = ctx.measureText(dimLabel).width;
       const cnx = - (cjby - cjay) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
-      const cny =   (cjbx - cjax) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
+      const cny = (cjbx - cjax) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
       const lx = cmx + cnx * 14;
       const ly = cmy + cny * 14;
       ctx.fillStyle = "rgba(10,14,26,0.85)";
@@ -851,7 +907,7 @@ function drawOpenings(ctx, openings, cam) {
     ((a.confidence ?? 1) >= LOW_CONF_THRESHOLD ? 1 : 0)
   );
   for (const op of sorted) {
-    if (op.type === "door")   drawDoor(ctx, op, cam);
+    if (op.type === "door") drawDoor(ctx, op, cam);
     if (op.type === "window") drawWindow(ctx, op, cam);
   }
 }
@@ -891,20 +947,32 @@ function drawCompass(ctx, w) {
 // ── EditToolbar ────────────────────────────────────────────────────────────────
 
 const TOOLS = [
-  { id: "select",     icon: "✋", label: "Pan",        key: "S", title: "Pan & Zoom (S)" },
-  { id: "add",        icon: "✏️",  label: "Add Wall",   key: "A", title: "Add Wall (A)" },
-  { id: "add-door",   icon: "🚪", label: "Door",       key: "Q", title: "Add Door — click wall (Q)" },
-  { id: "add-window", icon: "🪟", label: "Window",     key: "W", title: "Add Window — click wall (W)" },
-  { id: "delete",     icon: "✂️",  label: "Delete",     key: "D", title: "Delete Wall / Opening (D)" },
-  { id: "hide",       icon: "👁",  label: "Hide",       key: "H", title: "Hide/Show Wall (H) — hides from room recalc" },
-  { id: "corner",     icon: "⌐",  label: "Corner",     key: "C", title: "Extend to Corner (C) — extend two walls to their intersection" },
+  { id: "select", icon: "✋", label: "Pan", key: "S", title: "Pan & Zoom (S)" },
+  { id: "add", icon: "✏️", label: "Add Wall", key: "A", title: "Add Wall (A)" },
+  { id: "add-door", icon: "🚪", label: "Door", key: "Q", title: "Add Door — click wall (Q)" },
+  { id: "add-window", icon: "🪟", label: "Window", key: "W", title: "Add Window — click wall (W)" },
+  { id: "delete", icon: "✂️", label: "Delete", key: "D", title: "Delete Wall / Opening (D)" },
+  { id: "hide", icon: "👁", label: "Hide", key: "H", title: "Hide/Show Wall (H) — hides from room recalc" },
+  { id: "corner", icon: "⌐", label: "Corner", key: "C", title: "Extend to Corner (C) — extend two walls to their intersection" },
 ];
 
-function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, onSave, onReset, saveState, wallCount, userCount, hiddenCount, cornerStep }) {
+const SNAP_PRESETS = [
+  { label: "Free", value: 0, title: "Free placement (no grid snap)" },
+  { label: "1cm", value: 0.01, title: "1 cm precision snap (0.01 m)" },
+  { label: "5cm", value: 0.05, title: "5 cm precision snap (0.05 m) — recommended" },
+  { label: "10cm", value: 0.10, title: "10 cm grid snap (0.10 m)" },
+  { label: "50cm", value: 0.50, title: "50 cm grid snap (0.50 m) — coarse" },
+];
+
+function EditToolbar({
+  mode, onMode, canUndo, canRedo, onUndo, onRedo,
+  isDirty, onSave, onReset, saveState, wallCount, userCount, hiddenCount, cornerStep,
+  gridStep, onGridStep, snapToVertices, onToggleSnapToVertices,
+}) {
   const toolBtn = (id, icon, label, title) => {
-    const isHide   = id === "hide";
+    const isHide = id === "hide";
     const isCorner = id === "corner";
-    const isDoor   = id === "add-door";
+    const isDoor = id === "add-door";
     const isWindow = id === "add-window";
     // Corner button shows step indicator when active
     const cornerLabel = isCorner && mode === "corner"
@@ -919,13 +987,13 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
           display: "flex", alignItems: "center", gap: 4,
           padding: "4px 9px", borderRadius: 5, fontSize: 11,
           fontWeight: mode === id ? 700 : 400,
-          background:  mode === id
+          background: mode === id
             ? (isHide ? "rgba(74,96,128,0.22)" : isCorner ? "rgba(167,139,250,0.15)" : isDoor ? "rgba(251,191,36,0.18)" : isWindow ? "rgba(129,140,248,0.18)" : "rgba(251,191,36,0.15)")
             : "rgba(255,255,255,0.04)",
-          border:      mode === id
+          border: mode === id
             ? (isHide ? "1px solid rgba(74,96,128,0.7)" : isCorner ? "1px solid rgba(167,139,250,0.6)" : isDoor ? "1px solid rgba(251,191,36,0.6)" : isWindow ? "1px solid rgba(129,140,248,0.6)" : "1px solid rgba(251,191,36,0.5)")
             : "1px solid rgba(255,255,255,0.1)",
-          color:       mode === id
+          color: mode === id
             ? (isHide ? "#94a3b8" : isCorner ? "#a78bfa" : isDoor ? "#fbbf24" : isWindow ? "#818cf8" : "#fbbf24")
             : "rgba(200,220,255,0.6)",
           cursor: "pointer", transition: "all 0.15s",
@@ -968,6 +1036,70 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
       {iconBtn("↩", onUndo, !canUndo, "Undo (Ctrl+Z)")}
       {iconBtn("↪", onRedo, !canRedo, "Redo (Ctrl+Y)")}
 
+      <div style={{ width: 1, height: 18, background: "rgba(255,255,255,0.12)", margin: "0 4px" }} />
+
+      {/* Snap controls */}
+      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+        <span style={{ fontSize: 10.5, color: "var(--text-3, rgba(200,220,255,0.5))", fontWeight: 600, display: "flex", alignItems: "center", gap: 3 }}>
+          🧲 Grid:
+        </span>
+        <div style={{
+          display: "flex",
+          borderRadius: 5,
+          overflow: "hidden",
+          border: "1px solid var(--border, rgba(255,255,255,0.12))",
+          background: "var(--surface-1, rgba(0,0,0,0.3))",
+        }}>
+          {SNAP_PRESETS.map(p => {
+            const active = gridStep === p.value;
+            return (
+              <button
+                key={p.value}
+                onClick={() => onGridStep(p.value)}
+                title={p.title}
+                style={{
+                  padding: "3px 8px",
+                  fontSize: 10.5,
+                  fontWeight: active ? 700 : 500,
+                  cursor: "pointer",
+                  border: "none",
+                  borderRight: "1px solid var(--border, rgba(255,255,255,0.08))",
+                  background: active ? "var(--accent-dim, rgba(0,200,224,0.2))" : "transparent",
+                  color: active ? "var(--accent, #00c8e0)" : "var(--text-3, rgba(200,220,255,0.5))",
+                  transition: "all 0.15s ease",
+                  fontFamily: "Inter, sans-serif",
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Vertex snap toggle */}
+        <button
+          onClick={onToggleSnapToVertices}
+          title={snapToVertices ? "Vertex Snap ON (click to disable snapping to wall endpoints)" : "Vertex Snap OFF (click to enable snapping to wall endpoints)"}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "3px 8px",
+            borderRadius: 5,
+            fontSize: 10.5,
+            fontWeight: snapToVertices ? 600 : 400,
+            cursor: "pointer",
+            border: snapToVertices ? "1px solid rgba(251,191,36,0.5)" : "1px solid var(--border, rgba(255,255,255,0.1))",
+            background: snapToVertices ? "rgba(251,191,36,0.15)" : "transparent",
+            color: snapToVertices ? "#fbbf24" : "var(--text-3, rgba(200,220,255,0.4))",
+            transition: "all 0.15s ease",
+            fontFamily: "Inter, sans-serif",
+          }}
+        >
+          <span>{snapToVertices ? "⌖ Vertex ON" : "⌖ Vertex OFF"}</span>
+        </button>
+      </div>
+
       <div style={{ flex: 1 }} />
 
       <span style={{ fontSize: 10, color: "rgba(200,220,255,0.35)", fontFamily: "JetBrains Mono, monospace", display: "flex", gap: 6, alignItems: "center" }}>
@@ -998,10 +1130,10 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
         title="Save edits and recalculate rooms (Ctrl+S) — hidden walls excluded"
         style={{
           padding: "4px 10px", borderRadius: 5, fontSize: 11, fontWeight: 700,
-          background:   isDirty && saveState !== "saving" ? "rgba(0,200,80,0.15)" : "rgba(255,255,255,0.04)",
-          border:       isDirty && saveState !== "saving" ? "1px solid rgba(0,200,80,0.4)"  : "1px solid rgba(255,255,255,0.1)",
-          color:        isDirty && saveState !== "saving" ? "#00c850" : "rgba(150,160,180,0.4)",
-          cursor:       isDirty && saveState !== "saving" ? "pointer" : "not-allowed",
+          background: isDirty && saveState !== "saving" ? "rgba(0,200,80,0.15)" : "rgba(255,255,255,0.04)",
+          border: isDirty && saveState !== "saving" ? "1px solid rgba(0,200,80,0.4)" : "1px solid rgba(255,255,255,0.1)",
+          color: isDirty && saveState !== "saving" ? "#00c850" : "rgba(150,160,180,0.4)",
+          cursor: isDirty && saveState !== "saving" ? "pointer" : "not-allowed",
           transition: "all 0.15s", fontFamily: "Inter, sans-serif",
         }}
       >
@@ -1015,49 +1147,49 @@ function EditToolbar({ mode, onMode, canUndo, canRedo, onUndo, onRedo, isDirty, 
 
 const MODE_HINTS = {
   select: "Drag to pan · Scroll to zoom · Double-click to fit · Click room to select",
-  add:    "Click to place first point → click again to draw wall · Esc to cancel",
+  add: "Click to place first point → click again to draw wall · Esc to cancel",
   delete: "Click a wall to delete · Hold & drag to box-delete all walls in area · Esc to exit",
-  hide:   "Click a wall to hide/unhide · Hold & drag to box-hide all walls in area · Esc to exit",
+  hide: "Click a wall to hide/unhide · Hold & drag to box-hide all walls in area · Esc to exit",
   corner: "Click first wall → click second wall → both extend to their intersection  ·  Esc to cancel",
 };
-const ADD_HINT_FREE      = "Click to set first point  ·  then click to finish wall  ·  Esc to cancel";
-const ADD_HINT_PLACED    = "🔒 Snapping to 0°/45°/90°/135°  ·  Hold Shift for free angle  ·  Esc to cancel";
-const ADD_HINT_FREE_DRAW = "✏ Free angle — click to place wall  ·  Release Shift to snap  ·  Esc to cancel";
-const CORNER_HINT_STEP1  = "⌐ Select first wall to extend  ·  Esc to cancel";
-const CORNER_HINT_STEP2  = "⌐ Select second wall — both will extend to intersection  ·  Esc to cancel";
-const CORNER_HINT_NONE   = "⌐ No valid intersection found for these walls";
+const ADD_HINT_FREE = "Click to set first point  ·  Hold Alt for free snap  ·  Esc to cancel";
+const ADD_HINT_PLACED = "🔒 0°/45°/90° lock  ·  Shift: free angle  ·  Alt: free snap  ·  Esc to cancel";
+const ADD_HINT_FREE_DRAW = "✏ Free angle  ·  Alt: free snap  ·  Release Shift to lock  ·  Esc to cancel";
+const CORNER_HINT_STEP1 = "⌐ Select first wall to extend  ·  Esc to cancel";
+const CORNER_HINT_STEP2 = "⌐ Select second wall — both will extend to intersection  ·  Esc to cancel";
+const CORNER_HINT_NONE = "⌐ No valid intersection found for these walls";
 
 function ModeHint({ mode, addStep, freeDrawMode, cornerStep, cornerHasIntersection }) {
   let text;
   if (mode === "add") {
-    if (!addStep)          text = ADD_HINT_FREE;
+    if (!addStep) text = ADD_HINT_FREE;
     else if (freeDrawMode) text = ADD_HINT_FREE_DRAW;
-    else                   text = ADD_HINT_PLACED;
+    else text = ADD_HINT_PLACED;
   } else if (mode === "corner") {
-    if (cornerStep === 0)       text = CORNER_HINT_STEP1;
+    if (cornerStep === 0) text = CORNER_HINT_STEP1;
     else if (cornerStep === 1 && cornerHasIntersection) text = CORNER_HINT_STEP2;
-    else if (cornerStep === 1)  text = CORNER_HINT_NONE;
-    else                        text = MODE_HINTS.corner;
+    else if (cornerStep === 1) text = CORNER_HINT_NONE;
+    else text = MODE_HINTS.corner;
   } else {
     text = MODE_HINTS[mode] ?? "";
   }
   // Locked = default angle-snap mode while drawing
-  const isLocked  = mode === "add" && addStep && !freeDrawMode;
-  const isCorner  = mode === "corner";
+  const isLocked = mode === "add" && addStep && !freeDrawMode;
+  const isCorner = mode === "corner";
   const isNoInter = mode === "corner" && cornerStep === 1 && !cornerHasIntersection;
   return (
     <div style={{
       position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)",
       background: isLocked || isCorner ? "var(--surface-3)" : "var(--surface-1)",
       border: isLocked ? "1px solid var(--border-hi)"
-            : isCorner ? "1px solid rgba(167,139,250,0.5)"
-            : "1px solid var(--border)",
+        : isCorner ? "1px solid rgba(167,139,250,0.5)"
+          : "1px solid var(--border)",
       borderRadius: 6, padding: "4px 12px",
       fontSize: 10,
       color: isNoInter ? "#ef4444"
-           : isCorner  ? "#a78bfa"
-           : isLocked  ? "var(--accent)"
-           : mode === "select" ? "var(--text-3)" : "#f59e0b",
+        : isCorner ? "#a78bfa"
+          : isLocked ? "var(--accent)"
+            : mode === "select" ? "var(--text-3)" : "#f59e0b",
       fontFamily: "Inter, sans-serif", whiteSpace: "nowrap", pointerEvents: "none",
       boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
       transition: "all 0.15s",
@@ -1073,9 +1205,9 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, hidde
   const visibleAlgo = wallCount - userCount - hiddenCount;
   const TC = getTheme();
   const items = [
-    { color: TC.wall,     label: `Algo walls (${Math.max(0, visibleAlgo)})` },
+    { color: TC.wall, label: `Algo walls (${Math.max(0, visibleAlgo)})` },
     ...(userCount > 0 ? [{ color: TC.wallUser, label: `Added walls (${userCount})` }] : []),
-    { color: TC.door,   label: `Doors (${doorCount})` },
+    { color: TC.door, label: `Doors (${doorCount})` },
     { color: TC.window, label: `Windows (${windowCount})` },
     { color: TC.roomFills[0], label: `Rooms (${roomCount})`, fill: true },
   ];
@@ -1098,8 +1230,10 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, hidde
       ))}
       {hiddenCount > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 5, marginTop: 2 }}>
-          <div style={{ width: 14, height: 2, background: TC.wallHidden, borderRadius: 2, opacity: 0.6,
-            backgroundImage: `repeating-linear-gradient(90deg,${TC.wallHidden} 0 5px,transparent 5px 9px)` }} />
+          <div style={{
+            width: 14, height: 2, background: TC.wallHidden, borderRadius: 2, opacity: 0.6,
+            backgroundImage: `repeating-linear-gradient(90deg,${TC.wallHidden} 0 5px,transparent 5px 9px)`
+          }} />
           <span style={{ fontSize: 10.5, color: "var(--text-3)", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>👁 {hiddenCount} hidden</span>
         </div>
       )}
@@ -1117,14 +1251,14 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, hidde
 
 function Badge({ colour, children }) {
   const S = {
-    cyan:   { background: "var(--surface-3)", color: "var(--accent)", border: "1px solid var(--border-hi)" },
-    green:  { background: "var(--surface-3)", color: "#10b981", border: "1px solid var(--border-hi)"  },
+    cyan: { background: "var(--surface-3)", color: "var(--accent)", border: "1px solid var(--border-hi)" },
+    green: { background: "var(--surface-3)", color: "#10b981", border: "1px solid var(--border-hi)" },
     orange: { background: "var(--surface-3)", color: "#f59e0b", border: "1px solid var(--border-hi)" },
-    amber:  { background: "var(--surface-3)", color: "#f59e0b", border: "1px solid var(--border-hi)"},
-    grey:   { background: "var(--surface-3)", color: "var(--text-3)", border: "1px solid var(--border)"},
+    amber: { background: "var(--surface-3)", color: "#f59e0b", border: "1px solid var(--border-hi)" },
+    grey: { background: "var(--surface-3)", color: "var(--text-3)", border: "1px solid var(--border)" },
   };
   return (
-    <span style={{ display:"inline-flex", alignItems:"center", gap:4, padding:"2px 8px", borderRadius:4, fontSize:11, fontWeight:600, ...(S[colour]??S.grey) }}>
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, ...(S[colour] ?? S.grey) }}>
       {children}
     </span>
   );
@@ -1163,7 +1297,7 @@ function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect 
   const height = deriveRoomHeight(modelInfo, floorIdx);
   // Derive dimensions from bbox (length = Z span, width = X span)
   const roomLen = Math.abs(room.bbox.z_max - room.bbox.z_min);
-  const roomW   = Math.abs(room.bbox.x_max - room.bbox.x_min);
+  const roomW = Math.abs(room.bbox.x_max - room.bbox.x_min);
   // Orient so the larger value is shown first
   const dimA = Math.max(roomLen, roomW);
   const dimB = Math.min(roomLen, roomW);
@@ -1213,8 +1347,10 @@ function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect 
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
           <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Height</span>
-          <span style={{ fontSize: 11, fontFamily: "JetBrains Mono, monospace", fontWeight: 600,
-            color: height ? "var(--text-1)" : "var(--text-3)" }}>
+          <span style={{
+            fontSize: 11, fontFamily: "JetBrains Mono, monospace", fontWeight: 600,
+            color: height ? "var(--text-1)" : "var(--text-3)"
+          }}>
             {height ? `≈ ${height.toFixed(2)} m` : "—"}
           </span>
         </div>
@@ -1251,8 +1387,8 @@ function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect 
 
 export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, activeFloor = 0, roomMode = "polygon", saveName = null, onWallsSaved }) {
   const canvasRef = useRef(null);
-  const camRef    = useRef({ scale: 8, ox: 300, oy: 300 });
-  const rafRef    = useRef(null);
+  const camRef = useRef({ scale: 8, ox: 300, oy: 300 });
+  const rafRef = useRef(null);
 
   // Base URL prefix — either live API or a saved output
   const apiBase = saveName ? `/api/saves/${encodeURIComponent(saveName)}` : "/api";
@@ -1271,7 +1407,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       .then(d => {
         if (!cancelled && d) setSaveInfo(d);
       })
-      .catch(() => {});
+      .catch(() => { });
     return () => { cancelled = true; };
   }, [saveName]);
 
@@ -1286,9 +1422,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const [selectedFloor, setSelectedFloor] = useState(
     activeFloor === "all" || activeFloor == null ? 0 : Number(activeFloor)
   );
-  const [roomsData,     setRoomsData]     = useState(null);
-  const [openingsData,  setOpeningsData]  = useState(null);
-  const [loadState,     setLoadState]     = useState("idle");
+  const [roomsData, setRoomsData] = useState(null);
+  const [openingsData, setOpeningsData] = useState(null);
+  const [loadState, setLoadState] = useState("idle");
 
   // Keep selected floor in sync with activeFloor when provided
   useEffect(() => {
@@ -1310,27 +1446,27 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
 
   // ── Edit state ──────────────────────────────────────────────────────────────
   // editedLines: [{pts: [[x1,z1],[x2,z2]], source: 'algo'|'user', hidden?: true}]
-  const [editedLines,  setEditedLines]  = useState([]);
-  const [editMode,     setEditMode]     = useState("select");
-  const [addStep,      setAddStep]      = useState(null);   // first point of new wall
-  const [hoveredLine,  setHoveredLine]  = useState(-1);
-  const [isDirty,      setIsDirty]      = useState(false);
-  const [saveState,    setSaveState]    = useState("idle"); // idle|saving|saved|error
-  const [undoStack,    setUndoStack]    = useState([]);
-  const [redoStack,    setRedoStack]    = useState([]);
+  const [editedLines, setEditedLines] = useState([]);
+  const [editMode, setEditMode] = useState("select");
+  const [addStep, setAddStep] = useState(null);   // first point of new wall
+  const [hoveredLine, setHoveredLine] = useState(-1);
+  const [isDirty, setIsDirty] = useState(false);
+  const [saveState, setSaveState] = useState("idle"); // idle|saving|saved|error
+  const [undoStack, setUndoStack] = useState([]);
+  const [redoStack, setRedoStack] = useState([]);
 
   // Refs for event handlers (avoid stale closures)
-  const editModeRef    = useRef("select");
+  const editModeRef = useRef("select");
   const editedLinesRef = useRef([]);
-  const addStepRef     = useRef(null);
+  const addStepRef = useRef(null);
   const hoveredLineRef = useRef(-1);
-  const snapRef        = useRef(null);
-  const dragRef        = useRef(null);
+  const snapRef = useRef(null);
+  const dragRef = useRef(null);
   // Box-select drag state for delete/hide modes
   // { startCx, startCy, cx1, cy1, cx2, cy2, moved }
-  const boxSelectRef   = useRef(null);
+  const boxSelectRef = useRef(null);
   // Tracks whether Shift is currently held (for angle-snap in add mode)
-  const shiftRef       = useRef(false);
+  const shiftRef = useRef(false);
   // freeDrawMode: true when Shift is held to override the default 45° angle-lock
   const [freeDrawMode, setFreeDrawMode] = useState(false);
 
@@ -1341,35 +1477,45 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const [cornerHoverIdx, setCornerHoverIdx] = useState(-1);
   const [cornerIntersection, setCornerIntersection] = useState(null);
 
+  // ── Snap and grid resolution state ──────────────────────────────────────────
+  // gridStep: 0 (free placement), 0.01 (1cm), 0.05 (5cm), 0.10 (10cm), 0.50 (50cm)
+  const [gridStep, setGridStep] = useState(0.05);
+  const [snapToVertices, setSnapToVertices] = useState(true);
+
+  const gridStepRef = useRef(0.05);
+  const snapToVerticesRef = useRef(true);
+
   // ── Openings editing state ──────────────────────────────────────────────────
-  const [userOpenings,           setUserOpenings]           = useState([]);
-  const [openingsDirty,          setOpeningsDirty]          = useState(false);
-  const [selectedOpIdx,          setSelectedOpIdx]          = useState(null);
-  const [hoverManualOp,          setHoverManualOp]          = useState(-1);
-  const [hoverOp,                setHoverOp]                = useState(null); // { wallIdx, position_t }
+  const [userOpenings, setUserOpenings] = useState([]);
+  const [openingsDirty, setOpeningsDirty] = useState(false);
+  const [selectedOpIdx, setSelectedOpIdx] = useState(null);
+  const [hoverManualOp, setHoverManualOp] = useState(-1);
+  const [hoverOp, setHoverOp] = useState(null); // { wallIdx, position_t }
 
   // Tool parameter defaults
-  const [toolDoorWidth,          setToolDoorWidth]          = useState(0.9);
-  const [toolDoorHingeSide,      setToolDoorHingeSide]      = useState(1);
-  const [toolDoorSwingDir,       setToolDoorSwingDir]       = useState(1);
-  const [toolDoorTopMargin,      setToolDoorTopMargin]      = useState(0.7);
-  const [toolWindowWidth,        setToolWindowWidth]        = useState(1.2);
+  const [toolDoorWidth, setToolDoorWidth] = useState(0.9);
+  const [toolDoorHingeSide, setToolDoorHingeSide] = useState(1);
+  const [toolDoorSwingDir, setToolDoorSwingDir] = useState(1);
+  const [toolDoorTopMargin, setToolDoorTopMargin] = useState(0.7);
+  const [toolWindowWidth, setToolWindowWidth] = useState(1.2);
   const [toolWindowBottomMargin, setToolWindowBottomMargin] = useState(0.9);
-  const [toolWindowTopMargin,    setToolWindowTopMargin]    = useState(0.7);
+  const [toolWindowTopMargin, setToolWindowTopMargin] = useState(0.7);
 
-  const userOpeningsRef    = useRef([]);
-  const hoverManualOpRef   = useRef(-1);
-  const hoverOpeningRef    = useRef(null);
-  const selectedOpIdxRef   = useRef(null);
+  const userOpeningsRef = useRef([]);
+  const hoverManualOpRef = useRef(-1);
+  const hoverOpeningRef = useRef(null);
+  const selectedOpIdxRef = useRef(null);
 
-  useEffect(() => { editModeRef.current    = editMode;    }, [editMode]);
+  useEffect(() => { editModeRef.current = editMode; }, [editMode]);
   useEffect(() => { editedLinesRef.current = editedLines; }, [editedLines]);
-  useEffect(() => { addStepRef.current     = addStep;     }, [addStep]);
+  useEffect(() => { addStepRef.current = addStep; }, [addStep]);
   useEffect(() => { hoveredLineRef.current = hoveredLine; }, [hoveredLine]);
-  useEffect(() => { userOpeningsRef.current  = userOpenings;  }, [userOpenings]);
+  useEffect(() => { userOpeningsRef.current = userOpenings; }, [userOpenings]);
   useEffect(() => { hoverManualOpRef.current = hoverManualOp; }, [hoverManualOp]);
-  useEffect(() => { hoverOpeningRef.current  = hoverOp;        }, [hoverOp]);
+  useEffect(() => { hoverOpeningRef.current = hoverOp; }, [hoverOp]);
   useEffect(() => { selectedOpIdxRef.current = selectedOpIdx; }, [selectedOpIdx]);
+  useEffect(() => { gridStepRef.current = gridStep; }, [gridStep]);
+  useEffect(() => { snapToVerticesRef.current = snapToVertices; }, [snapToVertices]);
 
   // ── Draw loop ───────────────────────────────────────────────────────────────
   // Keep a ref for highlightedRoomId to avoid stale closures in scheduleDraw
@@ -1386,7 +1532,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       const cam = camRef.current;
       const TC = getTheme(); // read current theme each frame
       ctx.fillStyle = TC.bg; ctx.fillRect(0, 0, w, h);
-      drawGrid(ctx, cam, w, h, TC);
+      drawGrid(ctx, cam, w, h, TC, gridStepRef.current);
       drawRooms(ctx, roomsData?.rooms, cam, highlightedRoomIdRef.current, TC);
       drawEditedWalls(
         ctx, editedLinesRef.current, cam,
@@ -1397,8 +1543,8 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       if (editModeRef.current === "corner") {
         const cs = cornerStateRef.current;
         drawCornerMode(ctx, editedLinesRef.current, cam, {
-          firstIdx:     cs ? cs.firstIdx : -1,
-          hoverIdx:     hoveredLineRef.current,
+          firstIdx: cs ? cs.firstIdx : -1,
+          hoverIdx: hoveredLineRef.current,
           intersection: cornerStateRef.current ? cornerIntersection : null,
         }, TC);
       }
@@ -1445,17 +1591,17 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const openingsDirtyRef = useRef(false);
   useEffect(() => { openingsDirtyRef.current = openingsDirty; }, [openingsDirty]);
   const hasFittedCamRef = useRef(false);
-  const didPanRef    = useRef(false);
+  const didPanRef = useRef(false);
   const prevFloorRef = useRef(selectedFloor);
-  const prevSaveRef  = useRef(saveName);
+  const prevSaveRef = useRef(saveName);
 
   // ── Fetch floor data when selected floor, dataVersion or saveName changes ──
   useEffect(() => {
     let cancelled = false;
     const floorChanged = prevFloorRef.current !== selectedFloor;
-    const saveChanged  = prevSaveRef.current  !== saveName;
+    const saveChanged = prevSaveRef.current !== saveName;
     prevFloorRef.current = selectedFloor;
-    prevSaveRef.current  = saveName;
+    prevSaveRef.current = saveName;
 
     // If floor or save changed, reset everything and show loading
     if (floorChanged || saveChanged) {
@@ -1608,7 +1754,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       setSaveState("saved");
       onWallsSaved?.();
       // Refresh rooms from updated backend
-      fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => {});
+      fetch(`${apiBase}/rooms/${selectedFloor}`).then(r => r.json()).then(setRoomsData).catch(() => { });
       setTimeout(() => setSaveState("idle"), 3000);
     } catch {
       setSaveState("error");
@@ -1617,7 +1763,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   }, [isDirty, openingsDirty, selectedFloor, apiBase, roomMode, onWallsSaved, openingsData]);
 
   // redraw when data changes
-  useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, userOpenings, selectedOpIdx, hoverManualOp, hoverOp, highlightedRoomId, scheduleDraw]);
+  useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, userOpenings, selectedOpIdx, hoverManualOp, hoverOp, highlightedRoomId, gridStep, snapToVertices, scheduleDraw]);
 
   // ── Center camera on selected room ──────────────────────────────────────────
   useEffect(() => {
@@ -1685,13 +1831,13 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         return;
       }
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        if (e.key === "s" || e.key === "S") { setEditMode("select");     editModeRef.current = "select";     scheduleDraw(); }
-        if (e.key === "a" || e.key === "A") { setEditMode("add");        editModeRef.current = "add";        scheduleDraw(); }
-        if (e.key === "q" || e.key === "Q") { setEditMode("add-door");   editModeRef.current = "add-door";   scheduleDraw(); }
+        if (e.key === "s" || e.key === "S") { setEditMode("select"); editModeRef.current = "select"; scheduleDraw(); }
+        if (e.key === "a" || e.key === "A") { setEditMode("add"); editModeRef.current = "add"; scheduleDraw(); }
+        if (e.key === "q" || e.key === "Q") { setEditMode("add-door"); editModeRef.current = "add-door"; scheduleDraw(); }
         if (e.key === "w" || e.key === "W") { setEditMode("add-window"); editModeRef.current = "add-window"; scheduleDraw(); }
-        if (e.key === "d" || e.key === "D") { setEditMode("delete");     editModeRef.current = "delete";     scheduleDraw(); }
-        if (e.key === "h" || e.key === "H") { setEditMode("hide");       editModeRef.current = "hide";       scheduleDraw(); }
-        if (e.key === "c" || e.key === "C") { setEditMode("corner");     editModeRef.current = "corner";     scheduleDraw(); }
+        if (e.key === "d" || e.key === "D") { setEditMode("delete"); editModeRef.current = "delete"; scheduleDraw(); }
+        if (e.key === "h" || e.key === "H") { setEditMode("hide"); editModeRef.current = "hide"; scheduleDraw(); }
+        if (e.key === "c" || e.key === "C") { setEditMode("corner"); editModeRef.current = "corner"; scheduleDraw(); }
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1764,17 +1910,22 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
     if (mode !== "select") {
       const [wx, wz] = getWorldFromEvent(e);
       const shiftHeld = e.shiftKey;
+      const altHeld = e.altKey;
       shiftRef.current = shiftHeld;
+
+      // Alt key temporarily forces free placement and ignores snapping
+      const effectiveGridStep = altHeld ? 0 : gridStepRef.current;
+      const effectiveSnapEp = altHeld ? false : snapToVerticesRef.current;
 
       if (mode === "add" && addStepRef.current) {
         if (shiftHeld) {
-          // Shift held → free-angle (no constraint), just endpoint/grid snap
-          snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current);
+          // Shift held → free-angle (no constraint), endpoint/grid snap according to settings
+          snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current, 14, effectiveGridStep, effectiveSnapEp);
           if (!freeDrawMode) setFreeDrawMode(true);
         } else {
           // Default: 45° angle-constrained snap from the first point
           const [ax, az] = addStepRef.current;
-          snapRef.current = computeSnapConstrained(wx, wz, editedLinesRef.current, camRef.current, ax, az);
+          snapRef.current = computeSnapConstrained(wx, wz, editedLinesRef.current, camRef.current, ax, az, 14, effectiveGridStep, effectiveSnapEp);
           if (freeDrawMode) setFreeDrawMode(false);
         }
       } else if (mode === "corner") {
@@ -1794,7 +1945,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
           setCornerIntersection(null);
         }
       } else {
-        snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current);
+        snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current, 14, effectiveGridStep, effectiveSnapEp);
         if (freeDrawMode) setFreeDrawMode(false);
       }
 
@@ -2229,26 +2380,26 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
       setUndoStack([]); setRedoStack([]);
       setIsDirty(false); setAddStep(null); addStepRef.current = null;
       scheduleDraw();
-    }).catch(() => {});
+    }).catch(() => { });
     fetch(`${apiBase}/openings/${selectedFloor}`).then(r => r.json()).then(o => {
       const uo = o?.user_openings ?? [];
       setUserOpenings(uo); userOpeningsRef.current = uo;
       setOpeningsData(o);
       setOpeningsDirty(false); setSelectedOpIdx(null);
       scheduleDraw();
-    }).catch(() => {});
+    }).catch(() => { });
   }, [selectedFloor, apiBase, scheduleDraw]);
 
   // ── Derived metrics ─────────────────────────────────────────────────────────
-  const wallCount    = editedLines.length;
-  const userCount    = editedLines.filter(l => l.source === "user" && !l.hidden).length;
-  const hiddenCount  = editedLines.filter(l => l.hidden).length;
-  const roomCount    = roomsData?.rooms?.length ?? 0;
-  const openings     = [...(openingsData?.openings ?? []), ...userOpenings];
-  const doorCount    = openings.filter(o => o.type === "door").length;
-  const windowCount  = openings.filter(o => o.type === "window").length;
+  const wallCount = editedLines.length;
+  const userCount = editedLines.filter(l => l.source === "user" && !l.hidden).length;
+  const hiddenCount = editedLines.filter(l => l.hidden).length;
+  const roomCount = roomsData?.rooms?.length ?? 0;
+  const openings = [...(openingsData?.openings ?? []), ...userOpenings];
+  const doorCount = openings.filter(o => o.type === "door").length;
+  const windowCount = openings.filter(o => o.type === "window").length;
   const lowConfCount = openings.filter(o => (o.confidence ?? 1) < LOW_CONF_THRESHOLD).length;
-  const nWallsAnalysed     = openingsData?.n_walls_analysed ?? null;
+  const nWallsAnalysed = openingsData?.n_walls_analysed ?? null;
   const nWallsWithOpenings = openingsData?.n_walls_with_openings ?? null;
 
   const canUndo = undoStack.length > 0;
@@ -2263,12 +2414,12 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const cursorStyle = editMode === "select"
     ? (dragRef.current ? "grabbing" : "grab")
     : editMode === "add"
-    ? "crosshair"
-    : editMode === "corner"
-    ? (cornerHoverIdx >= 0 ? "pointer" : "crosshair")
-    : (boxSelectRef.current?.moved
-        ? "crosshair"
-        : hoveredLine >= 0 ? "pointer" : "crosshair");
+      ? "crosshair"
+      : editMode === "corner"
+        ? (cornerHoverIdx >= 0 ? "pointer" : "crosshair")
+        : (boxSelectRef.current?.moved
+          ? "crosshair"
+          : hoveredLine >= 0 ? "pointer" : "crosshair");
 
   const floorLabel = (i) => {
     if (!floors.length) return `Floor ${i}`;
@@ -2302,9 +2453,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {loadState === "loading" && <Badge colour="orange">⏳ Loading…</Badge>}
-          {loadState === "ready"   && <Badge colour="cyan">{wallCount}W · {doorCount}D · {windowCount}W · {roomCount}R</Badge>}
-          {isDirty                 && <Badge colour="amber">✎ Unsaved edits</Badge>}
-          {loadState === "error"   && <Badge colour="grey">⚠ API error</Badge>}
+          {loadState === "ready" && <Badge colour="cyan">{wallCount}W · {doorCount}D · {windowCount}W · {roomCount}R</Badge>}
+          {isDirty && <Badge colour="amber">✎ Unsaved edits</Badge>}
+          {loadState === "error" && <Badge colour="grey">⚠ API error</Badge>}
           <button className="fpv-close" onClick={onClose} title="Close">✕</button>
         </div>
       </div>
@@ -2346,14 +2497,15 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
           display: "flex", alignItems: "center", gap: 10,
           padding: "4px 14px", flexShrink: 0,
           background: lowConfCount > 0 ? "rgba(251,191,36,0.06)" : "rgba(0,200,80,0.04)",
-          borderBottom: `1px solid ${ lowConfCount > 0 ? "rgba(251,191,36,0.18)" : "rgba(0,200,80,0.12)"}`,
+          borderBottom: `1px solid ${lowConfCount > 0 ? "rgba(251,191,36,0.18)" : "rgba(0,200,80,0.12)"}`,
           fontSize: 10.5, fontFamily: "JetBrains Mono, monospace",
         }}>
           <span style={{ color: "rgba(200,220,255,0.45)" }}>
             {nWallsAnalysed != null ? `${nWallsAnalysed} walls analysed` : ""}
             {nWallsWithOpenings != null ? ` · ${nWallsWithOpenings} with openings` : ""}
           </span>
-          <span style={{ marginLeft: "auto",
+          <span style={{
+            marginLeft: "auto",
             color: lowConfCount > 0 ? "#fbbf24" : "#00c850",
             fontWeight: 600,
           }}>
@@ -2369,7 +2521,7 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         mode={editMode}
         onMode={(m) => {
           setEditMode(m); editModeRef.current = m;
-          if (m !== "add")    { addStepRef.current = null; setAddStep(null); scheduleDraw(); }
+          if (m !== "add") { addStepRef.current = null; setAddStep(null); scheduleDraw(); }
           if (m !== "corner") { cornerStateRef.current = null; setCornerStep(0); setCornerHoverIdx(-1); setCornerIntersection(null); }
           if (m !== "delete" && m !== "hide") { hoveredLineRef.current = -1; setHoveredLine(-1); scheduleDraw(); }
           snapRef.current = null;
@@ -2384,6 +2536,10 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         userCount={userCount}
         hiddenCount={hiddenCount}
         cornerStep={cornerStep}
+        gridStep={gridStep}
+        onGridStep={setGridStep}
+        snapToVertices={snapToVertices}
+        onToggleSnapToVertices={() => setSnapToVertices(v => !v)}
       />
 
       {/* ── Door / Window Parameter Subbar ───────────────────────────────────── */}

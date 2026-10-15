@@ -88,7 +88,7 @@ function computeSnap(wx, wz, lines, cam, pixThresh = 14) {
     if (d2 < best) { best = d2; snapped = { pt: [x2, z2], kind: "endpoint" }; }
   }
   if (snapped) return snapped;
-  const g = 0.5;
+  const g = 0.05;
   return { pt: [Math.round(wx / g) * g, Math.round(wz / g) * g], kind: "grid" };
 }
 
@@ -114,7 +114,7 @@ function computeSnapConstrained(wx, wz, lines, cam, fx, fz, pixThresh = 14) {
     }
   }
   if (epPt) return { pt: epPt, kind: "endpoint", angle, dist: Math.hypot(epPt[0] - fx, epPt[1] - fz), fromPt: [fx, fz] };
-  const g = 0.5, tS = Math.round(dist / g) * g;
+  const g = 0.05, tS = Math.round(dist / g) * g;
   return { pt: [fx + cosA * tS, fz + sinA * tS], kind: "angle", angle, dist: tS, fromPt: [fx, fz] };
 }
 
@@ -175,14 +175,26 @@ function distPointToOpening(wx, wz, op, lines) {
 
 // ── Draw functions ───────────────────────────────────────────────────────────
 function drawGrid(ctx, cam, w, h, TC) {
-  const step = 5 * cam.scale;
-  if (step < 10) return;
   ctx.save();
-  ctx.strokeStyle = TC.gridLine; ctx.lineWidth = 0.5; ctx.globalAlpha = 0.5;
-  let x = ((cam.ox % step) + step) % step;
-  for (; x < w; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
-  let y = ((cam.oy % step) + step) % step;
-  for (; y < h; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  // Minor grid lines at 0.05m if zoomed in
+  const minorStep = 0.05 * cam.scale;
+  if (minorStep >= 8) {
+    ctx.strokeStyle = TC.gridLine; ctx.lineWidth = 0.5; ctx.globalAlpha = 0.18;
+    let x = ((cam.ox % minorStep) + minorStep) % minorStep;
+    for (; x < w; x += minorStep) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    let y = ((cam.oy % minorStep) + minorStep) % minorStep;
+    for (; y < h; y += minorStep) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  }
+  // Major grid lines
+  let majorM = cam.scale < 6 ? 10.0 : (cam.scale < 18 ? 5.0 : 1.0);
+  const majorStep = majorM * cam.scale;
+  if (majorStep >= 10) {
+    ctx.strokeStyle = TC.gridLine; ctx.lineWidth = majorM === 1.0 ? 0.75 : 1.0; ctx.globalAlpha = 0.55;
+    let x = ((cam.ox % majorStep) + majorStep) % majorStep;
+    for (; x < w; x += majorStep) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    let y = ((cam.oy % majorStep) + majorStep) % majorStep;
+    for (; y < h; y += majorStep) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+  }
   ctx.restore();
 }
 
