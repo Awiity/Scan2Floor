@@ -23,7 +23,7 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
 const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
-export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, showBim3D = true, setShowBim3D, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave, cloudColors, setCloudColors }) {
+export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowTexture, textureOpacity = 0.85, setTextureOpacity, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, showBim3D = true, setShowBim3D, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave, cloudColors, setCloudColors }) {
   const cloudReady = backendStatus === "ready";
   const fmt = n => n?.toLocaleString?.() ?? "—";
 
@@ -717,6 +717,20 @@ export default function Sidebar({ showCloud, setShowCloud, showFloorPlan, setSho
           <div style={{flex:1}}><div className="layer-label">3D Walls & Floors</div><div className="layer-sub">Interactable 3D BIM entities</div></div>
           <Toggle checked={!!showBim3D} onChange={setShowBim3D}/>
         </div>
+
+        {/* ── Photo Texture Layer ── */}
+        <div className="layer-item" onClick={()=>setShowTexture?.(v=>!v)} style={{background:showTexture?"rgba(245,158,11,0.09)":undefined,borderRadius:10}}>
+          <div className="layer-icon" style={{background:"rgba(245,158,11,0.18)"}}>📷</div>
+          <div style={{flex:1}}><div className="layer-label">Photo Texture</div><div className="layer-sub">Matterport photos on 3D mesh</div></div>
+          <Toggle checked={!!showTexture} onChange={setShowTexture}/>
+        </div>
+        {showTexture && (
+          <div style={{padding:"2px 12px 8px",display:"flex",alignItems:"center",gap:8,fontSize:10,color:"var(--text-3)"}}>
+            <span>Opacity</span>
+            <input type="range" min="0.1" max="1" step="0.05" value={textureOpacity} onChange={e=>setTextureOpacity?.(parseFloat(e.target.value))} style={{flex:1,accentColor:"#f59e0b",cursor:"pointer"}}/>
+            <span>{Math.round(textureOpacity*100)}%</span>
+          </div>
+        )}
 
         {/* ── Point Cloud Colors ── */}
         <div style={{marginTop:8}}>

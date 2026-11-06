@@ -7,6 +7,7 @@ import {
   GizmoViewport,
 } from "@react-three/drei";
 import Sidebar from "./components/Sidebar";
+import TexturedMesh from "./components/TexturedMesh";
 import OBJModel from "./components/OBJModel"; // kept for future use — toggle removed from UI
 import PointCloud from "./components/PointCloud";
 import LoadingOverlay from "./components/LoadingOverlay";
@@ -28,6 +29,8 @@ export default function App() {
   /* ---------- layer visibility -------- */
   const [showMesh, setShowMesh] = useState(false); // reserved, toggle removed from UI
   const [showCloud, setShowCloud] = useState(false);
+  const [showTexture, setShowTexture] = useState(false);
+  const [textureOpacity, setTextureOpacity] = useState(0.85);
   const [showFloorPlan, setShowFloorPlan] = useState(false);
   const [showFloorPlanViewer, setShowFloorPlanViewer] = useState(false);
   const [showBim3D, setShowBim3D] = useState(true);
@@ -476,6 +479,10 @@ export default function App() {
           modelInfo={modelInfo}
           showMesh={showMesh}
           setShowMesh={setShowMesh}
+          showTexture={showTexture}
+          setShowTexture={setShowTexture}
+          textureOpacity={textureOpacity}
+          setTextureOpacity={setTextureOpacity}
           showCloud={showCloud}
           setShowCloud={setShowCloud}
           showFloorPlan={showFloorPlan}
@@ -540,6 +547,19 @@ export default function App() {
                   <OBJModel
                     modelInfo={modelInfo}
                     activeFloor={activeFloor}
+                    onLoadStart={() => {
+                      setMeshLoading(true);
+                      setMeshProgress(0);
+                    }}
+                    onProgress={(p) => setMeshProgress(p)}
+                    onLoaded={() => setMeshLoading(false)}
+                  />
+                )}
+                {showTexture && (
+                  <TexturedMesh
+                    modelInfo={modelInfo}
+                    activeFloor={activeFloor}
+                    opacity={textureOpacity}
                     onLoadStart={() => {
                       setMeshLoading(true);
                       setMeshProgress(0);

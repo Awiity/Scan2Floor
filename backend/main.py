@@ -104,6 +104,50 @@ app.add_middleware(
 
 app.mount("/model", StaticFiles(directory=MATTERPAK_DIR), name="model")
 
+# -- Photo-textured mesh layer ------------------------------------------------
+# mesh_textured.glb is produced by pipeline/convert_textured_glb.py from the
+# matterpak OBJ + jpg atlases. Looked up next to the active cloud.xyz first, then
+# MATTERPAK_DIR, then sibling matterpak* folders (matterpak_3 preferred).
+
+
+def _find_textured_mesh() -> Optional[str]:
+    cands = []
+    try:
+        cands.append(os.path.dirname(_get_xyz_path()))
+    except Exception:
+        pass
+    cands.append(MATTERPAK_DIR)
+    parent = os.path.dirname(MATTERPAK_DIR)
+    if os.path.isdir(parent):
+        sibs = sorted(
+            (d for d in os.listdir(parent) if d.startswith("matterpak")),
+            key=lambda d: (d != "matterpak_3", d),
+        )
+        cands += [os.path.join(parent, d) for d in sibs]
+    for d in cands:
+        p = os.path.join(d, "mesh_textured.glb")
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+@app.get("/api/textured-mesh/status")
+def textured_mesh_status():
+    p = _find_textured_mesh()
+    return {"available": p is not None, "path": p,
+            "size_mb": round(os.path.getsize(p) / 1e6, 1) if p else None}
+
+
+@app.get("/api/textured-mesh")
+def textured_mesh():
+    p = _find_textured_mesh()
+    if not p:
+        raise HTTPException(
+            status_code=404,
+            detail="mesh_textured.glb not found. Run: python backend/pipeline/convert_textured_glb.py data/matterpak_3",
+        )
+    return FileResponse(p, media_type="model/gltf-binary")
+
 
 # ── XYZ Path Configuration ──────────────────────────────────────────────────
 
