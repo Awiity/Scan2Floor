@@ -1,0 +1,14 @@
+# Build kontext držíme malý — data a klíče jdou jen jako volume, nikdy do image
+.venv/
+venv/
+data/
+registry/
+capture/
+objects.json
+points.json
+.env
+__pycache__/
+*.pyc
+.superpowers/
+tests/
+.git/

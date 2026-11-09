@@ -1,0 +1,17 @@
+# Tajné klíče
+.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Testovací artefakty
+/tmp-e2e/
+*.png
+
+# Velké vygenerované artefakty detekce
+capture/
+objects.json
+*.jpg
