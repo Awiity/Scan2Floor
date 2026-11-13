@@ -1,0 +1,770 @@
+[
+  {
+    "id": "pt_914bd380",
+    "name": "s1",
+    "sweep": "zhf83pe72b4zz9frkp9inurcb",
+    "position": {
+      "x": -6.966175556182861,
+      "y": 1.1292279958724976,
+      "z": -25.03896141052246
+    },
+    "rotation": {
+      "x": -25.18826473306232,
+      "y": 137.97899285171556
+    },
+    "mode": "mode.inside",
+    "created": "2026-10-26T12:31:46+00:00"
+  },
+  {
+    "id": "pt_eaa8eab1",
+    "name": "vaibariste1",
+    "sweep": "he69s11rurggn7dx8c9cfazgd",
+    "position": {
+      "x": -17.19649314880371,
+      "y": 4.641824245452881,
+      "z": -22.040124893188477
+    },
+    "rotation": {
+      "x": -21.92674632418511,
+      "y": 93.37095708668802
+    },
+    "mode": "mode.inside",
+    "created": "2026-10-26T12:32:50+00:00"
+  },
+  {
+    "id": "pt_30bc7ac5",
+    "name": "s2",
+    "sweep": "9i931i5wqbip60q3tpbd4ryia",
+    "position": {
+      "x": -4.87969446182251,
+      "y": 1.138903021812439,
+      "z": -25.055313110351562
+    },
+    "rotation": {
+      "x": -19.19387441338646,
+      "y": -89.82723184694326
+    },
+    "mode": "mode.inside",
+    "created": "2026-10-26T13:16:16+00:00"
+  },
+  {
+    "id": "pt_41a0e154",
+    "name": "romanoKancl",
+    "sweep": "c1f1zpgs245kqhsasdu2xq6ad",
+    "position": {
+      "x": -23.48181915283203,
+      "y": 4.61570405960083,
+      "z": -21.87906265258789
+    },
+    "rotation": {
+      "x": -37.115885920792515,
+      "y": -113.51170768929566
+    },
+    "mode": "mode.inside",
+    "created": "2026-10-26T15:26:11+00:00"
+  },
+  {
+    "id": "pt_eb7102a9",
+    "name": "hasicí přístroj 1",
+    "sweep": "r6y7q21e20b2kimwu0wycg42a",
+    "position": {
+      "x": -9.65,
+      "y": 4.118,
+      "z": -21.527
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 235.6
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_0432ffcb",
+    "name": "hasicí přístroj 2",
+    "sweep": "a2u72piu5yy7gs1i0ikhmtnqb",
+    "position": {
+      "x": -1.192,
+      "y": 1.132,
+      "z": -24.009
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 201.0
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_3b4631cc",
+    "name": "hasicí přístroj 3",
+    "sweep": "eqsi07yuty4q33tkw2hktn26d",
+    "position": {
+      "x": -29.441,
+      "y": 3.701,
+      "z": -21.015
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 107.4
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_b24ad077",
+    "name": "hasicí přístroj 4",
+    "sweep": "5y2uiwi6nw6m10efpbw0t8r4b",
+    "position": {
+      "x": -3.756,
+      "y": 1.313,
+      "z": -2.439
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 242.7
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_2055233f",
+    "name": "hasicí přístroj 5",
+    "sweep": "qmrfr19tgzuar1rf9iau187cb",
+    "position": {
+      "x": -1.163,
+      "y": 0.341,
+      "z": -6.713
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 207.9
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_efd533ea",
+    "name": "hasicí přístroj 6",
+    "sweep": "a56wb10mgwp0mhqkhap81pzrb",
+    "position": {
+      "x": -0.836,
+      "y": -1.973,
+      "z": -21.304
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 153.8
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_d9b21982",
+    "name": "hasicí přístroj 7",
+    "sweep": "573qci6yzq0dpdw08fcp0mgta",
+    "position": {
+      "x": -3.91,
+      "y": 1.076,
+      "z": -16.064
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 346.5
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_b59340a4",
+    "name": "hasicí přístroj 8",
+    "sweep": "3wa0r6zpc1et7x4gxphtp9mkb",
+    "position": {
+      "x": -3.23,
+      "y": -2.808,
+      "z": -12.031
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 28.9
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_079eed28",
+    "name": "hasicí přístroj 9",
+    "sweep": "2w25g7dgcyaswp5ma6ck28qrb",
+    "position": {
+      "x": -3.889,
+      "y": -2.555,
+      "z": -15.827
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 287.4
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_1ad0fffa",
+    "name": "hasicí přístroj 10",
+    "sweep": "eni9gdk3q4t1tq4xbxi75c4bc",
+    "position": {
+      "x": -0.689,
+      "y": -2.848,
+      "z": -6.978
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 10.2
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_262f6c9f",
+    "name": "hasicí přístroj 11",
+    "sweep": "a56wb10mgwp0mhqkhap81pzrb",
+    "position": {
+      "x": -0.649,
+      "y": -2.605,
+      "z": -27.335
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 14.2
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_b90f010f",
+    "name": "hasicí přístroj 12",
+    "sweep": "he69s11rurggn7dx8c9cfazgd",
+    "position": {
+      "x": -20.129,
+      "y": 3.991,
+      "z": -22.956
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 72.6
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_fed5b75c",
+    "name": "hasicí přístroj 13",
+    "sweep": "31877fgkt9tg9zzup6960d91c",
+    "position": {
+      "x": -0.748,
+      "y": -1.918,
+      "z": -23.223
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 5.5
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_94b8ce00",
+    "name": "hasicí přístroj 14",
+    "sweep": "rxpb4i4dq9u5rmqyc9u2s9gcd",
+    "position": {
+      "x": -0.651,
+      "y": -2.554,
+      "z": -5.963
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 154.3
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_77a2f80c",
+    "name": "hasicí přístroj 15",
+    "sweep": "nm3sw7i799uhhr8q6t827p03d",
+    "position": {
+      "x": 0.501,
+      "y": -2.301,
+      "z": -27.38
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 91.4
+    },
+    "mode": "",
+    "created": "2026-10-27T11:20:42+00:00"
+  },
+  {
+    "id": "pt_34d65dfb",
+    "name": "kamera 1",
+    "sweep": "r6y7q21e20b2kimwu0wycg42a",
+    "position": {
+      "x": -13.113,
+      "y": 6.228,
+      "z": -19.289
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 148.5
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_3332fe40",
+    "name": "kamera 2",
+    "sweep": "uw297e1dkh7b2taz048kat5id",
+    "position": {
+      "x": -12.914,
+      "y": -0.34,
+      "z": -18.685
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 171.8
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_fec223a6",
+    "name": "kamera 3",
+    "sweep": "ab92dpaynbqdyx6nbycw0076c",
+    "position": {
+      "x": -3.788,
+      "y": -0.517,
+      "z": -23.514
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 72.3
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_89d1992b",
+    "name": "kamera 4",
+    "sweep": "r3cc8zewe65q9rh3dus5w64nb",
+    "position": {
+      "x": -13.562,
+      "y": 6.118,
+      "z": -21.637
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 264.5
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_4cd96d82",
+    "name": "kamera 5",
+    "sweep": "hfq3ki3w3tii93ra7dr4mzqda",
+    "position": {
+      "x": -12.483,
+      "y": 3.016,
+      "z": -18.668
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 153.2
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_19012434",
+    "name": "kamera 6",
+    "sweep": "ah23uqmqcznuhmrf04kq8ma7a",
+    "position": {
+      "x": -9.761,
+      "y": 5.965,
+      "z": -21.337
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 186.9
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_9165a0b2",
+    "name": "kamera 7",
+    "sweep": "51xhcdeh5w62a3u597u2qq74c",
+    "position": {
+      "x": -8.647,
+      "y": -0.497,
+      "z": -11.877
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 71.4
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_495dbece",
+    "name": "kamera 8",
+    "sweep": "eqsrgcm6su5z2h7dq3iqqddkc",
+    "position": {
+      "x": -3.69,
+      "y": 2.734,
+      "z": -23.462
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 23.4
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_d02a978c",
+    "name": "kamera 9",
+    "sweep": "t03bppx2zekpmucrnpty2w1pa",
+    "position": {
+      "x": -0.727,
+      "y": -0.514,
+      "z": 0.195
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 100.2
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_1b093019",
+    "name": "kamera 10",
+    "sweep": "uiecgsb5hin945n2ryiq9h3ib",
+    "position": {
+      "x": -0.614,
+      "y": -0.682,
+      "z": -31.071
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 100.2
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_7eedf5d5",
+    "name": "kamera 11",
+    "sweep": "bu4s6yxb61n282cpmhwsw9eba",
+    "position": {
+      "x": 0.316,
+      "y": -0.468,
+      "z": -17.207
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 187.5
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_0dc1918c",
+    "name": "kamera 12",
+    "sweep": "xqhwbixwfipdnx67ekm73wg0c",
+    "position": {
+      "x": 3.916,
+      "y": -0.487,
+      "z": -20.035
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 4.8
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_114f5313",
+    "name": "kamera 13",
+    "sweep": "htefipf4wd0xe38xm6z6chm1d",
+    "position": {
+      "x": 4.853,
+      "y": -0.539,
+      "z": -9.852
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 344.5
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:01+00:00"
+  },
+  {
+    "id": "pt_dea07e8e",
+    "name": "kamera 1",
+    "sweep": "r6y7q21e20b2kimwu0wycg42a",
+    "position": {
+      "x": -13.113,
+      "y": 6.228,
+      "z": -19.289
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 148.5
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_73689e28",
+    "name": "kamera 2",
+    "sweep": "uw297e1dkh7b2taz048kat5id",
+    "position": {
+      "x": -12.914,
+      "y": -0.34,
+      "z": -18.685
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 171.8
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_d4bd1bd0",
+    "name": "kamera 3",
+    "sweep": "ab92dpaynbqdyx6nbycw0076c",
+    "position": {
+      "x": -3.788,
+      "y": -0.517,
+      "z": -23.514
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 72.3
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_3a1b6e09",
+    "name": "kamera 4",
+    "sweep": "r3cc8zewe65q9rh3dus5w64nb",
+    "position": {
+      "x": -13.562,
+      "y": 6.118,
+      "z": -21.637
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 264.5
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_4a884223",
+    "name": "kamera 5",
+    "sweep": "hfq3ki3w3tii93ra7dr4mzqda",
+    "position": {
+      "x": -12.483,
+      "y": 3.016,
+      "z": -18.668
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 153.2
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_7be71186",
+    "name": "kamera 6",
+    "sweep": "ah23uqmqcznuhmrf04kq8ma7a",
+    "position": {
+      "x": -9.761,
+      "y": 5.965,
+      "z": -21.337
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 186.9
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_bebfd11a",
+    "name": "kamera 7",
+    "sweep": "51xhcdeh5w62a3u597u2qq74c",
+    "position": {
+      "x": -8.647,
+      "y": -0.497,
+      "z": -11.877
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 71.4
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_7722aac1",
+    "name": "kamera 8",
+    "sweep": "eqsrgcm6su5z2h7dq3iqqddkc",
+    "position": {
+      "x": -3.69,
+      "y": 2.734,
+      "z": -23.462
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 23.4
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_8916d764",
+    "name": "kamera 9",
+    "sweep": "t03bppx2zekpmucrnpty2w1pa",
+    "position": {
+      "x": -0.727,
+      "y": -0.514,
+      "z": 0.195
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 100.2
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_fb7dc49b",
+    "name": "kamera 10",
+    "sweep": "uiecgsb5hin945n2ryiq9h3ib",
+    "position": {
+      "x": -0.614,
+      "y": -0.682,
+      "z": -31.071
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 100.2
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_debeb828",
+    "name": "kamera 11",
+    "sweep": "bu4s6yxb61n282cpmhwsw9eba",
+    "position": {
+      "x": 0.316,
+      "y": -0.468,
+      "z": -17.207
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 187.5
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_3f3c0796",
+    "name": "kamera 12",
+    "sweep": "xqhwbixwfipdnx67ekm73wg0c",
+    "position": {
+      "x": 3.916,
+      "y": -0.487,
+      "z": -20.035
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 4.8
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_3ab0a767",
+    "name": "kamera 13",
+    "sweep": "htefipf4wd0xe38xm6z6chm1d",
+    "position": {
+      "x": 4.853,
+      "y": -0.539,
+      "z": -9.852
+    },
+    "rotation": {
+      "x": 0.0,
+      "y": 344.5
+    },
+    "mode": "",
+    "created": "2026-10-27T17:13:30+00:00"
+  },
+  {
+    "id": "pt_ba451b72",
+    "name": "ucebna",
+    "sweep": "7b4qxm8dyzzmauqc8z3x033td",
+    "position": {
+      "x": -28.409658432006836,
+      "y": 4.614482402801514,
+      "z": -22.003400802612305
+    },
+    "rotation": {
+      "x": -18.224638660203844,
+      "y": 20.158558465090948
+    },
+    "mode": "mode.inside",
+    "created": "2026-11-02T10:24:00+00:00"
+  },
+  {
+    "id": "pt_426e77ed",
+    "name": "mujpohled",
+    "sweep": "pqt5rxu96n54kh5z0g0y2dgia",
+    "position": {
+      "x": -6.049972057342529,
+      "y": 1.1395186185836792,
+      "z": -27.01565170288086
+    },
+    "rotation": {
+      "x": -6.558188365558056,
+      "y": -85.49326072724884
+    },
+    "mode": "mode.inside",
+    "created": "2026-11-06T14:24:27+00:00"
+  },
+  {
+    "id": "pt_4e5603a4",
+    "name": "pok",
+    "sweep": "za0dn4nkbkrd7zu13cqh0xqwd",
+    "position": {
+      "x": -15.3018159866333,
+      "y": 4.655214309692383,
+      "z": -21.759775161743164
+    },
+    "rotation": {
+      "x": -12.710802095371045,
+      "y": -36.147157006010914
+    },
+    "mode": "mode.inside",
+    "created": "2026-11-09T12:53:53+00:00"
+  }
+]

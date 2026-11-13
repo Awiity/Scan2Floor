@@ -1,0 +1,55 @@
+# Matterport In3D — balíček pro jiný počítač
+#
+# Uživatel si spustí u sebe:  ./start.sh   (build + start)
+# a otevře:                   http://localhost:8017
+# → origin localhost → Matterport SDK klíč (svázaný s localhost) funguje
+#   bez licence. Na serveru se přistupuje přes SSH tunel (taktéž localhost):
+#   ssh -N -L 8017:localhost:8017 <server>
+#
+# Prostor (model) se přepíná proměnnou MP_MODEL_ID (v .env nebo shellu):
+#   MP_MODEL_ID=<model> docker compose up -d
+# Data každého prostoru leží v ./data/<model_id>/ (inventář si uživatel táhne
+# sebou; synchronizace s centrálním registrem — viz README).
+#
+# Varianty: target slim (UI/API) a full (+ Playwright pro pipeline):
+#   docker build --target full -t mp-in3d:full .
+#   docker compose run app python tools/capture_sweeps.py --base http://localhost:8017
+
+services:
+  app:
+    build:
+      context: .
+      target: ${MP_DOCKER_TARGET:-slim}
+    image: mp-in3d:${MP_DOCKER_TARGET:-slim}
+    # kontejner píše do mountnutého ./data/ jako uživatel hostitele (uid 1000)
+    # — soubory (points.json, export.ifc, …) nepatří rootovi a host je čte
+    user: "1000:1000"
+    ports:
+      # všechna rozhraní (0.0.0.0) — dosažitelné i jako http://<hostname>:8017
+      # z jiných zařízení v síti (remote režim UI); pozor: Matterport SDK klíč
+      # je svázaný s origin localhost — ze vzdáleného stroje přes hostname
+      # funguje remote režim, plný SDK náhled jen přes SSH tunel (viz README)
+      - "8017:8017"
+    environment:
+      MP_MODEL_ID: ${MP_MODEL_ID:-yQPhyaCwigp}
+      MP_HOST: "0.0.0.0"
+    volumes:
+      # data prostoru (inventář + snímky + body) — jen jako volume, nikdy do image
+      - ./data:/app/data
+      # .env zůstává u uživatele — klíče nejdou do image
+      - ./.env:/app/.env:ro
+
+  # Centrální registr inventářů (Task 5) — bez Matterport SDK, žádná licence.
+  # Běží samostatně i na serveru: docker compose --profile registry up -d registry
+  registry:
+    build:
+      context: .
+      target: slim
+    profiles: ["registry"]
+    # taky jako uživatel hostitele — registry/ soubory patří hostiteli
+    user: "1000:1000"
+    ports:
+      - "8019:8019"
+    command: ["uvicorn", "app.registry:app", "--host", "0.0.0.0", "--port", "8019"]
+    volumes:
+      - ./registry:/app/registry
