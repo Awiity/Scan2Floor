@@ -10,3 +10,6 @@ open3d
 opencv-python-headless
 ezdxf
 ifcopenshell
+httpx>=0.27.0
+websockets>=12.0
+Pillow>=10.0.0

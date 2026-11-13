@@ -13,6 +13,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { colorForMpLabel } from "./MpObjects3D";
 import { getCanvasTheme, getRoomAccent, withAlpha } from "../theme";
 
 // ── Colours — see src/theme.js (theme-aware, mirrors CSS tokens) ─────────────
@@ -545,6 +546,7 @@ const MODE_HINTS = {
 // ── Main Component ───────────────────────────────────────────────────────────
 export default function RoomEditorPanel({
   room, floor, modelInfo, saveName = null, onClose, onWallsChanged,
+  mpInstances = [],
 }) {
   const canvasRef = useRef(null);
   const camRef    = useRef({ scale: 20, ox: 300, oy: 300 });
@@ -742,10 +744,44 @@ export default function RoomEditorPanel({
         drawManualOpening(ctx, op, editedLinesRef.current, cam, TC, isSel, isHov);
       }
 
+      // Matterport equipment & AI door/window hints inside or adjacent to this room
+      if (room?.bbox && mpInstances?.length) {
+        const { x_min, x_max, z_min, z_max } = room.bbox;
+        const pad = 0.8;
+        for (const inst of mpInstances) {
+          const p = inst?.s2f_position;
+          if (!p) continue;
+          if (inst.floor_idx != null && inst.floor_idx !== floor) continue;
+          if (p.x < x_min - pad || p.x > x_max + pad || p.z < z_min - pad || p.z > z_max + pad) continue;
+          const sx = cam.ox + p.x * cam.scale;
+          const sy = cam.oy + p.z * cam.scale;
+          const isHint = inst.label === "dvere" || inst.label === "okno";
+          ctx.save();
+          if (isHint) {
+            ctx.setLineDash([4, 2]);
+            ctx.strokeStyle = inst.label === "dvere" ? "#4ade80" : "#818cf8";
+            ctx.lineWidth = 1.6;
+            ctx.strokeRect(sx - 7, sy - 7, 14, 14);
+            ctx.font = "9.5px Inter, sans-serif";
+            ctx.fillStyle = ctx.strokeStyle;
+            ctx.fillText(`AI ${inst.label}`, sx + 9, sy + 3);
+          } else {
+            const col = colorForMpLabel(inst.label);
+            ctx.beginPath();
+            ctx.arc(sx, sy, 4.5, 0, Math.PI * 2);
+            ctx.fillStyle = col;
+            ctx.fill();
+            ctx.font = "10px Inter, sans-serif";
+            ctx.fillText(inst.label, sx + 7, sy + 3);
+          }
+          ctx.restore();
+        }
+      }
+
       drawBoxSelect(ctx, boxSelectRef.current, editModeRef.current);
       drawScale(ctx, cam, W, H, TC);
     });
-  }, [room, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
+  }, [room, floor, mpInstances, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
 
   useEffect(() => { scheduleDraw(); }, [editedLines, manualOpenings, autoOpenings, selectedOpIdx, hoverManualOp, scheduleDraw]);
 

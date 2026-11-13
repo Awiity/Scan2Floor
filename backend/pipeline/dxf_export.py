@@ -23,6 +23,20 @@ LAYER_WINDOW = "A-WINDOW"
 LAYER_TEXT   = "A-TEXT"
 LAYER_GRID   = "A-GRID"
 LAYER_ROOM   = "A-ROOM"
+LAYER_EQUIP  = "A-EQUIP"
+
+
+def _load_mp_equipment(processed_dir: str, floor_idx: int) -> list[dict]:
+    try:
+        from matterport.coords import load_mp_instances_for_dir
+
+        return [
+            inst
+            for inst in load_mp_instances_for_dir(processed_dir, floor_idx)
+            if inst.get("label") not in {"dvere", "okno"}
+        ]
+    except Exception:
+        return []
 
 
 # ── DXF helpers ──────────────────────────────────────────────────────────────
@@ -336,6 +350,7 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
     doc.layers.add(LAYER_TEXT,   color=2)                   # yellow
     doc.layers.add(LAYER_GRID,   color=8,  lineweight=13)   # grey, 0.13 mm
     doc.layers.add(LAYER_ROOM,   color=6,  lineweight=13)   # magenta, dashed
+    doc.layers.add(LAYER_EQUIP,  color=1,  lineweight=18)   # red/orange, Matterport MEP/equipment
 
     # Wall segments
     for seg in lines:
@@ -384,12 +399,26 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
         msp.add_text(label, dxfattribs={"layer": LAYER_TEXT, "height": 0.25}) \
            .set_placement((cx, cy), align=TextEntityAlignment.MIDDLE_CENTER)
 
+    # ── Matterport Equipment (A-EQUIP layer) ─────────────────────────────────
+    equipment = _load_mp_equipment(processed_dir, floor_idx)
+    for eq in equipment:
+        pos = eq.get("s2f_position")
+        if not isinstance(pos, dict):
+            continue
+        ex = float(pos.get("x", 0.0))
+        ey = -float(pos.get("z", 0.0))
+        msp.add_circle((ex, ey), radius=0.14, dxfattribs={"layer": LAYER_EQUIP})
+        tag = str(eq.get("label", "equip"))
+        msp.add_text(tag, dxfattribs={"layer": LAYER_EQUIP, "height": 0.12}) \
+           .set_placement((ex + 0.18, ey + 0.10), align=TextEntityAlignment.LEFT)
+
     # ── Title ─────────────────────────────────────────────────────────────────
     n_doors   = len(doors)
     n_windows = len(windows)
     title = (
         f"Floor {floor_idx}  —  {len(lines)} walls"
         + (f"  ·  {n_doors} doors  ·  {n_windows} windows" if openings else "")
+        + (f"  ·  {len(equipment)} equipment" if equipment else "")
     )
     msp.add_text(title, dxfattribs={"layer": LAYER_TEXT, "height": 0.4}) \
        .set_placement((x_min, y_min - 2), align=TextEntityAlignment.LEFT)
@@ -400,17 +429,18 @@ def export_floor_dxf(floor_idx: int, processed_dir: str) -> str:
 
     # Companion SVG
     svg_path = os.path.join(processed_dir, f"floor_{floor_idx}.svg")
-    _write_svg(svg_path, lines, openings, rooms)
+    _write_svg(svg_path, lines, openings, rooms, equipment)
 
     return dxf_path
 
 
 # ── SVG preview ───────────────────────────────────────────────────────────────
 
-def _write_svg(path: str, lines: list, openings: list = None, rooms: list = None):
-    """Write an SVG preview with rooms (semi-transparent), walls (cyan), doors (green), windows (magenta)."""
+def _write_svg(path: str, lines: list, openings: list = None, rooms: list = None, equipment: list = None):
+    """Write an SVG preview with rooms (semi-transparent), walls (cyan), doors (green), windows (magenta), equipment (amber)."""
     openings = openings or []
     rooms = rooms or []
+    equipment = equipment or []
 
     if not lines:
         with open(path, "w") as f:
@@ -574,6 +604,15 @@ def _write_svg(path: str, lines: list, openings: list = None, rooms: list = None
                 f'stroke="#e879f9" stroke-width="2.5"/>'
             )
 
+    # ── Equipment markers ─────────────────────────────────────────────────
+    for eq in equipment:
+        pos = eq.get("s2f_position")
+        if not isinstance(pos, dict):
+            continue
+        ex = tx(float(pos.get("x", 0.0)))
+        ey = ty(-float(pos.get("z", 0.0)))
+        parts.append(f'<circle cx="{ex:.1f}" cy="{ey:.1f}" r="4" fill="#f59e0b" stroke="#0f172a" stroke-width="1"/>')
+
     # Legend
     n_doors   = sum(1 for o in openings if o["type"] == "door")
     n_windows = sum(1 for o in openings if o["type"] == "window")
@@ -590,6 +629,11 @@ def _write_svg(path: str, lines: list, openings: list = None, rooms: list = None
         legend_items += [
             f'<rect x="{SVG_W-180}" y="50" width="12" height="3" fill="#e879f9"/>',
             f'<text x="{SVG_W-163}" y="56" fill="#e879f9" font-size="11">Windows ({n_windows})</text>',
+        ]
+    if equipment:
+        legend_items += [
+            f'<circle cx="{SVG_W-174}" cy="68" r="4" fill="#f59e0b"/>',
+            f'<text x="{SVG_W-163}" y="72" fill="#f59e0b" font-size="11">Equipment ({len(equipment)})</text>',
         ]
 
     svg = (

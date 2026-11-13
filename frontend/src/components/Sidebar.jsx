@@ -26,7 +26,7 @@ function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, 
 const STAGE_NAMES = ["Clean Point Cloud","Preprocess XYZ","Cloud2BIM Slabs","Import Floor Levels","Extract Wall Slices","Detect Walls & Rooms"];
 const S = { fontSize:11, fontWeight:700 };
 
-export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowTexture, textureOpacity = 0.85, setTextureOpacity, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, showBim3D = true, setShowBim3D, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave, cloudColors, setCloudColors }) {
+export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowTexture, textureOpacity = 0.85, setTextureOpacity, showFloorPlan, setShowFloorPlan, showFloorPlanViewer, setShowFloorPlanViewer, showBim3D = true, setShowBim3D, showMpEquip = true, setShowMpEquip, showMpSweeps = false, setShowMpSweeps, showMpShowcase = false, setShowMpShowcase, mpStats = null, modelInfo, backendStatus, cloudPoints, activeFloor, setActiveFloor, onReprocessDone, onWallsDetected, className, roomMode, setRoomMode, onLoadSave, cloudColors, setCloudColors }) {
   const cloudReady = backendStatus === "ready";
   const fmt = n => n?.toLocaleString?.() ?? "—";
 
@@ -734,6 +734,32 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
             <span>{Math.round(textureOpacity*100)}%</span>
           </div>
         )}
+
+        {/* ── Matterport Equipment & 360° Layers ── */}
+        <div className="layer-item" onClick={()=>setShowMpEquip?.(v=>!v)} style={{background:showMpEquip?"rgba(56,189,248,0.08)":undefined,borderRadius:10}}>
+          <div className="layer-icon" style={{background:"rgba(56,189,248,0.18)"}}>📦</div>
+          <div style={{flex:1}}>
+            <div className="layer-label">3D Equipment & MEP</div>
+            <div className="layer-sub">{mpStats ? `${mpStats.instances} items · ${mpStats.points} pts` : "Matterport asset inventory"}</div>
+          </div>
+          <Toggle checked={!!showMpEquip} onChange={setShowMpEquip}/>
+        </div>
+        <div className="layer-item" onClick={()=>setShowMpSweeps?.(v=>!v)} style={{background:showMpSweeps?"rgba(96,165,250,0.08)":undefined,borderRadius:10}}>
+          <div className="layer-icon" style={{background:"rgba(96,165,250,0.18)"}}>🔵</div>
+          <div style={{flex:1}}>
+            <div className="layer-label">360° Sweep Nodes</div>
+            <div className="layer-sub">{mpStats ? `${mpStats.sweeps} panoramas` : "Floor capture positions"}</div>
+          </div>
+          <Toggle checked={!!showMpSweeps} onChange={setShowMpSweeps}/>
+        </div>
+        <div className="layer-item" onClick={()=>setShowMpShowcase?.(v=>!v)} style={{background:showMpShowcase?"rgba(168,85,247,0.10)":undefined,borderRadius:10}}>
+          <div className="layer-icon" style={{background:"rgba(168,85,247,0.18)"}}>🌐</div>
+          <div style={{flex:1}}>
+            <div className="layer-label">360° Showcase Panel</div>
+            <div className="layer-sub">Tour, inventory & IFC4 export</div>
+          </div>
+          <Toggle checked={!!showMpShowcase} onChange={setShowMpShowcase}/>
+        </div>
 
         {/* ── Point Cloud Colors ── */}
         <div style={{marginTop:8}}>

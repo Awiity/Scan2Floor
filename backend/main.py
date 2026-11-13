@@ -24,6 +24,11 @@ from pipeline.room_detection import detect_rooms_for_floor
 from pipeline.wall_detection_c2b import detect_walls_c2b_for_floor
 from pipeline.floor_from_c2b import update_floor_levels_from_c2b
 import pipeline.run_pipeline as _pipeline
+from matterport.config import MODEL_ID, bootstrap_model_data, resolve_paths as resolve_mp_paths
+from matterport.objects import ObjectStore as MpObjectStore
+from matterport.points import PointStore as MpPointStore
+from matterport.registry_sync import start_sync_loop as start_mp_sync_loop
+from matterport.router import invalidate_store_cache as invalidate_mp_cache, router as matterport_router
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -103,6 +108,17 @@ app.add_middleware(
 )
 
 app.mount("/model", StaticFiles(directory=MATTERPAK_DIR), name="model")
+app.include_router(matterport_router)
+
+
+@app.on_event("startup")
+def _startup_matterport() -> None:
+    """Seed Matterport dataset (if present) and start optional DCUK registry sync."""
+    bootstrap_model_data(MODEL_ID)
+    mp_paths = resolve_mp_paths(MODEL_ID)
+    ps = MpPointStore(path=mp_paths["points"], model_id=MODEL_ID)
+    os_store = MpObjectStore(path=mp_paths["objects"], model_id=MODEL_ID)
+    start_mp_sync_loop(ps, os_store, model_id=MODEL_ID)
 
 # -- Photo-textured mesh layer ------------------------------------------------
 # mesh_textured.glb is produced by pipeline/convert_textured_glb.py from the
@@ -1233,6 +1249,18 @@ def create_save(payload: SavePayload):
             dst = os.path.join(save_path, os.path.basename(src))
             shutil.copy2(src, dst)
             copied.append(os.path.basename(src))
+
+    # Also snapshot active Matterport viewpoints and equipment inventory
+    try:
+        mp_paths = resolve_mp_paths(MODEL_ID)
+        for src_key, dst_name in (("points", "mp_points.json"), ("objects", "mp_objects.json")):
+            src_mp = str(mp_paths[src_key])
+            if os.path.isfile(src_mp):
+                shutil.copy2(src_mp, os.path.join(save_path, dst_name))
+                copied.append(dst_name)
+        invalidate_mp_cache(name)
+    except Exception:
+        pass
 
     # Write meta
     import time as _time

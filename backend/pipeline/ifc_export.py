@@ -561,10 +561,78 @@ def _assign_elements_to_rooms(walls: list, openings: list,
 # Main storey assembler
 # ---------------------------------------------------------------------------
 
+def _ifc2x3_class_for_label(label: str) -> str:
+    """Map canonical Matterport object label to a valid IFC2x3 spatial element class."""
+    if label in {"stul", "zidle", "skrin"}:
+        return "IfcFurnishingElement"
+    if label in {
+        "hasici_pristroj", "hydrant", "radiator", "kotel", "klimatizace",
+        "ventilace", "umyvadlo", "wc", "sprcha", "svitidlo", "nouzove_osvetleni",
+        "zasuvka", "vypinac", "rozvadec", "potrubi",
+    }:
+        return "IfcFlowTerminal"
+    if label in {"kamera", "detektor_koure", "monitor"}:
+        return "IfcDiscreteAccessory"
+    return "IfcBuildingElementProxy"
+
+
+def _build_mp_equipment(
+    f,
+    owner,
+    body_sub,
+    floor_idx: int,
+    storey_placement,
+    storey_elevation: float,
+    mp_instances: list[dict],
+) -> list[tuple[dict, object]]:
+    """Build IFC2x3 equipment elements + Matterport PropertySets for a single floor."""
+    created: list[tuple[dict, object]] = []
+    for idx, inst in enumerate(mp_instances):
+        pos = inst.get("s2f_position")
+        if not isinstance(pos, dict):
+            continue
+        label = str(inst.get("label", "other"))
+        iid = str(inst.get("instance_id", f"mp_{idx}"))
+        # Skip raw structural openings since walls already carry parametric IfcDoor/IfcWindow
+        if label in {"dvere", "okno"}:
+            continue
+        x_cad = float(pos.get("x", 0.0))
+        y_cad = -float(pos.get("z", 0.0))
+        z_rel = float(pos.get("y", storey_elevation)) - float(storey_elevation)
+
+        pl = _ifc_local_placement(f, storey_placement, location=(x_cad, y_cad, z_rel))
+        shape_rep = _box_repr(f, 0.22, 0.22, 0.22, body_sub)
+        prod_shape = f.createIfcProductDefinitionShape(None, None, [shape_rep])
+        cls_name = _ifc2x3_class_for_label(label)
+        creator = getattr(f, f"create{cls_name}", f.createIfcBuildingElementProxy)
+        if cls_name == "IfcBuildingElementProxy":
+            elem = creator(_guid(), owner, f"{label}_{iid}", None, None, pl, prod_shape, iid, "ELEMENT")
+        elif cls_name == "IfcDiscreteAccessory":
+            elem = creator(_guid(), owner, f"{label}_{iid}", None, None, pl, prod_shape, iid)
+        else:
+            elem = creator(_guid(), owner, f"{label}_{iid}", None, None, pl, prod_shape, iid)
+
+        # Attach Matterport PropertySet
+        try:
+            props = [
+                f.createIfcPropertySingleValue("InstanceId", None, f.create_entity("IfcLabel", iid), None),
+                f.createIfcPropertySingleValue("Label", None, f.create_entity("IfcLabel", label), None),
+                f.createIfcPropertySingleValue("MaxScore", None, f.create_entity("IfcReal", float(inst.get("max_score", 0.0))), None),
+                f.createIfcPropertySingleValue("ObservationCount", None, f.create_entity("IfcInteger", int(inst.get("observation_count", 1))), None),
+            ]
+            pset = f.createIfcPropertySet(_guid(), owner, "Matterport", None, props)
+            f.createIfcRelDefinesByProperties(_guid(), owner, None, None, [elem], pset)
+        except Exception:
+            pass
+        created.append((inst, elem))
+    return created
+
+
 def _add_storey_elements(ifc_file, owner, body_sub,
                          floor_idx: int, storey, storey_placement,
                          lines: list, all_openings: list, rooms: list,
-                         storey_height: float, wall_thickness: float):
+                         storey_height: float, wall_thickness: float,
+                         mp_instances: Optional[list[dict]] = None):
     """
     Wires the exact tree hierarchy for FreeCAD & IFC viewers:
       IfcBuilding
@@ -593,11 +661,17 @@ def _add_storey_elements(ifc_file, owner, body_sub,
                             lines, storey_height, wall_thickness)
     openings = _build_openings(f, owner, body_sub, floor_idx, storey_placement,
                                all_openings, walls, wall_thickness)
+    mp_elems = _build_mp_equipment(
+        f, owner, body_sub, floor_idx, storey_placement,
+        float(storey.Elevation or 0.0), mp_instances or [],
+    )
 
     if spaces:
         primary_map, boundary_map, unassigned = _assign_elements_to_rooms(
             walls, openings, spaces, wall_thickness
         )
+        # Route Matterport equipment items into matching room containers (or floor unassigned)
+        room_container_by_id = {}
 
         room_containers = []
         for sp, sp_pl, _, room in spaces:
@@ -617,6 +691,7 @@ def _add_storey_elements(ifc_file, owner, body_sub,
                 storey.Elevation,
             )
             room_containers.append(room_container)
+            room_container_by_id[str(rid)] = sp
 
             # Aggregate the IfcSpace volume inside the Room container
             sp.Name = f"Space_{floor_idx}_{rid:04d}"
@@ -626,13 +701,16 @@ def _add_storey_elements(ifc_file, owner, body_sub,
                 room_container, [sp],
             )
 
-            # Contain the Room's Walls + Doors + Windows inside the Room container
-            elems = primary_map[sp]
+            # Contain the Room's Walls + Doors + Windows + Equipment inside the Room container
+            elems = list(primary_map[sp])
+            for inst, eq_elem in mp_elems:
+                if str(inst.get("room_id", "")) == str(rid):
+                    elems.append(eq_elem)
             if elems:
                 f.createIfcRelContainedInSpatialStructure(
                     _guid(), owner,
                     f"Room_{floor_idx}_{rid:04d}_Elements",
-                    "Walls, doors, and windows belonging to this room",
+                    "Walls, doors, windows, and equipment belonging to this room",
                     elems, room_container,
                 )
 
@@ -645,6 +723,10 @@ def _add_storey_elements(ifc_file, owner, body_sub,
                     )
                 except Exception:
                     pass
+
+        for inst, eq_elem in mp_elems:
+            if str(inst.get("room_id", "")) not in room_container_by_id:
+                unassigned.append(eq_elem)
 
         # Aggregate all Room containers under the Floor (Storey -> Rooms)
         if room_containers:
@@ -661,7 +743,11 @@ def _add_storey_elements(ifc_file, owner, body_sub,
             )
     else:
         # No rooms detected: place all elements directly under the Floor
-        all_elements = [w["ifc_elem"] for w in walls] + [o["ifc_elem"] for o in openings]
+        all_elements = (
+            [w["ifc_elem"] for w in walls]
+            + [o["ifc_elem"] for o in openings]
+            + [eq_elem for _, eq_elem in mp_elems]
+        )
         if all_elements:
             f.createIfcRelContainedInSpatialStructure(
                 _guid(), owner, f"Floor_{floor_idx}_Elements", None,
@@ -673,11 +759,23 @@ def _add_storey_elements(ifc_file, owner, body_sub,
 # Public Export API
 # ---------------------------------------------------------------------------
 
+def _safe_load_mp_instances(processed_dir: str, floor_idx: int, include_mp_equipment: bool) -> list[dict]:
+    if not include_mp_equipment:
+        return []
+    try:
+        from matterport.coords import load_mp_instances_for_dir
+
+        return load_mp_instances_for_dir(processed_dir, floor_idx)
+    except Exception:
+        return []
+
+
 def export_floor_ifc(
     floor_idx: int,
     processed_dir: str,
     output_path: Optional[str] = None,
     wall_thickness: float = WALL_THICKNESS_M,
+    include_mp_equipment: bool = True,
 ) -> str:
     """Export a single floor to an IFC 2x3 file."""
     if not _IFC_AVAILABLE:
@@ -744,11 +842,13 @@ def export_floor_ifc(
     ifc_file.createIfcRelAggregates(_guid(), owner, None, None, site,     [building])
     ifc_file.createIfcRelAggregates(_guid(), owner, None, None, building, [storey])
 
+    mp_instances = _safe_load_mp_instances(processed_dir, floor_idx, include_mp_equipment)
     _add_storey_elements(
         ifc_file, owner, body_sub,
         floor_idx, storey, storey_pl,
         lines, all_openings, rooms,
         storey_height, wall_thickness,
+        mp_instances=mp_instances,
     )
 
     if output_path is None:
@@ -761,6 +861,7 @@ def export_all_floors_ifc(
     processed_dir: str,
     output_path: Optional[str] = None,
     wall_thickness: float = WALL_THICKNESS_M,
+    include_mp_equipment: bool = True,
 ) -> str:
     """Export ALL floors into a single combined IFC 2x3 file."""
     if not _IFC_AVAILABLE:
@@ -842,11 +943,13 @@ def export_all_floors_ifc(
             with open(room_path) as fh:
                 rooms = json.load(fh).get("rooms", [])
 
+        mp_instances = _safe_load_mp_instances(processed_dir, floor_idx, include_mp_equipment)
         _add_storey_elements(
             ifc_file, owner, body_sub,
             floor_idx, storey, storey_pl,
             lines, all_openings, rooms,
             storey_height, wall_thickness,
+            mp_instances=mp_instances,
         )
 
     ifc_file.createIfcRelAggregates(_guid(), owner, None, None, building, storeys)

@@ -47,6 +47,7 @@ services:
       - ./data/matterpak:/data/matterpak:ro
       - ./data/matterpak_2:/data/matterpak_2:ro
       - ./data/matterpak_3:/data/matterpak_3:ro
+      - ./MatterportIn3D/data:/matterport_data:ro
       #
       # ── Add more scan mounts here (copy the line above and change paths):
       # - D:/scans/building_2:/data/building_2:ro
@@ -65,6 +66,15 @@ services:
       # SCAN_ROOTS: comma-separated dirs the file browser will walk.
       # Add extra roots if you mount scans outside /data.
       - SCAN_ROOTS=/data
+      # Matterport Showcase & object inventory
+      - MP_MODEL_ID=${MP_MODEL_ID:-yQPhyaCwigp}
+      - matterport_api_key=${matterport_api_key:-}
+      - MP_SDK_KEY=${MP_SDK_KEY:-}
+      - DCUK_REGISTRY_URL=${DCUK_REGISTRY_URL:-}
+      - DCUK_SYNC_INTERVAL=${DCUK_SYNC_INTERVAL:-300}
+      - DCUK_PORTAL_URL=${DCUK_PORTAL_URL:-}
+      - DCUK_USERNAME=${DCUK_USERNAME:-}
+      - DCUK_PASSWORD=${DCUK_PASSWORD:-}
 
     restart: unless-stopped
     healthcheck:
@@ -74,7 +84,23 @@ services:
       retries: 3
       start_period: 15s
 
+  mp-registry:
+    profiles: ["mp-registry"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: scan2floor-mp-registry
+    command: ["uvicorn", "matterport.registry:app", "--host", "0.0.0.0", "--port", "8019"]
+    ports:
+      - "8019:8019"
+    volumes:
+      - mp_registry_data:/app/registry_data
+    environment:
+      - REGISTRY_DATA_DIR=/app/registry_data
+    restart: unless-stopped
+
 volumes:
   # Named volume — data is preserved across `docker compose up/down` cycles.
   # To reset all pipeline outputs: docker volume rm scan2floor_processed_data
   processed_data:
+  mp_registry_data:

@@ -12,7 +12,8 @@
  *   hidden wall  #4a5568  (slate-grey, dashed, excluded from room recalc)
  */
 
-import { useState, useEffect, useRef, useCallback } from "react"; e
+import { useState, useEffect, useRef, useCallback } from "react";
+import { colorForMpLabel } from "./MpObjects3D";
 
 // ── Colour constants — theme-aware ────────────────────────────────────────────
 // Returns a palette matching the current data-theme on the root .app element.
@@ -96,6 +97,115 @@ function toCanvas(wx, wz, cam) {
 
 function toWorld(cx, cy, cam) {
   return [(cx - cam.ox) / cam.scale, (cy - cam.oy) / cam.scale];
+}
+
+function drawMpOverlays2D(
+  ctx,
+  cam,
+  selectedFloor,
+  {
+    mpInstances = [],
+    mpSweeps = {},
+    mpPoints = [],
+    livePose = null,
+    showEquip = true,
+    showSweeps = false,
+    showAiHints = true,
+    selectedMpItem = null,
+  }
+) {
+  const onFloor = (item) =>
+    item?.s2f_position && (item.floor_idx == null || item.floor_idx === selectedFloor);
+
+  // 1. 360° Sweep nodes
+  if (showSweeps) {
+    for (const sw of Object.values(mpSweeps || {})) {
+      if (!onFloor(sw)) continue;
+      const [sx, sy] = toCanvas(sw.s2f_position.x, sw.s2f_position.z, cam);
+      const isSel = selectedMpItem?.kind === "sweep" && selectedMpItem?.data?.sweep_id === sw.sweep_id;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(sx, sy, isSel ? 6 : 4, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? "rgba(255,255,255,0.9)" : "rgba(96,165,250,0.28)";
+      ctx.strokeStyle = "#60a5fa";
+      ctx.lineWidth = isSel ? 2 : 1.2;
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // 2. AI Door/Window Hints & Equipment markers
+  for (const inst of mpInstances || []) {
+    if (!onFloor(inst)) continue;
+    const isOpeningHint = inst.label === "dvere" || inst.label === "okno";
+    if (isOpeningHint && !showAiHints) continue;
+    if (!isOpeningHint && !showEquip) continue;
+
+    const [cx, cy] = toCanvas(inst.s2f_position.x, inst.s2f_position.z, cam);
+    const isSel =
+      selectedMpItem?.kind === "instance" &&
+      selectedMpItem?.data?.instance_id === inst.instance_id;
+
+    ctx.save();
+    if (isOpeningHint) {
+      ctx.setLineDash([3, 2]);
+      ctx.beginPath();
+      ctx.arc(cx, cy, isSel ? 8 : 6, 0, Math.PI * 2);
+      ctx.strokeStyle = inst.label === "dvere" ? "#4ade80" : "#818cf8";
+      ctx.lineWidth = isSel ? 2.4 : 1.6;
+      ctx.stroke();
+    } else {
+      const col = colorForMpLabel(inst.label);
+      ctx.beginPath();
+      ctx.arc(cx, cy, isSel ? 6 : 4.2, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? "#ffffff" : col;
+      ctx.strokeStyle = "#0b1120";
+      ctx.lineWidth = 1.2;
+      ctx.fill();
+      ctx.stroke();
+      if (cam.scale >= 22 || isSel) {
+        ctx.font = "10px Inter, sans-serif";
+        ctx.fillStyle = col;
+        ctx.fillText(inst.label, cx + 6, cy + 3);
+      }
+    }
+    ctx.restore();
+  }
+
+  // 3. Saved viewpoints
+  for (const pt of mpPoints || []) {
+    if (!onFloor(pt)) continue;
+    const [px, py] = toCanvas(pt.s2f_position.x, pt.s2f_position.z, cam);
+    const isSel = selectedMpItem?.kind === "point" && selectedMpItem?.data?.id === pt.id;
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(Math.PI / 4);
+    ctx.fillStyle = isSel ? "#ffffff" : "#38bdf8";
+    ctx.fillRect(-4, -4, 8, 8);
+    ctx.restore();
+  }
+
+  // 4. Live 360° Showcase camera wedge
+  if (livePose?.s2f_position && (livePose.floor_idx == null || livePose.floor_idx === selectedFloor)) {
+    const [kx, ky] = toCanvas(livePose.s2f_position.x, livePose.s2f_position.z, cam);
+    const yawRad = ((Number(livePose.rotation?.y ?? 0) * Math.PI) / 180) + Math.PI / 2;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(kx, ky);
+    ctx.arc(kx, ky, 26, -yawRad - 0.55, -yawRad + 0.55);
+    ctx.closePath();
+    ctx.fillStyle = "rgba(251, 191, 36, 0.28)";
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(kx, ky, 5, 0, Math.PI * 2);
+    ctx.fillStyle = "#fbbf24";
+    ctx.strokeStyle = "#111827";
+    ctx.lineWidth = 1.5;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  }
 }
 
 function wallsBoundsFromEdited(editedLines) {
@@ -1385,7 +1495,24 @@ function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect 
   );
 }
 
-export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, highlightedRoomId, onSelectRoom, onSelectFloor, activeFloor = 0, roomMode = "polygon", saveName = null, onWallsSaved }) {
+export default function FloorPlanViewer({
+  modelInfo,
+  dataVersion = 0,
+  onClose,
+  highlightedRoomId,
+  onSelectRoom,
+  onSelectFloor,
+  activeFloor = 0,
+  roomMode = "polygon",
+  saveName = null,
+  onWallsSaved,
+  mpInstances = [],
+  mpSweeps = {},
+  mpPoints = [],
+  livePose = null,
+  selectedMpItem = null,
+  onSelectMpItem,
+}) {
   const canvasRef = useRef(null);
   const camRef = useRef({ scale: 8, ox: 300, oy: 300 });
   const rafRef = useRef(null);
@@ -1425,6 +1552,9 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
   const [roomsData, setRoomsData] = useState(null);
   const [openingsData, setOpeningsData] = useState(null);
   const [loadState, setLoadState] = useState("idle");
+  const [showMpEquip, setShowMpEquip] = useState(true);
+  const [showMpSweeps, setShowMpSweeps] = useState(false);
+  const [showMpAiHints, setShowMpAiHints] = useState(true);
 
   // Keep selected floor in sync with activeFloor when provided
   useEffect(() => {
@@ -1580,11 +1710,22 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         ctx.restore();
       }
 
+      drawMpOverlays2D(ctx, cam, selectedFloor, {
+        mpInstances,
+        mpSweeps,
+        mpPoints,
+        livePose,
+        showEquip: showMpEquip,
+        showSweeps: showMpSweeps,
+        showAiHints: showMpAiHints,
+        selectedMpItem,
+      });
+
       drawBoxSelect(ctx, boxSelectRef.current, editModeRef.current);
       drawScale(ctx, cam, w, h, TC);
       drawCompass(ctx, w);
     });
-  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin]);
+  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, mpInstances, mpSweeps, mpPoints, livePose, showMpEquip, showMpSweeps, showMpAiHints, selectedMpItem, selectedFloor]);
 
   const isDirtyRef = useRef(false);
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
@@ -2168,6 +2309,42 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
         scheduleDraw();
       }
 
+      // Check click on visible Matterport equipment / viewpoint / sweep markers
+      if (onSelectMpItem) {
+        const [mwx, mwz] = getWorldFromEvent(e);
+        const hitR = 10 / camRef.current.scale;
+        const onFloor = (item) =>
+          item?.s2f_position && (item.floor_idx == null || item.floor_idx === selectedFloor);
+
+        for (const pt of mpPoints || []) {
+          if (!onFloor(pt)) continue;
+          if (Math.hypot(pt.s2f_position.x - mwx, pt.s2f_position.z - mwz) <= hitR) {
+            onSelectMpItem({ kind: "point", data: pt });
+            return;
+          }
+        }
+        if (showMpEquip || showMpAiHints) {
+          for (const inst of mpInstances || []) {
+            if (!onFloor(inst)) continue;
+            const isHint = inst.label === "dvere" || inst.label === "okno";
+            if ((isHint && !showMpAiHints) || (!isHint && !showMpEquip)) continue;
+            if (Math.hypot(inst.s2f_position.x - mwx, inst.s2f_position.z - mwz) <= hitR) {
+              onSelectMpItem({ kind: "instance", data: inst });
+              return;
+            }
+          }
+        }
+        if (showMpSweeps) {
+          for (const sw of Object.values(mpSweeps || {})) {
+            if (!onFloor(sw)) continue;
+            if (Math.hypot(sw.s2f_position.x - mwx, sw.s2f_position.z - mwz) <= hitR) {
+              onSelectMpItem({ kind: "sweep", data: sw });
+              return;
+            }
+          }
+        }
+      }
+
       // Check if click falls inside a room polygon / bbox → toggle selection
       if (onSelectRoom && roomsData?.rooms?.length) {
         const [wx, wz] = getWorldFromEvent(e);
@@ -2472,7 +2649,31 @@ export default function FloorPlanViewer({ modelInfo, dataVersion = 0, onClose, h
             : <span style={{ fontSize: 11, color: "var(--text-3)" }}>No floors detected</span>
           }
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
+          {[
+            { active: showMpEquip, toggle: () => setShowMpEquip(v => !v), label: "⚙ Equip", title: "Toggle Matterport Equipment" },
+            { active: showMpAiHints, toggle: () => setShowMpAiHints(v => !v), label: "🚪 AI Hints", title: "Toggle AI Door/Window Hints" },
+            { active: showMpSweeps, toggle: () => setShowMpSweeps(v => !v), label: "📷 Sweeps", title: "Toggle 360° Panorama Sweeps" },
+          ].map((btn) => (
+            <button
+              key={btn.label}
+              onClick={btn.toggle}
+              title={btn.title}
+              style={{
+                background: btn.active ? "rgba(56,189,248,0.16)" : "rgba(255,255,255,0.04)",
+                border: `1px solid ${btn.active ? "rgba(56,189,248,0.4)" : "rgba(255,255,255,0.1)"}`,
+                borderRadius: 5,
+                color: btn.active ? "#38bdf8" : "rgba(200,220,255,0.55)",
+                fontSize: 11,
+                fontWeight: 600,
+                padding: "4px 7px",
+                cursor: "pointer",
+                fontFamily: "Inter,sans-serif",
+              }}
+            >
+              {btn.label}
+            </button>
+          ))}
           <button
             onClick={() => { const cvs = canvasRef.current; if (!cvs || !editedLinesRef.current.length) return; camRef.current = fitCamera(wallsBoundsFromEdited(editedLinesRef.current), cvs.width, cvs.height); scheduleDraw(); }}
             style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 5, color: "rgba(200,220,255,0.7)", fontSize: 12, padding: "4px 8px", cursor: "pointer", fontFamily: "Inter,sans-serif" }}

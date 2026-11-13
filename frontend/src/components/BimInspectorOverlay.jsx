@@ -336,6 +336,13 @@ export default function BimInspectorOverlay({
   onDeleteOpening,
   hoveredOpening,
   onUpdateOpening,
+  selectedMpItem,
+  onCloseMpItem,
+  hoveredMpItem,
+  onJumpToMpItem,
+  onEnterFpv,
+  onDeleteMpPoint,
+  onSaveMpAsPoint,
 }) {
   const activeWall = selectedWall;
   const activeOp   = selectedOpening;
@@ -554,13 +561,142 @@ export default function BimInspectorOverlay({
       )}
 
       {/* ── 5. Hover — Room ── */}
-      {!activeWall && !activeOp && !hoveredOpening && !hoveredWall && hoveredRoom && (
+      {!activeWall && !activeOp && !selectedMpItem && !hoveredOpening && !hoveredWall && hoveredRoom && (
         <div style={{ ...tooltipBase, border: "1px solid rgba(var(--green-rgb),0.35)" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.accentUser, display: "inline-block", flexShrink: 0 }} />
           <span style={{ fontWeight: 700, color: T.accentUser }}>Room #{hoveredRoom.id}</span>
           <TooltipSep />
           <span>{hoveredRoom.area_m2 ? hoveredRoom.area_m2.toFixed(1) + " m\u00b2" : "Room slab"}</span>
           <span style={{ color: T.labelColor, fontSize: 10, marginLeft: 2 }}>&middot; click to select</span>
+        </div>
+      )}
+
+      {/* ── 6. Selected — Matterport Asset / Viewpoint / Sweep ── */}
+      {!activeWall && !activeOp && selectedMpItem && (
+        <CardShell accentColor="#38bdf8">
+          <CardHeader
+            icon={selectedMpItem.kind === "point" ? "📍" : selectedMpItem.kind === "sweep" ? "🌐" : "📦"}
+            title={
+              selectedMpItem.kind === "point"
+                ? (selectedMpItem.data?.name || "Viewpoint")
+                : selectedMpItem.kind === "sweep"
+                ? `Sweep ${selectedMpItem.data?.sweep_id || ""}`
+                : (selectedMpItem.data?.instance_id || selectedMpItem.data?.label || "Equipment")
+            }
+            badge={selectedMpItem.kind === "instance" ? selectedMpItem.data?.label : selectedMpItem.kind.toUpperCase()}
+            badgeColor="#38bdf8"
+            badgeBg="rgba(56,189,248,0.14)"
+            badgeBorder="rgba(56,189,248,0.35)"
+            onClose={onCloseMpItem}
+          />
+          <PropGrid>
+            <Prop
+              label="Floor"
+              value={selectedMpItem.data?.floor_idx != null ? `Level ${selectedMpItem.data.floor_idx}` : "Unknown"}
+              valueColor={T.accentWindow}
+            />
+            {selectedMpItem.data?.room_name && (
+              <Prop label="Room" value={selectedMpItem.data.room_name} />
+            )}
+            {selectedMpItem.kind === "instance" && (
+              <>
+                <Prop label="Class" value={selectedMpItem.data?.label || "-"} />
+                <Prop label="Max Score" value={String(selectedMpItem.data?.max_score ?? "-")} />
+                <Prop label="Observations" value={String(selectedMpItem.data?.observation_count ?? 1)} />
+              </>
+            )}
+            {selectedMpItem.kind === "point" && selectedMpItem.data?.note && (
+              <Prop label="Note" value={selectedMpItem.data.note} span={2} />
+            )}
+            {selectedMpItem.kind === "sweep" && (
+              <Prop label="Detections" value={String(selectedMpItem.data?.detections?.length ?? 0)} />
+            )}
+            {selectedMpItem.data?.s2f_position && (
+              <Prop
+                label="3D [X, Y, Z]"
+                value={`[${selectedMpItem.data.s2f_position.x.toFixed(2)}, ${selectedMpItem.data.s2f_position.y.toFixed(2)}, ${selectedMpItem.data.s2f_position.z.toFixed(2)}]`}
+                mono
+                span={2}
+              />
+            )}
+          </PropGrid>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+            {onEnterFpv && (
+              <button
+                onClick={() => onEnterFpv(selectedMpItem)}
+                style={{
+                  flex: "1 1 100%", padding: "8px 10px", borderRadius: 8, cursor: "pointer",
+                  background: "rgba(56,189,248,0.22)", border: "1px solid rgba(56,189,248,0.5)",
+                  color: "#38bdf8", fontWeight: 700, fontSize: 12,
+                }}
+              >
+                👁 First-Person View (Look at {selectedMpItem.kind === "instance" ? selectedMpItem.data?.label : "Point"})
+              </button>
+            )}
+            {onJumpToMpItem && (
+              <button
+                onClick={() => onJumpToMpItem(selectedMpItem)}
+                style={{
+                  flex: 1, padding: "7px 10px", borderRadius: 8, cursor: "pointer",
+                  background: "rgba(96,165,250,0.14)", border: "1px solid rgba(96,165,250,0.35)",
+                  color: "#93c5fd", fontWeight: 700, fontSize: 11.5,
+                }}
+              >
+                🌐 360° Showcase
+              </button>
+            )}
+            {selectedMpItem.kind === "instance" && onSaveMpAsPoint && (
+              <button
+                onClick={() => onSaveMpAsPoint(selectedMpItem.data)}
+                style={{
+                  padding: "7px 10px", borderRadius: 8, cursor: "pointer",
+                  background: "rgba(34,197,94,0.16)", border: "1px solid rgba(34,197,94,0.38)",
+                  color: "#4ade80", fontWeight: 700, fontSize: 11.5,
+                }}
+              >
+                + Save Viewpoint
+              </button>
+            )}
+            {selectedMpItem.kind === "point" && onDeleteMpPoint && (
+              <button
+                onClick={() => onDeleteMpPoint(selectedMpItem.data.id)}
+                style={{
+                  padding: "7px 10px", borderRadius: 8, cursor: "pointer",
+                  background: T.deleteBg, border: `1px solid ${T.deleteBorder}`,
+                  color: "#f87171", fontWeight: 700, fontSize: 11.5,
+                }}
+              >
+                Delete
+              </button>
+            )}
+          </div>
+        </CardShell>
+      )}
+
+      {/* ── 7. Hover — Matterport Asset / Viewpoint / Sweep ── */}
+      {!activeWall && !activeOp && !selectedMpItem && !hoveredOpening && !hoveredWall && !hoveredRoom && hoveredMpItem && (
+        <div style={{ ...tooltipBase, border: "1px solid rgba(56,189,248,0.45)" }}>
+          <span>{hoveredMpItem.kind === "point" ? "📍" : hoveredMpItem.kind === "sweep" ? "🌐" : "📦"}</span>
+          <span style={{ fontWeight: 700, color: "#38bdf8" }}>
+            {hoveredMpItem.kind === "point"
+              ? hoveredMpItem.data?.name
+              : hoveredMpItem.kind === "sweep"
+              ? `Sweep ${hoveredMpItem.data?.sweep_id}`
+              : hoveredMpItem.data?.instance_id}
+          </span>
+          {hoveredMpItem.data?.label && (
+            <>
+              <TooltipSep />
+              <span>{hoveredMpItem.data.label}</span>
+            </>
+          )}
+          {hoveredMpItem.data?.floor_idx != null && (
+            <>
+              <TooltipSep />
+              <span style={{ color: T.labelColor }}>Floor {hoveredMpItem.data.floor_idx}</span>
+            </>
+          )}
+          <span style={{ color: T.labelColor, fontSize: 10, marginLeft: 2 }}>&middot; click to inspect</span>
         </div>
       )}
     </>

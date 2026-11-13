@@ -18,6 +18,8 @@ import CameraFocuser from "./components/CameraFocuser";
 import RoomEditorPanel from "./components/RoomEditorPanel";
 import DetectedBim3D from "./components/DetectedBim3D";
 import BimInspectorOverlay from "./components/BimInspectorOverlay";
+import MpObjects3D from "./components/MpObjects3D";
+import MpShowcasePanel from "./components/MpShowcasePanel";
 
 const POLL_MS = 7 * 1000;
 
@@ -34,6 +36,21 @@ export default function App() {
   const [showFloorPlan, setShowFloorPlan] = useState(false);
   const [showFloorPlanViewer, setShowFloorPlanViewer] = useState(false);
   const [showBim3D, setShowBim3D] = useState(true);
+  const [showMpEquip, setShowMpEquip] = useState(true);
+  const [showMpSweeps, setShowMpSweeps] = useState(false);
+  const [showMpShowcase, setShowMpShowcase] = useState(false);
+  const [mpConfig, setMpConfig] = useState(null);
+  const [mpPoints, setMpPoints] = useState([]);
+  const [mpSweeps, setMpSweeps] = useState({});
+  const [mpInstances, setMpInstances] = useState([]);
+  const [mpInventory, setMpInventory] = useState([]);
+  const [mpLabelFilter, setMpLabelFilter] = useState(null);
+  const [selectedMpItem, setSelectedMpItem] = useState(null);
+  const [hoveredMpItem, setHoveredMpItem] = useState(null);
+  const [liveMpPose, setLiveMpPose] = useState(null);
+  const [pendingMpCommand, setPendingMpCommand] = useState(null);
+  const [fpvMode, setFpvMode] = useState(false);
+  const [fpvRequest, setFpvRequest] = useState(null);
   const [selectedWall, setSelectedWall] = useState(null);
   const [hoveredWall, setHoveredWall] = useState(null);
   const [hoveredRoom, setHoveredRoom] = useState(null);
@@ -413,6 +430,195 @@ export default function App() {
   /* ---------- camera ref -------------- */
   const controlsRef = useRef(null);
 
+  /* ---------- Matterport data fetch & actions ---------- */
+  const refreshMpData = useCallback(() => {
+    const qs = loadedSave ? `?save_name=${encodeURIComponent(loadedSave)}` : "";
+    Promise.all([
+      fetch(`/api/mp/config${qs}`).then((r) => (r.ok ? r.json() : null)),
+      fetch(`/api/mp/objects${qs}`).then((r) => (r.ok ? r.json() : null)),
+      fetch(`/api/mp/points${qs}`).then((r) => (r.ok ? r.json() : null)),
+      fetch(`/api/mp/inventory${qs}`).then((r) => (r.ok ? r.json() : null)),
+    ])
+      .then(([cfg, obj, pts, inv]) => {
+        if (cfg) setMpConfig(cfg);
+        if (obj) {
+          setMpSweeps(obj.sweeps || {});
+          setMpInstances(obj.instances || []);
+        }
+        if (pts) setMpPoints(pts.points || []);
+        if (inv) setMpInventory(inv.items || []);
+      })
+      .catch(() => {});
+  }, [loadedSave]);
+
+  useEffect(() => {
+    refreshMpData();
+  }, [refreshMpData, floorDataVersion]);
+
+  const handleFocus3DPoint = useCallback((s2fPos) => {
+    const ctrl = controlsRef.current;
+    if (!ctrl || !s2fPos) return;
+    setFpvMode(false);
+    ctrl.target.set(s2fPos.x, s2fPos.y, s2fPos.z);
+    if (ctrl.object) {
+      ctrl.object.position.set(s2fPos.x + 4, s2fPos.y + 3.5, s2fPos.z + 4);
+    }
+    ctrl.update?.();
+  }, []);
+
+  const computeFpvForMpItem = useCallback((item) => {
+    if (!item?.data) return null;
+    const levels = modelInfo?.floor_levels ?? [];
+
+    if (item.kind === "instance") {
+      const target = item.data.s2f_position;
+      if (!target) return null;
+
+      // Pick highest-confidence observing sweep so camera stands inside room looking at object
+      const obs = [...(item.data.observations || [])].sort(
+        (a, b) => (b.score ?? 0) - (a.score ?? 0)
+      );
+      const bestSid = obs[0]?.sweep_id || (item.data.sweep_ids || [])[0];
+      const sw = bestSid ? mpSweeps[bestSid] : null;
+      const swPos = sw?.s2f_position;
+
+      let eyeX = target.x;
+      let eyeZ = target.z + 1.6;
+      if (swPos) {
+        const dx = swPos.x - target.x;
+        const dz = swPos.z - target.z;
+        const dist = Math.hypot(dx, dz);
+        if (dist > 0.25) {
+          const standDist = Math.min(Math.max(dist * 0.78, 1.4), 2.1);
+          eyeX = target.x + (dx / dist) * standDist;
+          eyeZ = target.z + (dz / dist) * standDist;
+        }
+      }
+
+      const fIdx = item.data.floor_idx;
+      const floorY =
+        fIdx != null && levels[fIdx] != null
+          ? levels[fIdx]
+          : swPos?.y != null
+          ? swPos.y - 1.55
+          : target.y - 1.0;
+
+      return {
+        id: `${Date.now()}-${item.data.instance_id}`,
+        eyePos: { x: eyeX, y: floorY + 1.58, z: eyeZ },
+        lookAtPos: { x: target.x, y: target.y, z: target.z },
+        lockFpv: true,
+      };
+    }
+
+    if (item.kind === "point" || item.kind === "sweep") {
+      const p = item.data.s2f_position;
+      if (!p) return null;
+      const yawDeg = Number(item.data.rotation?.y ?? 0);
+      const pitchDeg = Number(item.data.rotation?.x ?? 0);
+      const yawRad = (yawDeg * Math.PI) / 180;
+      const pitchRad = (pitchDeg * Math.PI) / 180;
+      const cp = Math.cos(pitchRad);
+      const dx = -Math.sin(yawRad) * cp;
+      const dy = Math.sin(pitchRad);
+      const dz = -Math.cos(yawRad) * cp;
+
+      return {
+        id: `${Date.now()}-${item.data.id || item.data.sweep_id}`,
+        eyePos: { x: p.x, y: p.y, z: p.z },
+        lookAtPos: { x: p.x + dx * 2.5, y: p.y + dy * 2.5, z: p.z + dz * 2.5 },
+        lockFpv: true,
+      };
+    }
+
+    return null;
+  }, [modelInfo, mpSweeps]);
+
+  const handleEnterFpv = useCallback((item) => {
+    if (!item?.data) return;
+    setSelectedMpItem(item);
+    setSelectedWall(null);
+    setSelectedOpening(null);
+
+    if (item.data.floor_idx != null && activeFloor !== "all" && Number(activeFloor) !== item.data.floor_idx) {
+      setActiveFloor(item.data.floor_idx);
+    }
+    if (!showBim3D && !showTexture && !showCloud) {
+      setShowBim3D(true);
+    }
+
+    const req = computeFpvForMpItem(item);
+    if (req) {
+      setFpvMode(true);
+      setFpvRequest(req);
+    }
+  }, [activeFloor, computeFpvForMpItem, showBim3D, showTexture, showCloud]);
+
+  const handleCycleFpvItem = useCallback((delta) => {
+    const floorNum = activeFloor === "all" ? null : Number(activeFloor);
+    const activeLabel =
+      selectedMpItem?.kind === "instance" ? selectedMpItem.data?.label : "dvere";
+    const pool = mpInstances.filter(
+      (i) => i.label === activeLabel && (floorNum === null || i.floor_idx === floorNum)
+    );
+    if (!pool.length) return;
+    const curIdx =
+      selectedMpItem?.kind === "instance"
+        ? pool.findIndex((i) => i.instance_id === selectedMpItem.data?.instance_id)
+        : -1;
+    const nextIdx = curIdx < 0 ? 0 : (curIdx + delta + pool.length) % pool.length;
+    handleEnterFpv({ kind: "instance", data: pool[nextIdx] });
+  }, [activeFloor, mpInstances, selectedMpItem, handleEnterFpv]);
+
+  const handleJumpToMpItem = useCallback(async (item) => {
+    if (!item?.data) return;
+    setShowMpShowcase(true);
+    const qs = loadedSave ? `?save_name=${encodeURIComponent(loadedSave)}` : "";
+    if (item.kind === "instance") {
+      const res = await fetch(`/api/mp/goto-instance/${item.data.instance_id}${qs}`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setPendingMpCommand(data);
+      }
+    } else if (item.kind === "point") {
+      const res = await fetch(`/api/mp/points/${item.data.id}/go${qs}`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setPendingMpCommand(data);
+      }
+    } else if (item.kind === "sweep") {
+      const cmd = { sweep_id: item.data.sweep_id, position: item.data.position };
+      await fetch(`/api/mp/move`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(cmd),
+      });
+      setPendingMpCommand(cmd);
+    }
+  }, [loadedSave]);
+
+  const handleSaveMpAsPoint = useCallback(async (inst) => {
+    if (!inst?.anchor) return;
+    await fetch(`/api/mp/points`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: inst.instance_id || inst.label,
+        note: `Saved from 3D Inspector (${inst.label})`,
+        position: inst.anchor,
+        sweep_id: (inst.sweep_ids || [])[0] || null,
+        floor: inst.floor,
+      }),
+    });
+    refreshMpData();
+  }, [refreshMpData]);
+
+  const handleDeleteMpPoint = useCallback(async (pointId) => {
+    await fetch(`/api/mp/points/${pointId}`, { method: "DELETE" });
+    setSelectedMpItem(null);
+    refreshMpData();
+  }, [refreshMpData]);
+
   /* ---------- poll server status ------ */
   const checkStatus = useCallback(async () => {
     try {
@@ -491,6 +697,17 @@ export default function App() {
           setShowFloorPlanViewer={setShowFloorPlanViewer}
           showBim3D={showBim3D}
           setShowBim3D={setShowBim3D}
+          showMpEquip={showMpEquip}
+          setShowMpEquip={setShowMpEquip}
+          showMpSweeps={showMpSweeps}
+          setShowMpSweeps={setShowMpSweeps}
+          showMpShowcase={showMpShowcase}
+          setShowMpShowcase={setShowMpShowcase}
+          mpStats={{
+            instances: mpInstances.length,
+            sweeps: Object.keys(mpSweeps).length,
+            points: mpPoints.length,
+          }}
           className={sidebarCollapsed ? "collapsed" : ""}
           cloudPoints={cloudPoints}
           onReprocessDone={handleReprocessDone}
@@ -521,7 +738,10 @@ export default function App() {
             <Canvas
               camera={{ position: [30, 15, 30], fov: 50, near: 0.1, far: 2000 }}
               gl={{ antialias: true, localClippingEnabled: true }}
-              onPointerMissed={() => setSelectedWall(null)}
+              onPointerMissed={() => {
+                setSelectedWall(null);
+                setSelectedMpItem(null);
+              }}
             >
               <color attach="background" args={[isDark ? "#0f0f0f" : "#f5f5f5"]} />
               <ambientLight intensity={isDark ? 0.6 : 0.8} />
@@ -609,6 +829,26 @@ export default function App() {
                     setHoveredOpening={setHoveredOpening}
                   />
                 )}
+                <MpObjects3D
+                  instances={mpInstances}
+                  points={mpPoints}
+                  sweeps={mpSweeps}
+                  activeFloor={activeFloor}
+                  showEquipment={showMpEquip}
+                  showSweeps={showMpSweeps}
+                  labelFilter={mpLabelFilter}
+                  livePose={liveMpPose}
+                  selectedMpItem={selectedMpItem}
+                  hoveredMpItem={hoveredMpItem}
+                  onSelectMpItem={(item) => {
+                    setSelectedMpItem(item);
+                    if (item) {
+                      setSelectedWall(null);
+                      setSelectedOpening(null);
+                    }
+                  }}
+                  onHoverMpItem={setHoveredMpItem}
+                />
               </Suspense>
 
               <OrbitControls
@@ -620,12 +860,14 @@ export default function App() {
                 maxDistance={500}
               />
 
-              {/* 3D camera focus on selected room */}
+              {/* 3D camera focus on selected room & First-Person View */}
               <CameraFocuser
                 highlightedRoom={highlightedRoom}
                 modelInfo={modelInfo}
                 controlsRef={controlsRef}
                 activeFloor={activeFloor}
+                fpvRequest={fpvRequest}
+                fpvMode={fpvMode}
               />
 
               <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
@@ -646,7 +888,201 @@ export default function App() {
             onDeleteOpening={handleDeleteOpeningFrom3D}
             hoveredOpening={hoveredOpening}
             onUpdateOpening={handleUpdateOpeningFrom3D}
+            selectedMpItem={selectedMpItem}
+            onCloseMpItem={() => setSelectedMpItem(null)}
+            hoveredMpItem={hoveredMpItem}
+            onJumpToMpItem={handleJumpToMpItem}
+            onEnterFpv={handleEnterFpv}
+            onDeleteMpPoint={handleDeleteMpPoint}
+            onSaveMpAsPoint={handleSaveMpAsPoint}
           />
+
+          {/* Floating First-Person View (FPV) & Layer Switcher HUD */}
+          <div style={{
+            position: "absolute",
+            top: loadedSave ? 48 : 12,
+            left: "50%",
+            transform: "translateX(-50%)",
+            zIndex: 18,
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            flexWrap: "wrap",
+            justifyContent: "center",
+            background: "rgba(var(--panel-rgb, 17,24,39), 0.9)",
+            backdropFilter: "blur(12px)",
+            border: fpvMode ? "1px solid rgba(56,189,248,0.55)" : "1px solid var(--border-hi, rgba(255,255,255,0.14))",
+            borderRadius: 999,
+            padding: "5px 10px",
+            boxShadow: "0 4px 18px rgba(0,0,0,0.32)",
+            fontFamily: "Inter, sans-serif",
+            fontSize: 11.5,
+          }}>
+            {!fpvMode ? (
+              <>
+                <button
+                  onClick={() => {
+                    if (selectedMpItem) handleEnterFpv(selectedMpItem);
+                    else setFpvMode(true);
+                  }}
+                  style={{
+                    background: "rgba(56,189,248,0.18)",
+                    border: "1px solid rgba(56,189,248,0.42)",
+                    borderRadius: 999,
+                    color: "#38bdf8",
+                    fontWeight: 700,
+                    fontSize: 11.5,
+                    padding: "4px 10px",
+                    cursor: "pointer",
+                  }}
+                  title="Walk/Look around at eye level (WASD + Mouse drag)"
+                >
+                  👁 First-Person View
+                </button>
+                <button
+                  onClick={() => handleCycleFpvItem(1)}
+                  disabled={!mpInstances.some((i) => i.label === "dvere")}
+                  style={{
+                    background: "rgba(34,197,94,0.15)",
+                    border: "1px solid rgba(34,197,94,0.38)",
+                    borderRadius: 999,
+                    color: "#4ade80",
+                    fontWeight: 700,
+                    fontSize: 11.5,
+                    padding: "4px 10px",
+                    cursor: "pointer",
+                  }}
+                  title="Jump directly to a door in First-Person View"
+                >
+                  🚪 Inspect Doors
+                </button>
+                <button
+                  onClick={() => setShowMpShowcase((v) => !v)}
+                  style={{
+                    background: showMpShowcase ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.06)",
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    borderRadius: 999,
+                    color: showMpShowcase ? "#c084fc" : "var(--text-1, #e5e7eb)",
+                    fontWeight: 600,
+                    fontSize: 11.5,
+                    padding: "4px 10px",
+                    cursor: "pointer",
+                  }}
+                >
+                  🌐 Equipment & 360°
+                </button>
+              </>
+            ) : (
+              <>
+                <span style={{ color: "#38bdf8", fontWeight: 700, paddingLeft: 4 }}>
+                  👁 FPV {selectedMpItem?.data?.instance_id || selectedMpItem?.data?.name || "Free Walk"}
+                </span>
+                <button
+                  onClick={() => handleCycleFpvItem(-1)}
+                  style={{
+                    background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.14)",
+                    borderRadius: 999, color: "var(--text-1, #e5e7eb)", padding: "3px 8px",
+                    fontSize: 11, cursor: "pointer",
+                  }}
+                  title="Previous item in class"
+                >
+                  ◀ Prev
+                </button>
+                {selectedMpItem && (
+                  <button
+                    onClick={() => handleEnterFpv(selectedMpItem)}
+                    style={{
+                      background: "rgba(56,189,248,0.16)", border: "1px solid rgba(56,189,248,0.35)",
+                      borderRadius: 999, color: "#38bdf8", padding: "3px 8px",
+                      fontSize: 11, cursor: "pointer", fontWeight: 600,
+                    }}
+                    title="Re-aim camera straight at selected object"
+                  >
+                    🎯 Re-Aim
+                  </button>
+                )}
+                <button
+                  onClick={() => handleCycleFpvItem(1)}
+                  style={{
+                    background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.14)",
+                    borderRadius: 999, color: "var(--text-1, #e5e7eb)", padding: "3px 8px",
+                    fontSize: 11, cursor: "pointer",
+                  }}
+                  title="Next item in class"
+                >
+                  Next ▶
+                </button>
+                <span style={{ opacity: 0.35 }}>|</span>
+                <button
+                  onClick={() => setShowBim3D((v) => !v)}
+                  style={{
+                    background: showBim3D ? "rgba(56,189,248,0.22)" : "rgba(255,255,255,0.05)",
+                    border: `1px solid ${showBim3D ? "rgba(56,189,248,0.45)" : "rgba(255,255,255,0.12)"}`,
+                    borderRadius: 999, color: showBim3D ? "#38bdf8" : "var(--text-3, #9ca3af)",
+                    padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  }}
+                  title="Toggle 3D BIM Walls & Slabs"
+                >
+                  🏛️ BIM
+                </button>
+                <button
+                  onClick={() => {
+                    setShowTexture((v) => {
+                      const next = !v;
+                      if (next && textureOpacity < 0.9) setTextureOpacity(1.0);
+                      return next;
+                    });
+                  }}
+                  style={{
+                    background: showTexture ? "rgba(251,191,36,0.22)" : "rgba(255,255,255,0.05)",
+                    border: `1px solid ${showTexture ? "rgba(251,191,36,0.45)" : "rgba(255,255,255,0.12)"}`,
+                    borderRadius: 999, color: showTexture ? "#fbbf24" : "var(--text-3, #9ca3af)",
+                    padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  }}
+                  title="Toggle Photo Texture Mesh Layer"
+                >
+                  📷 Photo
+                </button>
+                <button
+                  onClick={() => setShowCloud((v) => !v)}
+                  style={{
+                    background: showCloud ? "rgba(34,197,94,0.2)" : "rgba(255,255,255,0.05)",
+                    border: `1px solid ${showCloud ? "rgba(34,197,94,0.4)" : "rgba(255,255,255,0.12)"}`,
+                    borderRadius: 999, color: showCloud ? "#4ade80" : "var(--text-3, #9ca3af)",
+                    padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  }}
+                  title="Toggle Point Cloud"
+                >
+                  ✦ Cloud
+                </button>
+                <button
+                  onClick={() => setShowMpEquip((v) => !v)}
+                  style={{
+                    background: showMpEquip ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.05)",
+                    border: `1px solid ${showMpEquip ? "rgba(168,85,247,0.4)" : "rgba(255,255,255,0.12)"}`,
+                    borderRadius: 999, color: showMpEquip ? "#c084fc" : "var(--text-3, #9ca3af)",
+                    padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer",
+                  }}
+                  title="Toggle Equipment Markers"
+                >
+                  📦 Markers
+                </button>
+                <span style={{ fontSize: 10, color: "var(--text-3, #9ca3af)" }} title="Controls">
+                  WASD Walk · Drag Look · Scroll Step
+                </span>
+                <button
+                  onClick={() => setFpvMode(false)}
+                  style={{
+                    background: "rgba(239,68,68,0.18)", border: "1px solid rgba(239,68,68,0.4)",
+                    borderRadius: 999, color: "#f87171", padding: "3px 9px",
+                    fontSize: 11, fontWeight: 700, cursor: "pointer",
+                  }}
+                >
+                  ✕ Exit FPV
+                </button>
+              </>
+            )}
+          </div>
 
           {/* Loading overlay */}
           {anyLoading && (
@@ -751,6 +1187,51 @@ export default function App() {
               roomMode={roomMode}
               saveName={loadedSave}
               onWallsSaved={handleWallsDetected}
+              mpInstances={mpInstances}
+              mpSweeps={mpSweeps}
+              mpPoints={mpPoints}
+              livePose={liveMpPose}
+              selectedMpItem={selectedMpItem}
+              onSelectMpItem={(item) => {
+                setSelectedMpItem(item);
+                if (item) {
+                  setSelectedWall(null);
+                  setSelectedOpening(null);
+                }
+              }}
+            />
+          </div>
+        )}
+
+        {/* Phase 3: Dockable 360° Matterport Showcase + Inventory + Guided Tour */}
+        {showMpShowcase && (
+          <div style={{ width: 420, height: "100%", flexShrink: 0 }}>
+            <MpShowcasePanel
+              apiBase="/api"
+              mpConfig={mpConfig}
+              points={mpPoints}
+              sweeps={mpSweeps}
+              instances={mpInstances}
+              inventory={mpInventory}
+              activeFloor={activeFloor}
+              saveName={loadedSave}
+              livePose={liveMpPose}
+              onPoseUpdate={setLiveMpPose}
+              onDataChanged={refreshMpData}
+              onFocus3D={handleFocus3DPoint}
+              onEnterFpv={handleEnterFpv}
+              onSelectMpItem={(item) => {
+                setSelectedMpItem(item);
+                if (item) {
+                  setSelectedWall(null);
+                  setSelectedOpening(null);
+                }
+              }}
+              labelFilter={mpLabelFilter}
+              setLabelFilter={setMpLabelFilter}
+              pendingCommand={pendingMpCommand}
+              onCommandConsumed={() => setPendingMpCommand(null)}
+              onClose={() => setShowMpShowcase(false)}
             />
           </div>
         )}
@@ -764,6 +1245,7 @@ export default function App() {
             saveName={loadedSave}
             onClose={() => handleSelectRoom(null)}
             onWallsChanged={handleWallsDetected}
+            mpInstances={mpInstances}
           />
         )}
       </div>
