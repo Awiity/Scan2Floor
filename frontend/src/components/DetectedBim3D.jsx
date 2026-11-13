@@ -225,6 +225,9 @@ function WallMesh3D({
   onSelectOpening,
   onHoverOpening,
   onUnhoverOpening,
+  showWalls = true,
+  showDoors = true,
+  showWindows = true,
 }) {
   const { id, x1, z1, x2, z2, length, height, floorY, openings = [] } = wall;
 
@@ -358,6 +361,8 @@ function WallMesh3D({
     return { solids, openingsData: opsData };
   }, [openings, length, height, x1, z1, ux, uz, floorY, wall.floorIdx, wall.wallIdx]);
 
+  if (!showWalls && !showDoors && !showWindows) return null;
+
   return (
     <group
       position={[x1, floorY, z1]}
@@ -378,7 +383,7 @@ function WallMesh3D({
       }}
     >
       {/* 1. Solid Wall Segments */}
-      {wallElements.solids.map((seg, idx) => {
+      {showWalls && wallElements.solids.map((seg, idx) => {
         const segLen = seg.end - seg.start;
         const segMidX = (seg.start + seg.end) / 2;
         return (
@@ -408,9 +413,14 @@ function WallMesh3D({
       })}
 
       {/* 2. Top Margin Wall Headers & Bottom Margin Sills around openings */}
-      {wallElements.openingsData.map((op, idx) => (
+      {wallElements.openingsData.map((op, idx) => {
+        const isDoor = op.openingEntity.type === "door";
+        const showThisOpening = isDoor ? showDoors : showWindows;
+        if (!showWalls && !showThisOpening) return null;
+        return (
         <group key={`op_margins_${idx}`}>
           {/* Header block (Top margin above opening) */}
+          {showWalls && (
           <group position={[op.midS, op.headerY, 0]}>
             <mesh>
               <boxGeometry args={[op.opWidth, op.headerH, thickness]} />
@@ -433,9 +443,10 @@ function WallMesh3D({
               />
             </lineSegments>
           </group>
+          )}
 
           {/* Sill block (Bottom margin below window) */}
-          {op.hasSill && (
+          {showWalls && op.hasSill && (
             <group position={[op.midS, op.sillY, 0]}>
               <mesh>
                 <boxGeometry args={[op.opWidth, op.sillH, thickness]} />
@@ -461,8 +472,9 @@ function WallMesh3D({
           )}
 
           {/* 3. Interactive Door / Window 3D Entity in Void */}
+          {showThisOpening && (
           <group position={[op.midS, op.voidY, 0]}>
-            {op.openingEntity.type === "door" ? (
+            {isDoor ? (
               <Door3DMesh
                 width={op.opWidth}
                 height={op.voidH}
@@ -488,8 +500,10 @@ function WallMesh3D({
               />
             )}
           </group>
+          )}
         </group>
-      ))}
+        );
+      })}
     </group>
   );
 }
@@ -706,6 +720,10 @@ export default function DetectedBim3D({
   onSelectOpening,
   hoveredOpening = null,
   setHoveredOpening,
+  showWalls = true,
+  showRooms = true,
+  showDoors = true,
+  showWindows = true,
 }) {
   const [wallsData, setWallsData] = useState([]);
   const [roomsData, setRoomsData] = useState([]);
@@ -1048,12 +1066,15 @@ export default function DetectedBim3D({
             onSelectOpening={onSelectOpening}
             onHoverOpening={setHoveredOpening}
             onUnhoverOpening={() => setHoveredOpening(null)}
+            showWalls={showWalls}
+            showDoors={showDoors}
+            showWindows={showWindows}
           />
         );
       })}
 
       {/* 3D Detected Room Floors */}
-      {roomsData.map((rm) => {
+      {showRooms && roomsData.map((rm) => {
         const isHovered =
           hoveredRoom?.id === rm.id && hoveredRoom?.floorIdx === rm.floorIdx;
         const isSelected = selectedRoomId === rm.id;

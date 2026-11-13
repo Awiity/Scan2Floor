@@ -1201,6 +1201,7 @@ def list_saves():
             "timestamp":   meta.get("timestamp"),
             "xyz_path":    meta.get("xyz_path", ""),
             "n_floors":    n_floors,
+            "has_matterport": os.path.isfile(os.path.join(entry.path, "mp_objects.json")),
             "wall_color":  meta.get("wall_color",  "#f5f5f5"),
             "floor_color": meta.get("floor_color", "#2ed16b"),
         })
@@ -1275,6 +1276,42 @@ def create_save(payload: SavePayload):
         json.dump(meta, fh, indent=2)
 
     return {"status": "ok", "name": name, "files_saved": len(copied), "files": copied}
+
+
+@app.post("/api/saves/{name}/matterport")
+def attach_matterport_to_save(name: str, overwrite: bool = False):
+    """
+    Add the Matterport 360 / equipment snapshot (mp_points.json, mp_objects.json)
+    to a save that was created before the Matterport module existed.
+
+    Copies the current live Matterport data of MODEL_ID into the save folder.
+    Existing snapshot files are kept unless ``overwrite=true`` (so viewpoints
+    created inside a save are not lost). Walls / rooms / openings are untouched.
+    """
+    import shutil
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    try:
+        bootstrap_model_data(MODEL_ID)
+    except Exception:
+        pass
+    mp_paths = resolve_mp_paths(MODEL_ID)
+    copied, skipped, missing = [], [], []
+    for key, dst_name in (("points", "mp_points.json"), ("objects", "mp_objects.json")):
+        src = str(mp_paths[key])
+        dst = os.path.join(save_path, dst_name)
+        if not os.path.isfile(src):
+            missing.append(dst_name)
+        elif os.path.isfile(dst) and not overwrite:
+            skipped.append(dst_name)
+        else:
+            shutil.copy2(src, dst)
+            copied.append(dst_name)
+    invalidate_mp_cache(name)
+    if missing and not copied and not skipped:
+        raise HTTPException(status_code=404, detail="No live Matterport data available to attach.")
+    return {"status": "ok", "name": name, "copied": copied, "skipped": skipped, "missing": missing}
 
 
 @app.delete("/api/saves/{name}")

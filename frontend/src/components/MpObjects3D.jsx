@@ -50,6 +50,9 @@ export default function MpObjects3D({
   activeFloor = "all",
   showEquipment = true,
   showSweeps = false,
+  showPoints = true,
+  showLivePose = true,
+  hiddenLabels = [],
   labelFilter = null,
   livePose = null,
   selectedMpItem = null,
@@ -65,17 +68,19 @@ export default function MpObjects3D({
       if (!inst?.s2f_position) return false;
       if (floorNum !== null && inst.floor_idx != null && inst.floor_idx !== floorNum) return false;
       if (labelFilter && inst.label !== labelFilter) return false;
+      if (hiddenLabels.includes(inst.label)) return false;
       return true;
     });
-  }, [instances, showEquipment, floorNum, labelFilter]);
+  }, [instances, showEquipment, floorNum, labelFilter, hiddenLabels]);
 
   const visiblePoints = useMemo(() => {
+    if (!showPoints) return [];
     return points.filter((pt) => {
       if (!pt?.s2f_position) return false;
       if (floorNum !== null && pt.floor_idx != null && pt.floor_idx !== floorNum) return false;
       return true;
     });
-  }, [points, floorNum]);
+  }, [points, showPoints, floorNum]);
 
   const visibleSweeps = useMemo(() => {
     if (!showSweeps) return [];
@@ -87,12 +92,13 @@ export default function MpObjects3D({
   }, [sweeps, showSweeps, floorNum]);
 
   const poseVisible = useMemo(() => {
+    if (!showLivePose) return false;
     if (!livePose?.s2f_position) return false;
     if (floorNum !== null && livePose.floor_idx != null && livePose.floor_idx !== floorNum) {
       return false;
     }
     return true;
-  }, [livePose, floorNum]);
+  }, [livePose, showLivePose, floorNum]);
 
   const cameraYawRad = useMemo(() => {
     const yawDeg = Number(livePose?.rotation?.y ?? 0);

@@ -61,8 +61,11 @@ PROCESSED_DIR: Path = Path(
     or os.getenv("PROCESSED_DIR")
     or str(BACKEND_DIR / "processed")
 ).resolve()
+# Must match backend/main.py (SAVES_DIR = PROCESSED_DIR / "saves"), otherwise the
+# Matterport module looks for saved snapshots in a different folder than the one
+# the save/load endpoints use.
 SAVES_DIR: Path = Path(
-    os.getenv("S2F_SAVES_DIR") or str(BACKEND_DIR / "saves")
+    os.getenv("S2F_SAVES_DIR") or str(PROCESSED_DIR / "saves")
 ).resolve()
 DATA_ROOT: Path = PROCESSED_DIR / "matterport"
 

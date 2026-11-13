@@ -23,6 +23,7 @@ import HomePage from "./components/HomePage";
 import LayersPanel from "./components/LayersPanel";
 import RedetectDrawer from "./components/RedetectDrawer";
 import SaveOutput from "./components/SaveOutput";
+import MiniPlan from "./components/MiniPlan";
 import { loadAlgoParams, persistAlgoParams } from "./algoParams";
 
 const POLL_MS = 7 * 1000;
@@ -45,8 +46,12 @@ export default function App() {
   const [showTexture, setShowTexture] = useState(false);
   const [textureOpacity, setTextureOpacity] = useState(0.85);
   const [showBim3D, setShowBim3D] = useState(true);
+  const [bimFilters, setBimFilters] = useState({ walls: true, rooms: true, doors: true, windows: true });
   const [showMpEquip, setShowMpEquip] = useState(true);
   const [showMpSweeps, setShowMpSweeps] = useState(false);
+  const [showMpPoints, setShowMpPoints] = useState(true);
+  const [showMpLive, setShowMpLive] = useState(true);
+  const [hiddenMpLabels, setHiddenMpLabels] = useState([]);
   const [mpConfig, setMpConfig] = useState(null);
   const [mpPoints, setMpPoints] = useState([]);
   const [mpSweeps, setMpSweeps] = useState({});
@@ -572,7 +577,11 @@ export default function App() {
     const activeLabel =
       selectedMpItem?.kind === "instance" ? selectedMpItem.data?.label : "dvere";
     const pool = mpInstances.filter(
-      (i) => i.label === activeLabel && (floorNum === null || i.floor_idx === floorNum)
+      (i) =>
+        i.label === activeLabel &&
+        (floorNum === null || i.floor_idx === floorNum) &&
+        (!hiddenMpLabels.includes(i.label) ||
+          (selectedMpItem?.kind === "instance" && selectedMpItem.data?.label === i.label))
     );
     if (!pool.length) return;
     const curIdx =
@@ -581,7 +590,7 @@ export default function App() {
         : -1;
     const nextIdx = curIdx < 0 ? 0 : (curIdx + delta + pool.length) % pool.length;
     handleEnterFpv({ kind: "instance", data: pool[nextIdx] });
-  }, [activeFloor, mpInstances, selectedMpItem, handleEnterFpv]);
+  }, [activeFloor, mpInstances, selectedMpItem, hiddenMpLabels, handleEnterFpv]);
 
   const handleJumpToMpItem = useCallback(async (item) => {
     if (!item?.data) return;
@@ -723,6 +732,7 @@ export default function App() {
     setFpvMode(false);
     setFpvRequest(null);
     setMpLabelFilter(null);
+    setHiddenMpLabels([]);
     setActiveFloor("all");
     setShowAlgo(false);
     setLayout("single");
@@ -884,6 +894,10 @@ export default function App() {
               onSelectOpening={(op) => { setSelectedOpening(op); if (op) setSelectedWall(null); }}
               hoveredOpening={hoveredOpening}
               setHoveredOpening={setHoveredOpening}
+              showWalls={bimFilters.walls}
+              showRooms={bimFilters.rooms}
+              showDoors={bimFilters.doors}
+              showWindows={bimFilters.windows}
             />
           )}
           <MpObjects3D
@@ -893,6 +907,9 @@ export default function App() {
             activeFloor={activeFloor}
             showEquipment={showMpEquip}
             showSweeps={showMpSweeps}
+            showPoints={showMpPoints}
+            showLivePose={showMpLive}
+            hiddenLabels={hiddenMpLabels}
             labelFilter={mpLabelFilter}
             livePose={liveMpPose}
             selectedMpItem={selectedMpItem}
@@ -920,6 +937,7 @@ export default function App() {
 
       <LayersPanel
         showBim3D={showBim3D} setShowBim3D={setShowBim3D}
+        bimFilters={bimFilters} setBimFilters={setBimFilters}
         showCloud={showCloud} setShowCloud={setShowCloud} cloudReady={cloudReady} cloudPoints={cloudPoints}
         showTexture={showTexture}
         setShowTexture={(v) => {
@@ -929,8 +947,32 @@ export default function App() {
         textureOpacity={textureOpacity} setTextureOpacity={setTextureOpacity}
         showMpEquip={showMpEquip} setShowMpEquip={setShowMpEquip}
         showMpSweeps={showMpSweeps} setShowMpSweeps={setShowMpSweeps}
+        showMpPoints={showMpPoints} setShowMpPoints={setShowMpPoints}
+        showMpLive={showMpLive} setShowMpLive={setShowMpLive}
+        hiddenMpLabels={hiddenMpLabels} setHiddenMpLabels={setHiddenMpLabels}
+        instances={mpInstances}
+        inventory={mpInventory}
+        activeFloor={activeFloor}
         cloudColors={cloudColors} setCloudColors={setCloudColors}
         mpStats={mpStats}
+      />
+
+      <MiniPlan
+        floor={activeFloor === "all" ? 0 : Number(activeFloor)}
+        floorCount={Math.max(floorCount, 1)}
+        onChangeFloor={setActiveFloor}
+        saveName={loadedSave}
+        dataVersion={floorDataVersion}
+        theme={theme}
+        instances={mpInstances}
+        sweeps={mpSweeps}
+        points={mpPoints}
+        inventory={mpInventory}
+        livePose={liveMpPose}
+        selectedRoomId={selectedRoomId}
+        onSelectRoom={handleSelectRoom}
+        selectedMpItem={selectedMpItem}
+        onSelectMpItem={onSelectMpItemShared}
       />
 
       <BimInspectorOverlay

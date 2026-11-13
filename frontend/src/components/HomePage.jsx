@@ -70,6 +70,29 @@ export default function HomePage({
     if (!savesLoading && !userPickedTab.current && saves.length === 0 && !hasLive) setTab("new");
   }, [savesLoading, saves.length, hasLive]);
 
+  const [attachBusy, setAttachBusy] = useState(null); // save name, "*" for all
+  const [attachMsg, setAttachMsg] = useState("");
+
+  const attachMatterport = async (names) => {
+    setAttachBusy(names.length === 1 ? names[0] : "*");
+    setAttachMsg("");
+    let ok = 0;
+    let fail = "";
+    for (const n of names) {
+      try {
+        const r = await fetch(`/api/saves/${encodeURIComponent(n)}/matterport`, { method: "POST" });
+        if (r.ok) ok += 1;
+        else fail = (await r.json().catch(() => ({})))?.detail || `HTTP ${r.status}`;
+      } catch {
+        fail = "Network error";
+      }
+    }
+    setAttachBusy(null);
+    setAttachMsg(fail ? `⚠ ${fail}` : `✓ 360° & equipment data attached to ${ok} save${ok === 1 ? "" : "s"}`);
+    fetchSaves();
+  };
+  const missingMp = saves.filter((s) => s.has_matterport === false);
+
   const pickTab = (t) => { userPickedTab.current = true; setTab(t); };
 
   const deleteSave = async (name) => {
@@ -223,7 +246,20 @@ export default function HomePage({
             <section>
               <div className="s2f-section-head">
                 <span>{saves.length} saved output{saves.length === 1 ? "" : "s"}</span>
-                <button className="s2f-btn s2f-btn-sm" onClick={fetchSaves}>{savesLoading ? "Loading…" : "Refresh"}</button>
+                <span style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {attachMsg && <span className={attachMsg.startsWith("✓") ? "s2f-ok" : "s2f-error"} style={{ margin: 0 }}>{attachMsg}</span>}
+                  {missingMp.length > 0 && (
+                    <button
+                      className="s2f-btn s2f-btn-sm"
+                      disabled={!!attachBusy}
+                      title="Copy the live Matterport 360 / equipment data into every save that lacks it"
+                      onClick={() => attachMatterport(missingMp.map((s) => s.name))}
+                    >
+                      {attachBusy === "*" ? "Attaching…" : `Add 360° data to ${missingMp.length} old save${missingMp.length === 1 ? "" : "s"}`}
+                    </button>
+                  )}
+                  <button className="s2f-btn s2f-btn-sm" onClick={fetchSaves}>{savesLoading ? "Loading…" : "Refresh"}</button>
+                </span>
               </div>
               <div className="s2f-cards">
                 {hasLive && (
@@ -242,9 +278,15 @@ export default function HomePage({
                     <div className="s2f-meta">
                       <span>{sv.n_floors} floor{sv.n_floors !== 1 ? "s" : ""}</span>
                       <span>{fmtDate(sv.timestamp)}</span>
+                      {sv.has_matterport === false && <span style={{ color: "var(--sel)" }}>No 360° / equipment data</span>}
                     </div>
                     <div className="s2f-card-actions">
                       <button className="s2f-btn s2f-btn-primary" id={`load-save-${sv.name}`} onClick={() => onOpenSave(sv)}>Open</button>
+                      {sv.has_matterport === false && (
+                        <button className="s2f-btn" disabled={!!attachBusy} onClick={() => attachMatterport([sv.name])} title="Attach live Matterport 360 / equipment data to this save">
+                          {attachBusy === sv.name ? "…" : "+ 360°"}
+                        </button>
+                      )}
                       <button
                         className={`s2f-btn ${deleteConfirm === sv.name ? "s2f-btn-danger" : ""}`}
                         onClick={() => deleteSave(sv.name)}
