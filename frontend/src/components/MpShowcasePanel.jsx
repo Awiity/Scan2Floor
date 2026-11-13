@@ -23,6 +23,7 @@ export default function MpShowcasePanel({
   pendingCommand = null,
   onCommandConsumed,
   onClose,
+  full = false,
 }) {
   const [tab, setTab] = useState("inventory"); // "points" | "sweeps" | "inventory"
   const [expandedLabel, setExpandedLabel] = useState("dvere"); // auto-expand doors first
@@ -273,9 +274,14 @@ export default function MpShowcasePanel({
   const iframeSrc = `https://my.matterport.com/show/?m=${encodeURIComponent(modelId)}&play=1&qs=1&gt=0&hr=0&mls=1${appKey ? `&applicationKey=${encodeURIComponent(appKey)}` : ""}`;
   const embedHeight = embedSize === "hidden" ? 0 : embedSize === "expanded" ? 390 : 235;
 
+  // In `full` mode the 360° embed fills the left side and the inventory sits in a right column.
+  const place = (row) => (full ? { gridColumn: 2, gridRow: row, minHeight: 0 } : {});
   return (
     <div style={{
-      display: "flex", flexDirection: "column", height: "100%", width: "100%",
+      ...(full
+        ? { display: "grid", gridTemplateColumns: "minmax(0,1fr) 400px", gridTemplateRows: "auto auto auto auto minmax(0,1fr)" }
+        : { display: "flex", flexDirection: "column" }),
+      height: "100%", width: "100%",
       background: "var(--bg-panel, #111827)", color: "var(--text-1, #f3f4f6)",
       borderLeft: "1px solid rgba(var(--fg-rgb, 255,255,255), 0.1)",
       fontSize: 12,
@@ -284,6 +290,7 @@ export default function MpShowcasePanel({
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 12px", borderBottom: "1px solid rgba(var(--fg-rgb, 255,255,255), 0.08)",
+        ...place(1),
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span>🌐</span>
@@ -297,7 +304,7 @@ export default function MpShowcasePanel({
           </span>
         </div>
         <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
-          <button
+          {!full && <button
             onClick={() =>
               setEmbedSize((s) => (s === "compact" ? "expanded" : s === "expanded" ? "hidden" : "compact"))
             }
@@ -308,7 +315,7 @@ export default function MpShowcasePanel({
             title="Cycle 360° Showcase height (Compact / Tall / Hidden)"
           >
             {embedSize === "hidden" ? "Show 360°" : embedSize === "compact" ? "⤢ Tall" : "⤡ Hide"}
-          </button>
+          </button>}
           <a
             href={ifcExportUrl}
             download={`${modelId}_matterport.ifc`}
@@ -321,7 +328,7 @@ export default function MpShowcasePanel({
           >
             ↓ IFC4
           </a>
-          <button
+          {onClose && <button
             onClick={onClose}
             style={{
               background: "transparent", border: "none", color: "var(--text-2, #9ca3af)",
@@ -330,13 +337,15 @@ export default function MpShowcasePanel({
             title="Close Panel"
           >
             ✕
-          </button>
+          </button>}
         </div>
       </div>
 
       {/* Live Matterport 360° Embed (renders directly regardless of SDK key) */}
-      {embedSize !== "hidden" && (
-        <div style={{ position: "relative", height: embedHeight, flexShrink: 0, background: "#05070e", transition: "height 0.2s ease" }}>
+      {(full || embedSize !== "hidden") && (
+        <div style={full
+          ? { position: "relative", gridColumn: 1, gridRow: "1 / 6", minHeight: 0, background: "#05070e" }
+          : { position: "relative", height: embedHeight, flexShrink: 0, background: "#05070e", transition: "height 0.2s ease" }}>
           <iframe
             ref={iframeRef}
             src={iframeSrc}
@@ -361,6 +370,7 @@ export default function MpShowcasePanel({
       <div style={{
         display: "flex", gap: 4, padding: "8px 10px 6px",
         borderBottom: "1px solid rgba(var(--fg-rgb, 255,255,255), 0.08)",
+        ...place(2),
       }}>
         {[
           { id: "inventory", label: `Inventář (${inventory.length})` },
@@ -382,7 +392,7 @@ export default function MpShowcasePanel({
         ))}
       </div>
 
-      <div style={{ padding: "6px 10px", display: "flex", gap: 6, alignItems: "center" }}>
+      <div style={{ padding: "6px 10px", display: "flex", gap: 6, alignItems: "center", ...place(3) }}>
         <input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -409,13 +419,13 @@ export default function MpShowcasePanel({
       </div>
 
       {statusMsg && (
-        <div style={{ padding: "2px 12px 4px", fontSize: 10.5, color: "#34d399" }}>
+        <div style={{ padding: "2px 12px 4px", fontSize: 10.5, color: "var(--green)", ...place(4) }}>
           {statusMsg}
         </div>
       )}
 
       {/* Tab Body */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "4px 10px 12px" }}>
+      <div style={{ flex: 1, overflowY: "auto", padding: "4px 10px 12px", ...place(5) }}>
         {tab === "inventory" && (
           <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
             {filteredInventory.map((row) => {

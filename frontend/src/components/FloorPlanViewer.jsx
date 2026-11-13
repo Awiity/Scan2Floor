@@ -1512,6 +1512,13 @@ export default function FloorPlanViewer({
   livePose = null,
   selectedMpItem = null,
   onSelectMpItem,
+  // Optional shared layer state (synced with the 3D viewer). Falls back to local state.
+  sharedShowMpEquip,
+  sharedSetShowMpEquip,
+  sharedShowMpSweeps,
+  sharedSetShowMpSweeps,
+  sharedShowMpAiHints,
+  sharedSetShowMpAiHints,
 }) {
   const canvasRef = useRef(null);
   const camRef = useRef({ scale: 8, ox: 300, oy: 300 });
@@ -1552,9 +1559,15 @@ export default function FloorPlanViewer({
   const [roomsData, setRoomsData] = useState(null);
   const [openingsData, setOpeningsData] = useState(null);
   const [loadState, setLoadState] = useState("idle");
-  const [showMpEquip, setShowMpEquip] = useState(true);
-  const [showMpSweeps, setShowMpSweeps] = useState(false);
-  const [showMpAiHints, setShowMpAiHints] = useState(true);
+  const [localMpEquip, setLocalMpEquip] = useState(true);
+  const [localMpSweeps, setLocalMpSweeps] = useState(false);
+  const [localMpAiHints, setLocalMpAiHints] = useState(true);
+  const showMpEquip = sharedShowMpEquip ?? localMpEquip;
+  const setShowMpEquip = sharedSetShowMpEquip ?? setLocalMpEquip;
+  const showMpSweeps = sharedShowMpSweeps ?? localMpSweeps;
+  const setShowMpSweeps = sharedSetShowMpSweeps ?? setLocalMpSweeps;
+  const showMpAiHints = sharedShowMpAiHints ?? localMpAiHints;
+  const setShowMpAiHints = sharedSetShowMpAiHints ?? setLocalMpAiHints;
 
   // Keep selected floor in sync with activeFloor when provided
   useEffect(() => {
@@ -2633,7 +2646,7 @@ export default function FloorPlanViewer({
           {loadState === "ready" && <Badge colour="cyan">{wallCount}W · {doorCount}D · {windowCount}W · {roomCount}R</Badge>}
           {isDirty && <Badge colour="amber">✎ Unsaved edits</Badge>}
           {loadState === "error" && <Badge colour="grey">⚠ API error</Badge>}
-          <button className="fpv-close" onClick={onClose} title="Close">✕</button>
+          {onClose && <button className="fpv-close" onClick={onClose} title="Close">✕</button>}
         </div>
       </div>
 

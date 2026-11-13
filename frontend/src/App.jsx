@@ -6,7 +6,6 @@ import {
   GizmoHelper,
   GizmoViewport,
 } from "@react-three/drei";
-import Sidebar from "./components/Sidebar";
 import TexturedMesh from "./components/TexturedMesh";
 import OBJModel from "./components/OBJModel"; // kept for future use — toggle removed from UI
 import PointCloud from "./components/PointCloud";
@@ -20,8 +19,20 @@ import DetectedBim3D from "./components/DetectedBim3D";
 import BimInspectorOverlay from "./components/BimInspectorOverlay";
 import MpObjects3D from "./components/MpObjects3D";
 import MpShowcasePanel from "./components/MpShowcasePanel";
+import HomePage from "./components/HomePage";
+import LayersPanel from "./components/LayersPanel";
+import RedetectDrawer from "./components/RedetectDrawer";
+import SaveOutput from "./components/SaveOutput";
+import { loadAlgoParams, persistAlgoParams } from "./algoParams";
 
 const POLL_MS = 7 * 1000;
+
+const VIEW_DEFS = [
+  { id: "3d", label: "3D Viewer", key: "1" },
+  { id: "360", label: "360° Showcase", key: "2" },
+  { id: "2d", label: "2D Vector Plan", key: "3" },
+  { id: "plans", label: "Matterport Plans", key: "4" },
+];
 
 export default function App() {
   /* ---------- server status ---------- */
@@ -29,16 +40,13 @@ export default function App() {
   const [modelInfo, setModelInfo] = useState(null);
 
   /* ---------- layer visibility -------- */
-  const [showMesh, setShowMesh] = useState(false); // reserved, toggle removed from UI
+  const [showMesh] = useState(false); // reserved, toggle removed from UI
   const [showCloud, setShowCloud] = useState(false);
   const [showTexture, setShowTexture] = useState(false);
   const [textureOpacity, setTextureOpacity] = useState(0.85);
-  const [showFloorPlan, setShowFloorPlan] = useState(false);
-  const [showFloorPlanViewer, setShowFloorPlanViewer] = useState(false);
   const [showBim3D, setShowBim3D] = useState(true);
   const [showMpEquip, setShowMpEquip] = useState(true);
   const [showMpSweeps, setShowMpSweeps] = useState(false);
-  const [showMpShowcase, setShowMpShowcase] = useState(false);
   const [mpConfig, setMpConfig] = useState(null);
   const [mpPoints, setMpPoints] = useState([]);
   const [mpSweeps, setMpSweeps] = useState({});
@@ -56,7 +64,6 @@ export default function App() {
   const [hoveredRoom, setHoveredRoom] = useState(null);
   const [selectedOpening, setSelectedOpening] = useState(null);
   const [hoveredOpening, setHoveredOpening] = useState(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [fpFloor, setFpFloor] = useState(0);
   const [activeFloor, setActiveFloor] = useState("all");
 
@@ -73,7 +80,7 @@ export default function App() {
       const next = t === "dark" ? "light" : "dark";
       try {
         localStorage.setItem("s2f_theme", next);
-      } catch { }
+      } catch { /* ignore */ }
       return next;
     });
   };
@@ -88,30 +95,6 @@ export default function App() {
       return { wall: "#f5f5f5", floor: "#2ed16b" };
     }
   });
-
-  /* ---------- fpv panel width (resizable) --------- */
-  const MIN_FPV_WIDTH = 560;
-  const [fpvWidth, setFpvWidth] = useState(MIN_FPV_WIDTH);
-  const fpvDragRef = useRef(null);
-
-  const onFpvResizeStart = useCallback((e) => {
-    e.preventDefault();
-    fpvDragRef.current = { startX: e.clientX, startWidth: fpvWidth };
-    const onMove = (ev) => {
-      if (!fpvDragRef.current) return;
-      // Dragging left = larger panel (panel is on the right side)
-      const delta = fpvDragRef.current.startX - ev.clientX;
-      const newW = Math.max(MIN_FPV_WIDTH, fpvDragRef.current.startWidth + delta);
-      setFpvWidth(newW);
-    };
-    const onUp = () => {
-      fpvDragRef.current = null;
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  }, [fpvWidth]);
 
   /* ---------- loading state ----------- */
   const [meshLoading, setMeshLoading] = useState(false);
@@ -155,6 +138,35 @@ export default function App() {
   /* ---------- loaded save -------------- */
   // null = live data; string = name of the loaded save being viewed
   const [loadedSave, setLoadedSave] = useState(null);
+  const [saveInfo, setSaveInfo] = useState(null);
+  const [sourceName, setSourceName] = useState("output");
+
+  /* ---------- app stage & workspace layout ---------- */
+  const [stage, setStage] = useState("home"); // "home" | "workspace"
+  const [sessionKey, setSessionKey] = useState(0);
+  const [layout, setLayout] = useState("single"); // "single" | "split" | "all"
+  const [slots, setSlots] = useState(["3d", "2d"]); // [primary, secondary] views
+  const [visited, setVisited] = useState(() => new Set(["3d"]));
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showMpAiHints, setShowMpAiHints] = useState(true);
+  const [showAlgo, setShowAlgo] = useState(false);
+  const [algoParams, setAlgoParams] = useState(loadAlgoParams);
+  const rootRef = useRef(null);
+
+  const visibleViews =
+    layout === "single" ? [slots[0]] : layout === "split" ? [slots[0], slots[1]] : ["3d", "360", "2d"];
+  const visibleKey = visibleViews.join(",");
+
+  /** Make sure a view is on screen (used when an action in one view targets another). */
+  const revealView = useCallback((v) => {
+    if (layout === "all" && v !== "plans") return;
+    setSlots((prev) => {
+      if (layout === "single") return [v, prev[1] === v ? prev[0] : prev[1]];
+      if (prev.includes(v)) return prev;
+      return [prev[0], v];
+    });
+    if (layout === "all") setLayout("single");
+  }, [layout]);
 
   /* ---------- 3D wall deletion ---------- */
   const handleDeleteWallFrom3D = useCallback(async (wall) => {
@@ -551,8 +563,9 @@ export default function App() {
     if (req) {
       setFpvMode(true);
       setFpvRequest(req);
+      revealView("3d");
     }
-  }, [activeFloor, computeFpvForMpItem, showBim3D, showTexture, showCloud]);
+  }, [activeFloor, computeFpvForMpItem, showBim3D, showTexture, showCloud, revealView]);
 
   const handleCycleFpvItem = useCallback((delta) => {
     const floorNum = activeFloor === "all" ? null : Number(activeFloor);
@@ -572,7 +585,7 @@ export default function App() {
 
   const handleJumpToMpItem = useCallback(async (item) => {
     if (!item?.data) return;
-    setShowMpShowcase(true);
+    revealView("360");
     const qs = loadedSave ? `?save_name=${encodeURIComponent(loadedSave)}` : "";
     if (item.kind === "instance") {
       const res = await fetch(`/api/mp/goto-instance/${item.data.instance_id}${qs}`, { method: "POST" });
@@ -595,7 +608,7 @@ export default function App() {
       });
       setPendingMpCommand(cmd);
     }
-  }, [loadedSave]);
+  }, [loadedSave, revealView]);
 
   const handleSaveMpAsPoint = useCallback(async (inst) => {
     if (!inst?.anchor) return;
@@ -638,605 +651,548 @@ export default function App() {
     return () => clearInterval(id);
   }, [checkStatus]);
 
-  const anyLoading = meshLoading || cloudLoading;
+  /* ---------- workspace navigation / sync helpers ---------- */
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  useEffect(() => { persistAlgoParams(algoParams); }, [algoParams]);
+
+  // Keep every view that has been shown mounted so state (camera, edits, 360 position) survives switching.
+  useEffect(() => {
+    setVisited((prev) => {
+      const next = new Set(prev);
+      visibleKey.split(",").forEach((v) => next.add(v));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [visibleKey]);
+
+  useEffect(() => {
+    if (!loadedSave) { setSaveInfo(null); return undefined; }
+    let cancelled = false;
+    fetch(`/api/saves/${encodeURIComponent(loadedSave)}/info`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled) setSaveInfo(d); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [loadedSave]);
+
+  const toggleFullscreen = useCallback(() => {
+    if (document.fullscreenElement) document.exitFullscreen?.();
+    else rootRef.current?.requestFullscreen?.();
+  }, []);
+
+  useEffect(() => {
+    const onFs = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onFs);
+    return () => document.removeEventListener("fullscreenchange", onFs);
+  }, []);
+
+  const focusView = useCallback((id) => {
+    setLayout("single");
+    setSlots((prev) => [id, prev[0] === id ? prev[1] : prev[0]]);
+  }, []);
+
+  const changeLayout = useCallback((l) => {
+    setLayout(l);
+  }, []);
+
+  const onTab = useCallback((id) => {
+    if (layout === "all") focusView(id);
+    else revealView(id);
+  }, [layout, focusView, revealView]);
+
+  // Alt+1..4 switch views, Alt+F toggles full screen
+  useEffect(() => {
+    if (stage !== "workspace") return undefined;
+    const onKey = (e) => {
+      if (!e.altKey || e.ctrlKey || e.metaKey) return;
+      const def = VIEW_DEFS.find((v) => v.key === e.key);
+      if (def) { e.preventDefault(); onTab(def.id); }
+      else if (e.key.toLowerCase() === "f") { e.preventDefault(); toggleFullscreen(); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [stage, onTab, toggleFullscreen]);
+
+  const resetSession = useCallback(() => {
+    handleSelectRoom(null);
+    setSelectedWall(null);
+    setSelectedOpening(null);
+    setSelectedMpItem(null);
+    setFpvMode(false);
+    setFpvRequest(null);
+    setMpLabelFilter(null);
+    setActiveFloor("all");
+    setShowAlgo(false);
+    setLayout("single");
+    setSlots(["3d", "2d"]);
+    setVisited(new Set(["3d"]));
+    setSessionKey((k) => k + 1);
+  }, [handleSelectRoom]);
+
+  const openSave = (sv) => {
+    resetSession();
+    setLoadedSave(sv.name);
+    setSourceName(sv.name);
+    if (sv.wall_color || sv.floor_color) {
+      const restored = {
+        wall: sv.wall_color ?? cloudColors?.wall ?? "#f5f5f5",
+        floor: sv.floor_color ?? cloudColors?.floor ?? "#2ed16b",
+      };
+      setCloudColors(restored);
+      try { localStorage.setItem("s2f_cloud_colors", JSON.stringify(restored)); } catch { /* ignore */ }
+    }
+    setStage("workspace");
+  };
+
+  const openLive = () => {
+    resetSession();
+    setLoadedSave(null);
+    handleWallsDetected();
+    checkStatus();
+    setStage("workspace");
+  };
+
+  const onPipelineDone = (src) => {
+    if (src) setSourceName(src);
+    resetSession();
+    setLoadedSave(null);
+    handleReprocessDone();
+    handleWallsDetected();
+    checkStatus();
+    setStage("workspace");
+  };
+
   const loadingLabel = meshLoading
     ? `Loading 3D Mesh (${meshProgress}%)`
     : "Streaming Point Cloud…";
 
-  return (
-    <div className="app" data-theme={theme}>
-      {/* Top navigation bar */}
-      <header className="topbar">
-        <div className="logo-group">
-          <span className="logo-icon">◈</span>
-          <span className="logo-text">Scan2Floor</span>
-          <span className="logo-tag">BIM</span>
-        </div>
+  /* ---------- derived workspace values ---------- */
+  const floorCount = loadedSave
+    ? (saveInfo?.floor_levels?.length ?? 1)
+    : (modelInfo?.floor_levels?.length ?? 0);
+  const cloudReady = backendStatus === "ready";
+  const mpStats = {
+    instances: mpInstances.length,
+    sweeps: Object.keys(mpSweeps).length,
+    points: mpPoints.length,
+  };
+  const multi = visibleViews.length > 1;
 
-        <div className="topbar-spacer" />
+  const paneStyle = (id) => {
+    if (layout === "single") return { gridColumn: 1, gridRow: 1 };
+    if (layout === "split") return { gridColumn: slots[0] === id ? 1 : 2, gridRow: 1 };
+    const m = {
+      "3d": { gridColumn: 1, gridRow: "1 / span 2" },
+      "360": { gridColumn: 2, gridRow: 1 },
+      "2d": { gridColumn: 2, gridRow: 2 },
+    };
+    return m[id] ?? {};
+  };
+  const stageStyle =
+    layout === "all"
+      ? { gridTemplateColumns: "minmax(0,1.5fr) minmax(0,1fr)", gridTemplateRows: "minmax(0,1fr) minmax(0,1fr)" }
+      : layout === "split"
+        ? { gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gridTemplateRows: "minmax(0,1fr)" }
+        : { gridTemplateColumns: "minmax(0,1fr)", gridTemplateRows: "minmax(0,1fr)" };
 
-        {/* Theme toggle */}
-        <button
-          className="theme-toggle"
-          onClick={toggleTheme}
-          title={isDark ? "Switch to Light theme" : "Switch to Dark theme"}
-        >
-          <span>{isDark ? "☀" : "🌙"}</span>
-        </button>
+  const onSelectMpItemShared = (item) => {
+    setSelectedMpItem(item);
+    if (item) {
+      setSelectedWall(null);
+      setSelectedOpening(null);
+    }
+  };
 
-        {/* Backend status pill */}
-        <div className={`status-pill status-${backendStatus}`}>
-          <span className="status-dot" />
-          <span className="status-label">
-            {backendStatus === "ready" && "Connected"}
-            {backendStatus === "idle" && "Idle (No Data)"}
-            {backendStatus === "processing" && "Processing…"}
-            {backendStatus === "error" && "Offline"}
-            {backendStatus === "connecting" && "Connecting…"}
-          </span>
-        </div>
-      </header>
+  const hudBtn = (active) => `s2f-hud-btn${active ? " active" : ""}`;
 
-      {/* Main layout */}
-      <div className="workspace">
-        {/* Left sidebar */}
-        <Sidebar
-          backendStatus={backendStatus}
-          modelInfo={modelInfo}
-          showMesh={showMesh}
-          setShowMesh={setShowMesh}
-          showTexture={showTexture}
-          setShowTexture={setShowTexture}
-          textureOpacity={textureOpacity}
-          setTextureOpacity={setTextureOpacity}
-          showCloud={showCloud}
-          setShowCloud={setShowCloud}
-          showFloorPlan={showFloorPlan}
-          setShowFloorPlan={setShowFloorPlan}
-          showFloorPlanViewer={showFloorPlanViewer}
-          setShowFloorPlanViewer={setShowFloorPlanViewer}
-          showBim3D={showBim3D}
-          setShowBim3D={setShowBim3D}
-          showMpEquip={showMpEquip}
-          setShowMpEquip={setShowMpEquip}
-          showMpSweeps={showMpSweeps}
-          setShowMpSweeps={setShowMpSweeps}
-          showMpShowcase={showMpShowcase}
-          setShowMpShowcase={setShowMpShowcase}
-          mpStats={{
-            instances: mpInstances.length,
-            sweeps: Object.keys(mpSweeps).length,
-            points: mpPoints.length,
-          }}
-          className={sidebarCollapsed ? "collapsed" : ""}
-          cloudPoints={cloudPoints}
-          onReprocessDone={handleReprocessDone}
-          onWallsDetected={handleWallsDetected}
-          onRefreshStatus={checkStatus}
-          activeFloor={activeFloor}
-          setActiveFloor={setActiveFloor}
-          roomMode={roomMode}
-          setRoomMode={setRoomMode}
-          onLoadSave={setLoadedSave}
-          cloudColors={cloudColors}
-          setCloudColors={setCloudColors}
+  /* ---------- the four views ---------- */
+  const render3D = (visible) => (
+    <>
+      <Canvas
+        frameloop={visible ? "always" : "never"}
+        camera={{ position: [30, 15, 30], fov: 50, near: 0.1, far: 2000 }}
+        gl={{ antialias: true, localClippingEnabled: true }}
+        onPointerMissed={() => {
+          setSelectedWall(null);
+          setSelectedMpItem(null);
+        }}
+      >
+        <color attach="background" args={[isDark ? "#0f0f0f" : "#f5f5f5"]} />
+        <ambientLight intensity={isDark ? 0.6 : 0.8} />
+        <directionalLight position={[20, 30, 10]} intensity={1} castShadow />
+        <directionalLight position={[-20, 10, -10]} intensity={0.4} />
+
+        <Grid
+          args={[200, 200]}
+          position={[0, -0.05, 0]}
+          cellColor={isDark ? "#1f1f1f" : "#e5e5e5"}
+          sectionColor={isDark ? "#333333" : "#cccccc"}
+          sectionSize={10}
+          fadeDistance={120}
+          infiniteGrid
         />
 
-        {/* Sidebar toggle tab */}
-        <button
-          className={`sidebar-toggle-tab${sidebarCollapsed ? " collapsed" : ""}`}
-          style={{ left: sidebarCollapsed ? 0 : "var(--sidebar-w)", transition: "left 0.2s cubic-bezier(0.4,0,0.2,1), color 0.15s, border-color 0.15s, background 0.15s" }}
-          onClick={() => setSidebarCollapsed(v => !v)}
-          title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
-        >
-          <span className="toggle-arrow">‹</span>
-        </button>
-
-        <div className="viewport">
-          {/* Three.js canvas */}
-          <div className="canvas-wrap">
-            <Canvas
-              camera={{ position: [30, 15, 30], fov: 50, near: 0.1, far: 2000 }}
-              gl={{ antialias: true, localClippingEnabled: true }}
-              onPointerMissed={() => {
-                setSelectedWall(null);
-                setSelectedMpItem(null);
-              }}
-            >
-              <color attach="background" args={[isDark ? "#0f0f0f" : "#f5f5f5"]} />
-              <ambientLight intensity={isDark ? 0.6 : 0.8} />
-              <directionalLight
-                position={[20, 30, 10]}
-                intensity={1}
-                castShadow
-              />
-              <directionalLight position={[-20, 10, -10]} intensity={0.4} />
-
-              <Grid
-                args={[200, 200]}
-                position={[0, -0.05, 0]}
-                cellColor={isDark ? "#1f1f1f" : "#e5e5e5"}
-                sectionColor={isDark ? "#333333" : "#cccccc"}
-                sectionSize={10}
-                fadeDistance={120}
-                infiniteGrid
-              />
-
-              <Suspense fallback={null}>
-                {showMesh && (
-                  <OBJModel
-                    modelInfo={modelInfo}
-                    activeFloor={activeFloor}
-                    onLoadStart={() => {
-                      setMeshLoading(true);
-                      setMeshProgress(0);
-                    }}
-                    onProgress={(p) => setMeshProgress(p)}
-                    onLoaded={() => setMeshLoading(false)}
-                  />
-                )}
-                {showTexture && (
-                  <TexturedMesh
-                    modelInfo={modelInfo}
-                    activeFloor={activeFloor}
-                    opacity={textureOpacity}
-                    onLoadStart={() => {
-                      setMeshLoading(true);
-                      setMeshProgress(0);
-                    }}
-                    onProgress={(p) => setMeshProgress(p)}
-                    onLoaded={() => setMeshLoading(false)}
-                  />
-                )}
-                {showCloud && backendStatus === "ready" && (
-                  <PointCloud
-                    modelInfo={modelInfo}
-                    activeFloor={activeFloor}
-                    reloadKey={cloudReloadKey}
-                    highlightedRoom={highlightedRoom}
-                    wallColor={cloudColors.wall}
-                    floorColor={cloudColors.floor}
-                    onLoadStart={() => setCloudLoading(true)}
-                    onLoaded={(n) => {
-                      setCloudLoading(false);
-                      setCloudPoints(n);
-                    }}
-                  />
-                )}
-                {showBim3D && (
-                  <DetectedBim3D
-                    modelInfo={modelInfo}
-                    activeFloor={activeFloor}
-                    dataVersion={floorDataVersion}
-                    loadedSave={loadedSave}
-                    selectedRoomId={selectedRoomId}
-                    onSelectRoom={handleSelectRoom}
-                    selectedWall={selectedWall}
-                    onSelectWall={(w) => {
-                      setSelectedWall(w);
-                      if (w) setSelectedOpening(null);
-                    }}
-                    hoveredWall={hoveredWall}
-                    setHoveredWall={setHoveredWall}
-                    hoveredRoom={hoveredRoom}
-                    setHoveredRoom={setHoveredRoom}
-                    selectedOpening={selectedOpening}
-                    onSelectOpening={(op) => {
-                      setSelectedOpening(op);
-                      if (op) setSelectedWall(null);
-                    }}
-                    hoveredOpening={hoveredOpening}
-                    setHoveredOpening={setHoveredOpening}
-                  />
-                )}
-                <MpObjects3D
-                  instances={mpInstances}
-                  points={mpPoints}
-                  sweeps={mpSweeps}
-                  activeFloor={activeFloor}
-                  showEquipment={showMpEquip}
-                  showSweeps={showMpSweeps}
-                  labelFilter={mpLabelFilter}
-                  livePose={liveMpPose}
-                  selectedMpItem={selectedMpItem}
-                  hoveredMpItem={hoveredMpItem}
-                  onSelectMpItem={(item) => {
-                    setSelectedMpItem(item);
-                    if (item) {
-                      setSelectedWall(null);
-                      setSelectedOpening(null);
-                    }
-                  }}
-                  onHoverMpItem={setHoveredMpItem}
-                />
-              </Suspense>
-
-              <OrbitControls
-                ref={controlsRef}
-                makeDefault
-                enableDamping
-                dampingFactor={0.08}
-                minDistance={0.05}
-                maxDistance={500}
-              />
-
-              {/* 3D camera focus on selected room & First-Person View */}
-              <CameraFocuser
-                highlightedRoom={highlightedRoom}
-                modelInfo={modelInfo}
-                controlsRef={controlsRef}
-                activeFloor={activeFloor}
-                fpvRequest={fpvRequest}
-                fpvMode={fpvMode}
-              />
-
-              <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
-                <GizmoViewport labelColor={isDark ? "white" : "#222222"} axisHeadScale={1} />
-              </GizmoHelper>
-            </Canvas>
-          </div>
-
-          {/* 3D BIM Inspector Overlay */}
-          <BimInspectorOverlay
-            selectedWall={selectedWall}
-            onCloseWall={() => setSelectedWall(null)}
-            onDeleteWall={handleDeleteWallFrom3D}
-            hoveredWall={hoveredWall}
-            hoveredRoom={hoveredRoom}
-            selectedOpening={selectedOpening}
-            onCloseOpening={() => setSelectedOpening(null)}
-            onDeleteOpening={handleDeleteOpeningFrom3D}
-            hoveredOpening={hoveredOpening}
-            onUpdateOpening={handleUpdateOpeningFrom3D}
-            selectedMpItem={selectedMpItem}
-            onCloseMpItem={() => setSelectedMpItem(null)}
-            hoveredMpItem={hoveredMpItem}
-            onJumpToMpItem={handleJumpToMpItem}
-            onEnterFpv={handleEnterFpv}
-            onDeleteMpPoint={handleDeleteMpPoint}
-            onSaveMpAsPoint={handleSaveMpAsPoint}
-          />
-
-          {/* Floating First-Person View (FPV) & Layer Switcher HUD */}
-          <div style={{
-            position: "absolute",
-            top: loadedSave ? 48 : 12,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 18,
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            flexWrap: "wrap",
-            justifyContent: "center",
-            background: "rgba(var(--panel-rgb, 17,24,39), 0.9)",
-            backdropFilter: "blur(12px)",
-            border: fpvMode ? "1px solid rgba(56,189,248,0.55)" : "1px solid var(--border-hi, rgba(255,255,255,0.14))",
-            borderRadius: 999,
-            padding: "5px 10px",
-            boxShadow: "0 4px 18px rgba(0,0,0,0.32)",
-            fontFamily: "Inter, sans-serif",
-            fontSize: 11.5,
-          }}>
-            {!fpvMode ? (
-              <>
-                <button
-                  onClick={() => {
-                    if (selectedMpItem) handleEnterFpv(selectedMpItem);
-                    else setFpvMode(true);
-                  }}
-                  style={{
-                    background: "rgba(56,189,248,0.18)",
-                    border: "1px solid rgba(56,189,248,0.42)",
-                    borderRadius: 999,
-                    color: "#38bdf8",
-                    fontWeight: 700,
-                    fontSize: 11.5,
-                    padding: "4px 10px",
-                    cursor: "pointer",
-                  }}
-                  title="Walk/Look around at eye level (WASD + Mouse drag)"
-                >
-                  👁 First-Person View
-                </button>
-                <button
-                  onClick={() => handleCycleFpvItem(1)}
-                  disabled={!mpInstances.some((i) => i.label === "dvere")}
-                  style={{
-                    background: "rgba(34,197,94,0.15)",
-                    border: "1px solid rgba(34,197,94,0.38)",
-                    borderRadius: 999,
-                    color: "#4ade80",
-                    fontWeight: 700,
-                    fontSize: 11.5,
-                    padding: "4px 10px",
-                    cursor: "pointer",
-                  }}
-                  title="Jump directly to a door in First-Person View"
-                >
-                  🚪 Inspect Doors
-                </button>
-                <button
-                  onClick={() => setShowMpShowcase((v) => !v)}
-                  style={{
-                    background: showMpShowcase ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.06)",
-                    border: "1px solid rgba(255,255,255,0.15)",
-                    borderRadius: 999,
-                    color: showMpShowcase ? "#c084fc" : "var(--text-1, #e5e7eb)",
-                    fontWeight: 600,
-                    fontSize: 11.5,
-                    padding: "4px 10px",
-                    cursor: "pointer",
-                  }}
-                >
-                  🌐 Equipment & 360°
-                </button>
-              </>
-            ) : (
-              <>
-                <span style={{ color: "#38bdf8", fontWeight: 700, paddingLeft: 4 }}>
-                  👁 FPV {selectedMpItem?.data?.instance_id || selectedMpItem?.data?.name || "Free Walk"}
-                </span>
-                <button
-                  onClick={() => handleCycleFpvItem(-1)}
-                  style={{
-                    background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.14)",
-                    borderRadius: 999, color: "var(--text-1, #e5e7eb)", padding: "3px 8px",
-                    fontSize: 11, cursor: "pointer",
-                  }}
-                  title="Previous item in class"
-                >
-                  ◀ Prev
-                </button>
-                {selectedMpItem && (
-                  <button
-                    onClick={() => handleEnterFpv(selectedMpItem)}
-                    style={{
-                      background: "rgba(56,189,248,0.16)", border: "1px solid rgba(56,189,248,0.35)",
-                      borderRadius: 999, color: "#38bdf8", padding: "3px 8px",
-                      fontSize: 11, cursor: "pointer", fontWeight: 600,
-                    }}
-                    title="Re-aim camera straight at selected object"
-                  >
-                    🎯 Re-Aim
-                  </button>
-                )}
-                <button
-                  onClick={() => handleCycleFpvItem(1)}
-                  style={{
-                    background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.14)",
-                    borderRadius: 999, color: "var(--text-1, #e5e7eb)", padding: "3px 8px",
-                    fontSize: 11, cursor: "pointer",
-                  }}
-                  title="Next item in class"
-                >
-                  Next ▶
-                </button>
-                <span style={{ opacity: 0.35 }}>|</span>
-                <button
-                  onClick={() => setShowBim3D((v) => !v)}
-                  style={{
-                    background: showBim3D ? "rgba(56,189,248,0.22)" : "rgba(255,255,255,0.05)",
-                    border: `1px solid ${showBim3D ? "rgba(56,189,248,0.45)" : "rgba(255,255,255,0.12)"}`,
-                    borderRadius: 999, color: showBim3D ? "#38bdf8" : "var(--text-3, #9ca3af)",
-                    padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer",
-                  }}
-                  title="Toggle 3D BIM Walls & Slabs"
-                >
-                  🏛️ BIM
-                </button>
-                <button
-                  onClick={() => {
-                    setShowTexture((v) => {
-                      const next = !v;
-                      if (next && textureOpacity < 0.9) setTextureOpacity(1.0);
-                      return next;
-                    });
-                  }}
-                  style={{
-                    background: showTexture ? "rgba(251,191,36,0.22)" : "rgba(255,255,255,0.05)",
-                    border: `1px solid ${showTexture ? "rgba(251,191,36,0.45)" : "rgba(255,255,255,0.12)"}`,
-                    borderRadius: 999, color: showTexture ? "#fbbf24" : "var(--text-3, #9ca3af)",
-                    padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer",
-                  }}
-                  title="Toggle Photo Texture Mesh Layer"
-                >
-                  📷 Photo
-                </button>
-                <button
-                  onClick={() => setShowCloud((v) => !v)}
-                  style={{
-                    background: showCloud ? "rgba(34,197,94,0.2)" : "rgba(255,255,255,0.05)",
-                    border: `1px solid ${showCloud ? "rgba(34,197,94,0.4)" : "rgba(255,255,255,0.12)"}`,
-                    borderRadius: 999, color: showCloud ? "#4ade80" : "var(--text-3, #9ca3af)",
-                    padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer",
-                  }}
-                  title="Toggle Point Cloud"
-                >
-                  ✦ Cloud
-                </button>
-                <button
-                  onClick={() => setShowMpEquip((v) => !v)}
-                  style={{
-                    background: showMpEquip ? "rgba(168,85,247,0.2)" : "rgba(255,255,255,0.05)",
-                    border: `1px solid ${showMpEquip ? "rgba(168,85,247,0.4)" : "rgba(255,255,255,0.12)"}`,
-                    borderRadius: 999, color: showMpEquip ? "#c084fc" : "var(--text-3, #9ca3af)",
-                    padding: "3px 8px", fontSize: 11, fontWeight: 600, cursor: "pointer",
-                  }}
-                  title="Toggle Equipment Markers"
-                >
-                  📦 Markers
-                </button>
-                <span style={{ fontSize: 10, color: "var(--text-3, #9ca3af)" }} title="Controls">
-                  WASD Walk · Drag Look · Scroll Step
-                </span>
-                <button
-                  onClick={() => setFpvMode(false)}
-                  style={{
-                    background: "rgba(239,68,68,0.18)", border: "1px solid rgba(239,68,68,0.4)",
-                    borderRadius: 999, color: "#f87171", padding: "3px 9px",
-                    fontSize: 11, fontWeight: 700, cursor: "pointer",
-                  }}
-                >
-                  ✕ Exit FPV
-                </button>
-              </>
-            )}
-          </div>
-
-          {/* Loading overlay */}
-          {anyLoading && (
-            <LoadingOverlay
-              label={loadingLabel}
-              progress={meshLoading ? meshProgress : null}
+        <Suspense fallback={null}>
+          {showMesh && (
+            <OBJModel
+              modelInfo={modelInfo}
+              activeFloor={activeFloor}
+              onLoadStart={() => { setMeshLoading(true); setMeshProgress(0); }}
+              onProgress={(p) => setMeshProgress(p)}
+              onLoaded={() => setMeshLoading(false)}
             />
           )}
-
-          {/* Saved-output banner */}
-          {loadedSave && (
-            <div style={{
-              position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)",
-              zIndex: 10, display: "flex", alignItems: "center", gap: 8,
-              background: "var(--surface-2)",
-              border: "1px solid var(--border-hi)", borderRadius: 8,
-              padding: "6px 14px", fontSize: 12, fontWeight: 700,
-              color: "var(--text-1)", fontFamily: "Inter, sans-serif",
-              boxShadow: "0 2px 10px rgba(0,0,0,0.2)",
-            }}>
-              <span>💾 Viewing saved output:</span>
-              <span style={{ color: "var(--accent)" }}>{loadedSave}</span>
-              <button
-                onClick={() => setLoadedSave(null)}
-                title="Return to live data"
-                style={{
-                  marginLeft: 4, background: "var(--surface-3)",
-                  border: "1px solid var(--border)",
-                  borderRadius: 5, color: "var(--text-2)", fontSize: 11,
-                  padding: "2px 7px", cursor: "pointer",
-                }}
-              >✕ Live</button>
-            </div>
+          {showTexture && (
+            <TexturedMesh
+              modelInfo={modelInfo}
+              activeFloor={activeFloor}
+              opacity={textureOpacity}
+              onLoadStart={() => { setMeshLoading(true); setMeshProgress(0); }}
+              onProgress={(p) => setMeshProgress(p)}
+              onLoaded={() => setMeshLoading(false)}
+            />
           )}
-
-          {/* Processing banner — only when a job is actively running */}
-          {backendStatus === "processing" && (
-            <div className="processing-banner">
-              ⏳ Point cloud is being preprocessed — check back shortly
-            </div>
+          {showCloud && cloudReady && (
+            <PointCloud
+              modelInfo={modelInfo}
+              activeFloor={activeFloor}
+              reloadKey={cloudReloadKey}
+              highlightedRoom={highlightedRoom}
+              wallColor={cloudColors.wall}
+              floorColor={cloudColors.floor}
+              onLoadStart={() => setCloudLoading(true)}
+              onLoaded={(n) => { setCloudLoading(false); setCloudPoints(n); }}
+            />
           )}
-
-          {/* Idle banner — no data yet, nothing running */}
-          {backendStatus === "idle" && (
-            <div className="processing-banner" style={{
-              background: "var(--surface-2)",
-              borderColor: "var(--border)",
-              color: "var(--text-2)",
-            }}>
-              📂 No point cloud loaded — select a .xyz file in the sidebar and click <strong>Rerun Full Preprocess Pipeline</strong>
-            </div>
-          )}
-
-          {/* Corner metric */}
-          {modelInfo && (
-            <div className="corner-info">
-              {modelInfo.n_points?.toLocaleString()} pts &nbsp;·&nbsp;
-              {modelInfo.wall_slices_ready ? (
-                <span style={{ color: "var(--green)" }}>✓ dense slices</span>
-              ) : modelInfo.preprocess_walls_running ? (
-                <span style={{ color: "var(--sel)" }}>⏳ extracting…</span>
-              ) : (
-                <span style={{ color: "var(--sel)" }}>⚠ 1:100 sparse</span>
-              )}
-            </div>
-          )}
-
-          {/* Room list panel — shown when FloorPlanViewer is active */}
-          {/* {showFloorPlanViewer && (
-            <RoomListPanel
-              floor={activeFloor === "all" ? 0 : activeFloor}
+          {showBim3D && (
+            <DetectedBim3D
+              modelInfo={modelInfo}
+              activeFloor={activeFloor}
               dataVersion={floorDataVersion}
+              loadedSave={loadedSave}
               selectedRoomId={selectedRoomId}
-              onSelectRoom={setSelectedRoomId}
-              saveName={loadedSave}
+              onSelectRoom={handleSelectRoom}
+              selectedWall={selectedWall}
+              onSelectWall={(w) => { setSelectedWall(w); if (w) setSelectedOpening(null); }}
+              hoveredWall={hoveredWall}
+              setHoveredWall={setHoveredWall}
+              hoveredRoom={hoveredRoom}
+              setHoveredRoom={setHoveredRoom}
+              selectedOpening={selectedOpening}
+              onSelectOpening={(op) => { setSelectedOpening(op); if (op) setSelectedWall(null); }}
+              hoveredOpening={hoveredOpening}
+              setHoveredOpening={setHoveredOpening}
             />
-          )} */}
-
-          {/* Floor plan panel (Matterport image) */}
-          {showFloorPlan && (
-            <FloorPlanPanel floor={fpFloor} setFloor={setFpFloor} />
           )}
+          <MpObjects3D
+            instances={mpInstances}
+            points={mpPoints}
+            sweeps={mpSweeps}
+            activeFloor={activeFloor}
+            showEquipment={showMpEquip}
+            showSweeps={showMpSweeps}
+            labelFilter={mpLabelFilter}
+            livePose={liveMpPose}
+            selectedMpItem={selectedMpItem}
+            hoveredMpItem={hoveredMpItem}
+            onSelectMpItem={onSelectMpItemShared}
+            onHoverMpItem={setHoveredMpItem}
+          />
+        </Suspense>
+
+        <OrbitControls ref={controlsRef} makeDefault enableDamping dampingFactor={0.08} minDistance={0.05} maxDistance={500} />
+
+        <CameraFocuser
+          highlightedRoom={highlightedRoom}
+          modelInfo={modelInfo}
+          controlsRef={controlsRef}
+          activeFloor={activeFloor}
+          fpvRequest={fpvRequest}
+          fpvMode={fpvMode}
+        />
+
+        <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
+          <GizmoViewport labelColor={isDark ? "white" : "#222222"} axisHeadScale={1} />
+        </GizmoHelper>
+      </Canvas>
+
+      <LayersPanel
+        showBim3D={showBim3D} setShowBim3D={setShowBim3D}
+        showCloud={showCloud} setShowCloud={setShowCloud} cloudReady={cloudReady} cloudPoints={cloudPoints}
+        showTexture={showTexture}
+        setShowTexture={(v) => {
+          setShowTexture(v);
+          if (v && textureOpacity < 0.9) setTextureOpacity(1.0);
+        }}
+        textureOpacity={textureOpacity} setTextureOpacity={setTextureOpacity}
+        showMpEquip={showMpEquip} setShowMpEquip={setShowMpEquip}
+        showMpSweeps={showMpSweeps} setShowMpSweeps={setShowMpSweeps}
+        cloudColors={cloudColors} setCloudColors={setCloudColors}
+        mpStats={mpStats}
+      />
+
+      <BimInspectorOverlay
+        selectedWall={selectedWall}
+        onCloseWall={() => setSelectedWall(null)}
+        onDeleteWall={handleDeleteWallFrom3D}
+        hoveredWall={hoveredWall}
+        hoveredRoom={hoveredRoom}
+        selectedOpening={selectedOpening}
+        onCloseOpening={() => setSelectedOpening(null)}
+        onDeleteOpening={handleDeleteOpeningFrom3D}
+        hoveredOpening={hoveredOpening}
+        onUpdateOpening={handleUpdateOpeningFrom3D}
+        selectedMpItem={selectedMpItem}
+        onCloseMpItem={() => setSelectedMpItem(null)}
+        hoveredMpItem={hoveredMpItem}
+        onJumpToMpItem={handleJumpToMpItem}
+        onEnterFpv={handleEnterFpv}
+        onDeleteMpPoint={handleDeleteMpPoint}
+        onSaveMpAsPoint={handleSaveMpAsPoint}
+      />
+
+      {/* First-person HUD */}
+      <div className={`s2f-hud${fpvMode ? " fpv" : ""}`} onPointerDown={(e) => e.stopPropagation()}>
+        {!fpvMode ? (
+          <>
+            <button
+              className={hudBtn(false)}
+              onClick={() => (selectedMpItem ? handleEnterFpv(selectedMpItem) : setFpvMode(true))}
+              title="Walk / look around at eye level (WASD + mouse drag)"
+            >
+              First-person view
+            </button>
+            <button
+              className={hudBtn(false)}
+              onClick={() => handleCycleFpvItem(1)}
+              disabled={!mpInstances.some((i) => i.label === "dvere")}
+              title="Jump directly to a door in first-person view"
+            >
+              Inspect doors
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="s2f-hud-title">FPV · {selectedMpItem?.data?.instance_id || selectedMpItem?.data?.name || "Free walk"}</span>
+            <button className={hudBtn(false)} onClick={() => handleCycleFpvItem(-1)} title="Previous item in class">◀</button>
+            {selectedMpItem && (
+              <button className={hudBtn(false)} onClick={() => handleEnterFpv(selectedMpItem)} title="Re-aim camera at selected object">Re-aim</button>
+            )}
+            <button className={hudBtn(false)} onClick={() => handleCycleFpvItem(1)} title="Next item in class">▶</button>
+            <span className="s2f-hud-sep" />
+            <button className={hudBtn(showBim3D)} onClick={() => setShowBim3D((v) => !v)}>Walls</button>
+            <button className={hudBtn(showTexture)} onClick={() => { setShowTexture((v) => { const n = !v; if (n && textureOpacity < 0.9) setTextureOpacity(1.0); return n; }); }}>Photo</button>
+            <button className={hudBtn(showCloud)} onClick={() => setShowCloud((v) => !v)}>Cloud</button>
+            <button className={hudBtn(showMpEquip)} onClick={() => setShowMpEquip((v) => !v)}>Markers</button>
+            <span className="s2f-hud-hint">WASD · drag · scroll</span>
+            <button className="s2f-hud-btn danger" onClick={() => setFpvMode(false)}>Exit</button>
+          </>
+        )}
+      </div>
+
+      {(meshLoading || cloudLoading) && (
+        <LoadingOverlay label={loadingLabel} progress={meshLoading ? meshProgress : null} />
+      )}
+
+      {backendStatus === "processing" && <div className="s2f-notice">Point cloud is being preprocessed — check back shortly</div>}
+      {backendStatus === "idle" && !loadedSave && (
+        <div className="s2f-notice">No live point cloud loaded — go back to Home and run the pipeline</div>
+      )}
+
+      {modelInfo && !loadedSave && (
+        <div className="s2f-corner">
+          {modelInfo.n_points?.toLocaleString()} pts ·{" "}
+          {modelInfo.wall_slices_ready ? "dense slices" : modelInfo.preprocess_walls_running ? "extracting…" : "1:100 sparse"}
+        </div>
+      )}
+    </>
+  );
+
+  const render360 = () => (
+    <MpShowcasePanel
+      full
+      apiBase="/api"
+      mpConfig={mpConfig}
+      points={mpPoints}
+      sweeps={mpSweeps}
+      instances={mpInstances}
+      inventory={mpInventory}
+      activeFloor={activeFloor}
+      saveName={loadedSave}
+      livePose={liveMpPose}
+      onPoseUpdate={setLiveMpPose}
+      onDataChanged={refreshMpData}
+      onFocus3D={handleFocus3DPoint}
+      onEnterFpv={handleEnterFpv}
+      onSelectMpItem={onSelectMpItemShared}
+      labelFilter={mpLabelFilter}
+      setLabelFilter={setMpLabelFilter}
+      pendingCommand={pendingMpCommand}
+      onCommandConsumed={() => setPendingMpCommand(null)}
+    />
+  );
+
+  const render2D = () => (
+    <FloorPlanViewer
+      modelInfo={modelInfo}
+      dataVersion={floorDataVersion}
+      highlightedRoomId={selectedRoomId}
+      onSelectRoom={handleSelectRoom}
+      onSelectFloor={setActiveFloor}
+      activeFloor={activeFloor}
+      roomMode={roomMode}
+      saveName={loadedSave}
+      onWallsSaved={handleWallsDetected}
+      mpInstances={mpInstances}
+      mpSweeps={mpSweeps}
+      mpPoints={mpPoints}
+      livePose={liveMpPose}
+      selectedMpItem={selectedMpItem}
+      onSelectMpItem={onSelectMpItemShared}
+      sharedShowMpEquip={showMpEquip}
+      sharedSetShowMpEquip={setShowMpEquip}
+      sharedShowMpSweeps={showMpSweeps}
+      sharedSetShowMpSweeps={setShowMpSweeps}
+      sharedShowMpAiHints={showMpAiHints}
+      sharedSetShowMpAiHints={setShowMpAiHints}
+    />
+  );
+
+  const renderPlans = () => (
+    <div className="s2f-plans">
+      <FloorPlanPanel floor={fpFloor} setFloor={setFpFloor} />
+    </div>
+  );
+
+  const renderView = (id, visible) =>
+    id === "3d" ? render3D(visible) : id === "360" ? render360() : id === "2d" ? render2D() : renderPlans();
+
+  /* ---------- render ---------- */
+  if (stage === "home") {
+    return (
+      <div className="s2f-root" ref={rootRef} data-theme={theme}>
+        <HomePage
+          backendStatus={backendStatus}
+          theme={theme}
+          toggleTheme={toggleTheme}
+          params={algoParams}
+          setParams={setAlgoParams}
+          roomMode={roomMode}
+          setRoomMode={setRoomMode}
+          hasLive={backendStatus === "ready"}
+          onOpenLive={openLive}
+          onOpenSave={openSave}
+          onPipelineDone={onPipelineDone}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="s2f-root" ref={rootRef} data-theme={theme}>
+      <header className="s2f-top">
+        <button className="s2f-btn s2f-btn-sm" onClick={() => setStage("home")} title="Back to session picker">← Home</button>
+        <div className="s2f-brand"><span className="s2f-logo">◈</span> Scan2Floor</div>
+        <div className="s2f-session" title={loadedSave ? "Saved output" : "Live pipeline data"}>
+          <span className={`s2f-dot ${loadedSave ? "s2f-dot-saved" : "s2f-dot-live"}`} />
+          {loadedSave ?? "Live session"}
         </div>
 
-        {/* Phase 4: 2D Vector Floor Plan Viewer */}
-        {showFloorPlanViewer && (
-          <div className="fpv-panel" style={{ width: fpvWidth, position: "relative" }}>
-            {/* Drag handle on left edge */}
-            <div
-              className="fpv-resize-handle"
-              onMouseDown={onFpvResizeStart}
-              title="Drag to resize panel"
-            />
-            <FloorPlanViewer
-              modelInfo={modelInfo}
-              dataVersion={floorDataVersion}
-              onClose={() => setShowFloorPlanViewer(false)}
-              highlightedRoomId={selectedRoomId}
-              onSelectRoom={handleSelectRoom}
-              onSelectFloor={setActiveFloor}
-              activeFloor={activeFloor}
-              roomMode={roomMode}
-              saveName={loadedSave}
-              onWallsSaved={handleWallsDetected}
-              mpInstances={mpInstances}
-              mpSweeps={mpSweeps}
-              mpPoints={mpPoints}
-              livePose={liveMpPose}
-              selectedMpItem={selectedMpItem}
-              onSelectMpItem={(item) => {
-                setSelectedMpItem(item);
-                if (item) {
-                  setSelectedWall(null);
-                  setSelectedOpening(null);
-                }
-              }}
-            />
-          </div>
+        <div className="s2f-seg s2f-views" role="tablist" aria-label="Views">
+          {VIEW_DEFS.map((v) => (
+            <button
+              key={v.id}
+              role="tab"
+              className={visibleViews.includes(v.id) ? "active" : ""}
+              onClick={() => onTab(v.id)}
+              title={`${v.label} (Alt+${v.key})`}
+            >
+              {v.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="s2f-seg" aria-label="Layout">
+          {[["single", "Single"], ["split", "Split"], ["all", "All"]].map(([id, label]) => (
+            <button key={id} className={layout === id ? "active" : ""} onClick={() => changeLayout(id)} title={`${label} layout`}>{label}</button>
+          ))}
+        </div>
+
+        <div className="s2f-seg" aria-label="Floor">
+          <button className={activeFloor === "all" ? "active" : ""} onClick={() => setActiveFloor("all")}>All floors</button>
+          {Array.from({ length: floorCount }, (_, i) => (
+            <button key={i} className={activeFloor === i ? "active" : ""} onClick={() => setActiveFloor(i)}>F{i}</button>
+          ))}
+        </div>
+
+        <div className="s2f-spacer" />
+
+        {!loadedSave && cloudReady && <SaveOutput defaultName={sourceName} cloudColors={cloudColors} />}
+        {!loadedSave && (
+          <button className={`s2f-btn s2f-btn-sm${showAlgo ? " active" : ""}`} onClick={() => setShowAlgo((v) => !v)}>Re-detect</button>
+        )}
+        <button className="s2f-iconbtn" onClick={toggleTheme} title="Toggle theme">{isDark ? "☀" : "☾"}</button>
+        <button className="s2f-iconbtn" onClick={toggleFullscreen} title="Full screen (Alt+F)">{isFullscreen ? "⤡" : "⛶"}</button>
+      </header>
+
+      <div className="s2f-stage" style={stageStyle} key={sessionKey}>
+        {VIEW_DEFS.filter((v) => visited.has(v.id) || visibleViews.includes(v.id)).map((v) => {
+          const visible = visibleViews.includes(v.id);
+          return (
+            <section
+              key={v.id}
+              className={`s2f-pane${multi ? " multi" : ""}`}
+              style={{ ...paneStyle(v.id), display: visible ? undefined : "none" }}
+              data-view={v.id}
+            >
+              {multi && (
+                <div className="s2f-pane-head">
+                  {layout === "split" ? (
+                    <select
+                      className="s2f-pane-select"
+                      value={v.id}
+                      onChange={(e) => {
+                        const nv = e.target.value;
+                        setSlots((prev) => {
+                          const idx = prev.indexOf(v.id);
+                          const other = 1 - idx;
+                          const n = [...prev];
+                          if (prev[other] === nv) n[other] = prev[idx];
+                          n[idx] = nv;
+                          return n;
+                        });
+                      }}
+                    >
+                      {VIEW_DEFS.map((d) => <option key={d.id} value={d.id}>{d.label}</option>)}
+                    </select>
+                  ) : (
+                    <span className="s2f-pane-title">{v.label}</span>
+                  )}
+                  <span className="s2f-spacer" />
+                  <button className="s2f-iconbtn s2f-iconbtn-sm" onClick={() => focusView(v.id)} title="Maximise this view">▣</button>
+                  <button className="s2f-iconbtn s2f-iconbtn-sm" onClick={() => { focusView(v.id); toggleFullscreen(); }} title="Full screen this view">⛶</button>
+                </div>
+              )}
+              <div className="s2f-pane-body">{renderView(v.id, visible)}</div>
+            </section>
+          );
+        })}
+
+        {showAlgo && !loadedSave && (
+          <RedetectDrawer
+            params={algoParams}
+            setParams={setAlgoParams}
+            roomMode={roomMode}
+            setRoomMode={setRoomMode}
+            modelInfo={modelInfo}
+            activeFloor={activeFloor}
+            onDone={handleWallsDetected}
+            onClose={() => setShowAlgo(false)}
+          />
         )}
 
-        {/* Phase 3: Dockable 360° Matterport Showcase + Inventory + Guided Tour */}
-        {showMpShowcase && (
-          <div style={{ width: 420, height: "100%", flexShrink: 0 }}>
-            <MpShowcasePanel
-              apiBase="/api"
-              mpConfig={mpConfig}
-              points={mpPoints}
-              sweeps={mpSweeps}
-              instances={mpInstances}
-              inventory={mpInventory}
-              activeFloor={activeFloor}
-              saveName={loadedSave}
-              livePose={liveMpPose}
-              onPoseUpdate={setLiveMpPose}
-              onDataChanged={refreshMpData}
-              onFocus3D={handleFocus3DPoint}
-              onEnterFpv={handleEnterFpv}
-              onSelectMpItem={(item) => {
-                setSelectedMpItem(item);
-                if (item) {
-                  setSelectedWall(null);
-                  setSelectedOpening(null);
-                }
-              }}
-              labelFilter={mpLabelFilter}
-              setLabelFilter={setMpLabelFilter}
-              pendingCommand={pendingMpCommand}
-              onCommandConsumed={() => setPendingMpCommand(null)}
-              onClose={() => setShowMpShowcase(false)}
-            />
-          </div>
-        )}
-
-        {/* Room Editor Panel — isolated room editor modal, floating over viewport & vector floor plan */}
         {selectedRoomId != null && highlightedRoom && (
           <RoomEditorPanel
             room={highlightedRoom}
