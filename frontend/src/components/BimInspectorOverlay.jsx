@@ -1,26 +1,27 @@
 import React, { useState, useCallback, useEffect } from "react";
 
-/* Design tokens */
+/* Design tokens — all values come from CSS variables in index.css */
+const mix = (c, pct) => `color-mix(in srgb, ${c} ${pct}%, transparent)`;
 const T = {
-  bg: "rgba(30, 32, 38, 0.94)",
+  bg: "rgba(var(--panel-rgb), 0.94)",
   blur: "blur(18px)",
   radius: 14,
-  shadow: "0 12px 40px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.3)",
-  border: "1px solid rgba(255,255,255,0.10)",
+  shadow: "0 12px 40px rgba(var(--shadow-rgb),0.45), 0 2px 8px rgba(var(--shadow-rgb),0.25)",
+  border: "1px solid var(--border-hi)",
   minW: 300,
   maxW: 370,
   font: "'Inter', 'Segoe UI', sans-serif",
-  labelColor: "rgba(200,205,215,0.52)",
-  valueColor: "#e2e5ea",
-  accentWall:   "#94a3b8",
-  accentDoor:   "#fbbf24",
-  accentWindow: "#60a5fa",
-  accentUser:   "#34d399",
-  accentDetect: "#818cf8",
-  divider: "rgba(255,255,255,0.07)",
-  deleteBg: "rgba(185, 28, 28, 0.75)",
-  deleteBgHover: "rgba(220, 38, 38, 0.95)",
-  deleteBorder: "rgba(252, 165, 165, 0.25)",
+  labelColor: "var(--text-3)",
+  valueColor: "var(--text-1)",
+  accentWall:   "var(--layer-wall)",
+  accentDoor:   "var(--layer-door)",
+  accentWindow: "var(--layer-window)",
+  accentUser:   "var(--green)",
+  accentDetect: "var(--text-2)",
+  divider: "rgba(var(--fg-rgb),0.07)",
+  deleteBg: "rgba(var(--red-rgb), 0.16)",
+  deleteBgHover: "rgba(var(--red-rgb), 0.32)",
+  deleteBorder: "rgba(var(--red-rgb), 0.4)",
 };
 
 function CardShell({ children, accentColor }) {
@@ -62,12 +63,12 @@ function CardHeader({ icon, title, badge, badgeColor, badgeBg, badgeBorder, onCl
         )}
       </div>
       <button onClick={onClose} title="Deselect" style={{
-        background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.10)",
-        color: "rgba(200,205,215,0.6)", cursor: "pointer", fontSize: 13,
+        background: "rgba(var(--fg-rgb),0.06)", border: "1px solid rgba(var(--fg-rgb),0.10)",
+        color: "rgba(var(--fg-rgb),0.6)", cursor: "pointer", fontSize: 13,
         lineHeight: 1, padding: "3px 7px", borderRadius: 6, transition: "background 0.12s, color 0.12s",
       }}
-        onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.13)"; e.currentTarget.style.color = "#e2e5ea"; }}
-        onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.06)"; e.currentTarget.style.color = "rgba(200,205,215,0.6)"; }}
+        onMouseEnter={e => { e.currentTarget.style.background = "rgba(var(--fg-rgb),0.13)"; e.currentTarget.style.color = "var(--text-2)"; }}
+        onMouseLeave={e => { e.currentTarget.style.background = "rgba(var(--fg-rgb),0.06)"; e.currentTarget.style.color = "rgba(var(--fg-rgb),0.6)"; }}
       >
         &#x2715;
       </button>
@@ -105,14 +106,14 @@ function DeleteButton({ label, loading, onClick }) {
     <div style={{ marginTop: 13, paddingTop: 10, borderTop: "1px solid " + T.divider }}>
       <button onClick={onClick} disabled={loading} style={{
         width: "100%", padding: "8px 14px",
-        background: loading ? "rgba(185,28,28,0.45)" : T.deleteBg,
-        color: "#fecaca", border: "1px solid " + T.deleteBorder, borderRadius: 8,
+        background: loading ? "rgba(var(--red-rgb),0.10)" : T.deleteBg,
+        color: "var(--red)", border: "1px solid " + T.deleteBorder, borderRadius: 8,
         fontSize: 11.5, fontWeight: 600, fontFamily: T.font, cursor: loading ? "not-allowed" : "pointer",
         display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
         transition: "background 0.15s, color 0.15s", letterSpacing: "0.2px",
       }}
-        onMouseEnter={e => { if (!loading) { e.currentTarget.style.background = T.deleteBgHover; e.currentTarget.style.color = "#fff"; }}}
-        onMouseLeave={e => { if (!loading) { e.currentTarget.style.background = T.deleteBg; e.currentTarget.style.color = "#fecaca"; }}}
+        onMouseEnter={e => { if (!loading) { e.currentTarget.style.background = T.deleteBgHover; e.currentTarget.style.color = "var(--red)"; }}}
+        onMouseLeave={e => { if (!loading) { e.currentTarget.style.background = T.deleteBg; e.currentTarget.style.color = "var(--red)"; }}}
       >
         <span style={{ fontSize: 13 }}>&#x1F5D1;</span>
         <span>{loading ? "Deleting\u2026" : label}</span>
@@ -123,14 +124,14 @@ function DeleteButton({ label, loading, onClick }) {
 
 const tooltipBase = {
   position: "absolute", bottom: 24, left: "50%", transform: "translateX(-50%)",
-  zIndex: 20, background: "rgba(22, 24, 30, 0.92)", backdropFilter: "blur(10px)",
+  zIndex: 20, background: "rgba(var(--panel-rgb), 0.92)", backdropFilter: "blur(10px)",
   WebkitBackdropFilter: "blur(10px)", borderRadius: 8, padding: "6px 14px", fontSize: 11.5,
   fontFamily: "'Inter', 'Segoe UI', sans-serif", display: "flex", alignItems: "center",
-  gap: 9, pointerEvents: "none", boxShadow: "0 4px 20px rgba(0,0,0,0.4)", color: "#e2e5ea",
+  gap: 9, pointerEvents: "none", boxShadow: "0 4px 20px rgba(0,0,0,0.4)", color: "var(--text-2)",
 };
 
 function TooltipSep() {
-  return <span style={{ color: "rgba(255,255,255,0.2)", fontSize: 14 }}>|</span>;
+  return <span style={{ color: "rgba(var(--fg-rgb),0.2)", fontSize: 14 }}>|</span>;
 }
 
 /* Opening chip — shown in wall inspector list */
@@ -144,12 +145,12 @@ function OpeningChip({ op, isActive, onClick }) {
       style={{
         display: "flex", alignItems: "center", gap: 6, width: "100%",
         padding: "6px 9px",
-        background: isActive ? (isDoor ? "rgba(251,191,36,0.18)" : "rgba(96,165,250,0.18)") : "rgba(255,255,255,0.04)",
-        border: isActive ? ("1px solid " + accent + "66") : "1px solid rgba(255,255,255,0.08)",
+        background: isActive ? (isDoor ? "rgba(var(--sel-rgb),0.18)" : "rgba(var(--layer-window-rgb),0.18)") : "rgba(var(--fg-rgb),0.04)",
+        border: isActive ? ("1px solid " + mix(accent, 40)) : "1px solid rgba(var(--fg-rgb),0.08)",
         borderRadius: 7, cursor: "pointer", transition: "all 0.14s", textAlign: "left", fontFamily: T.font,
       }}
-      onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = "rgba(255,255,255,0.08)"; e.currentTarget.style.borderColor = accent + "44"; }}}
-      onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = "rgba(255,255,255,0.04)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)"; }}}
+      onMouseEnter={e => { if (!isActive) { e.currentTarget.style.background = "rgba(var(--fg-rgb),0.08)"; e.currentTarget.style.borderColor = mix(accent, 27); }}}
+      onMouseLeave={e => { if (!isActive) { e.currentTarget.style.background = "rgba(var(--fg-rgb),0.04)"; e.currentTarget.style.borderColor = "rgba(var(--fg-rgb),0.08)"; }}}
     >
       <span style={{ fontSize: 13 }}>{isDoor ? "\uD83D\uDEAA" : "\uD83E\uDE9F"}</span>
       <span style={{ flex: 1, fontSize: 11, color: T.valueColor, fontWeight: 600 }}>
@@ -158,9 +159,9 @@ function OpeningChip({ op, isActive, onClick }) {
       </span>
       <span style={{
         fontSize: 9, padding: "1px 5px", borderRadius: 3,
-        background: op.isUser ? "rgba(52,211,153,0.12)" : "rgba(129,140,248,0.12)",
+        background: op.isUser ? "rgba(var(--green-rgb),0.12)" : "rgba(var(--layer-window-rgb),0.12)",
         color: op.isUser ? T.accentUser : T.accentDetect,
-        border: "1px solid " + (op.isUser ? "rgba(52,211,153,0.3)" : "rgba(129,140,248,0.3)"),
+        border: "1px solid " + (op.isUser ? "rgba(var(--green-rgb),0.3)" : "rgba(var(--layer-window-rgb),0.3)"),
         fontWeight: 700, letterSpacing: "0.4px", textTransform: "uppercase",
       }}>
         {op.isUser ? "Manual" : "Auto"}
@@ -233,8 +234,8 @@ function OpeningEditPanel({ op, wallLength, onSave, onClose, onDelete, isSaving,
 
   return (
     <div style={{
-      marginTop: 10, padding: "12px", background: "rgba(0,0,0,0.35)",
-      borderRadius: 10, border: "1px solid " + accent + "33",
+      marginTop: 10, padding: "12px", background: "rgba(var(--shadow-rgb),0.35)",
+      borderRadius: 10, border: "1px solid " + mix(accent, 20),
       animation: "bimCardIn 0.15s ease-out",
     }}>
       {/* Header */}
@@ -245,14 +246,14 @@ function OpeningEditPanel({ op, wallLength, onSave, onClose, onDelete, isSaving,
           <span style={{
             fontSize: 9, borderRadius: 3, padding: "1px 5px", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.4px",
             color: op.isUser ? T.accentUser : T.accentDetect,
-            background: op.isUser ? "rgba(52,211,153,0.1)" : "rgba(129,140,248,0.1)",
-            border: "1px solid " + (op.isUser ? "rgba(52,211,153,0.25)" : "rgba(129,140,248,0.25)"),
+            background: op.isUser ? "rgba(var(--green-rgb),0.1)" : "rgba(var(--layer-window-rgb),0.1)",
+            border: "1px solid " + (op.isUser ? "rgba(var(--green-rgb),0.25)" : "rgba(var(--layer-window-rgb),0.25)"),
           }}>
             {op.isUser ? "Manual" : "Detected"}
           </span>
         </div>
         <button onClick={onClose} style={{
-          background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)",
+          background: "rgba(var(--fg-rgb),0.05)", border: "1px solid rgba(var(--fg-rgb),0.1)",
           color: T.labelColor, cursor: "pointer", fontSize: 11, padding: "2px 6px", borderRadius: 5,
         }}>&#x2715;</button>
       </div>
@@ -291,9 +292,9 @@ function OpeningEditPanel({ op, wallLength, onSave, onClose, onDelete, isSaving,
         <button onClick={handleSave} disabled={isSaving || !isDirty} style={{
           flex: 1, padding: "8px 12px", borderRadius: 7, fontSize: 11.5, fontWeight: 700, fontFamily: T.font,
           cursor: isSaving || !isDirty ? "not-allowed" : "pointer",
-          background: isDirty ? "rgba(0,200,80,0.22)" : "rgba(255,255,255,0.05)",
-          border: isDirty ? "1px solid rgba(0,200,80,0.5)" : "1px solid rgba(255,255,255,0.1)",
-          color: isDirty ? "#00c850" : "rgba(150,160,180,0.45)",
+          background: isDirty ? "rgba(var(--green-rgb),0.22)" : "rgba(var(--fg-rgb),0.05)",
+          border: isDirty ? "1px solid rgba(var(--green-rgb),0.5)" : "1px solid rgba(var(--fg-rgb),0.1)",
+          color: isDirty ? "var(--green)" : "rgba(var(--fg-rgb),0.45)",
           transition: "all 0.14s",
         }}>
           {isSaving ? "\u23F3 Saving\u2026" : "\uD83D\uDCBE Apply Changes"}
@@ -303,11 +304,11 @@ function OpeningEditPanel({ op, wallLength, onSave, onClose, onDelete, isSaving,
           style={{
             padding: "8px 11px", borderRadius: 7, fontSize: 13,
             cursor: isDeleting ? "not-allowed" : "pointer",
-            background: "rgba(185,28,28,0.55)", border: "1px solid rgba(252,165,165,0.22)",
-            color: "#fecaca", transition: "all 0.14s",
+            background: "rgba(var(--red-rgb),0.16)", border: "1px solid rgba(252,165,165,0.22)",
+            color: "var(--red)", transition: "all 0.14s",
           }}
-          onMouseEnter={e => { if (!isDeleting) e.currentTarget.style.background = "rgba(220,38,38,0.85)"; }}
-          onMouseLeave={e => { if (!isDeleting) e.currentTarget.style.background = "rgba(185,28,28,0.55)"; }}
+          onMouseEnter={e => { if (!isDeleting) e.currentTarget.style.background = "rgba(var(--red-rgb),0.32)"; }}
+          onMouseLeave={e => { if (!isDeleting) e.currentTarget.style.background = "rgba(var(--red-rgb),0.16)"; }}
         >
           &#x1F5D1;
         </button>
@@ -392,7 +393,7 @@ export default function BimInspectorOverlay({
           to   { opacity: 1; transform: translateY(0) scale(1); }
         }
         .bim-slider { -webkit-appearance: none; appearance: none; height: 4px; border-radius: 3px; outline: none; width: 100%; cursor: pointer; }
-        .bim-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: currentColor; cursor: pointer; border: 2px solid rgba(255,255,255,0.3); box-shadow: 0 1px 6px rgba(0,0,0,0.4); }
+        .bim-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 50%; background: currentColor; cursor: pointer; border: 2px solid rgba(var(--fg-rgb),0.3); box-shadow: 0 1px 6px rgba(0,0,0,0.4); }
       `}</style>
 
       {/* ── 1. Wall Inspector ── */}
@@ -423,7 +424,7 @@ export default function BimInspectorOverlay({
                 <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.6px", color: T.labelColor }}>
                   Openings on this wall
                 </span>
-                <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.1)", color: T.valueColor, fontWeight: 700 }}>
+                <span style={{ fontSize: 9, padding: "1px 6px", borderRadius: 4, background: "rgba(var(--fg-rgb),0.06)", border: "1px solid rgba(var(--fg-rgb),0.1)", color: T.valueColor, fontWeight: 700 }}>
                   {wallOpenings.length}
                 </span>
               </div>
@@ -470,8 +471,8 @@ export default function BimInspectorOverlay({
             title={"3D " + (isDoor ? "Door" : "Window")}
             badge={activeOp.isUser ? "User Placed" : "Detected"}
             badgeColor={activeOp.isUser ? T.accentUser : T.accentDetect}
-            badgeBg={activeOp.isUser ? "rgba(52,211,153,0.12)" : "rgba(129,140,248,0.12)"}
-            badgeBorder={activeOp.isUser ? "rgba(52,211,153,0.3)" : "rgba(129,140,248,0.3)"}
+            badgeBg={activeOp.isUser ? "rgba(var(--green-rgb),0.12)" : "rgba(var(--layer-window-rgb),0.12)"}
+            badgeBorder={activeOp.isUser ? "rgba(var(--green-rgb),0.3)" : "rgba(var(--layer-window-rgb),0.3)"}
             onClose={onCloseOpening}
           />
           <PropGrid>
@@ -513,7 +514,7 @@ export default function BimInspectorOverlay({
 
       {/* ── 3. Hover — Opening ── */}
       {!activeWall && !activeOp && hoveredOpening && (
-        <div style={{ ...tooltipBase, border: "1px solid " + (hoveredOpening.type === "door" ? "rgba(251,191,36,0.45)" : "rgba(96,165,250,0.45)") }}>
+        <div style={{ ...tooltipBase, border: "1px solid " + (hoveredOpening.type === "door" ? "rgba(var(--sel-rgb),0.45)" : "rgba(var(--layer-window-rgb),0.45)") }}>
           <span style={{ fontSize: 15 }}>{hoveredOpening.type === "door" ? "\uD83D\uDEAA" : "\uD83E\uDE9F"}</span>
           <span style={{ fontWeight: 700, color: hoveredOpening.type === "door" ? T.accentDoor : T.accentWindow }}>
             {hoveredOpening.type === "door" ? "Door" : "Window"}&nbsp;({hoveredOpening.width.toFixed(2)} m)
@@ -532,7 +533,7 @@ export default function BimInspectorOverlay({
 
       {/* ── 4. Hover — Wall ── */}
       {!activeWall && !activeOp && !hoveredOpening && hoveredWall && (
-        <div style={{ ...tooltipBase, border: "1px solid rgba(148,163,184,0.35)" }}>
+        <div style={{ ...tooltipBase, border: "1px solid rgba(var(--fg-rgb),0.35)" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.accentWall, display: "inline-block", flexShrink: 0 }} />
           <span style={{ fontWeight: 700, color: T.accentWall }}>Wall #{hoveredWall.wallIdx + 1}</span>
           <TooltipSep />
@@ -554,7 +555,7 @@ export default function BimInspectorOverlay({
 
       {/* ── 5. Hover — Room ── */}
       {!activeWall && !activeOp && !hoveredOpening && !hoveredWall && hoveredRoom && (
-        <div style={{ ...tooltipBase, border: "1px solid rgba(52,211,153,0.35)" }}>
+        <div style={{ ...tooltipBase, border: "1px solid rgba(var(--green-rgb),0.35)" }}>
           <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.accentUser, display: "inline-block", flexShrink: 0 }} />
           <span style={{ fontWeight: 700, color: T.accentUser }}>Room #{hoveredRoom.id}</span>
           <TooltipSep />

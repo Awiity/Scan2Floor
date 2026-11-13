@@ -13,43 +13,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { getCanvasTheme, getRoomAccent, withAlpha } from "../theme";
 
-// ── Colour constants ─────────────────────────────────────────────────────────
-function getTheme() {
-  const isDark = !document.querySelector('[data-theme="light"]');
-  return isDark
-    ? {
-        bg: "#0b0e1a",
-        gridLine: "#1a1f33",
-        wall: "#00c8e0",       wallGlow: "rgba(0,200,224,0.18)",
-        wallUser: "#fbbf24",   wallUserGlow: "rgba(251,191,36,0.20)",
-        wallHover: "#ff6b6b",  wallHoverGlow: "rgba(255,107,107,0.25)",
-        wallHidden: "#4a6080", wallHiddenGlow: "rgba(74,96,128,0.15)",
-        wallPreview: "#fbbf24",
-        door: "#fbbf24", window: "#818cf8",
-        snapEp: "#fbbf24", snapGrid: "rgba(200,220,255,0.5)",
-        roomFill: "rgba(0,200,224,0.10)", roomBorder: "#00c8e0",
-        scaleStroke: "rgba(255,255,255,0.6)", scaleFill: "rgba(255,255,255,0.7)",
-      }
-    : {
-        bg: "#f5f5f5", gridLine: "#e0e0e0",
-        wall: "#0066cc",       wallGlow: "rgba(0,102,204,0.12)",
-        wallUser: "#d97706",   wallUserGlow: "rgba(217,119,6,0.15)",
-        wallHover: "#dc2626",  wallHoverGlow: "rgba(220,38,38,0.18)",
-        wallHidden: "#94a3b8", wallHiddenGlow: "rgba(148,163,184,0.12)",
-        wallPreview: "#d97706",
-        door: "#d97706", window: "#6366f1",
-        snapEp: "#d97706", snapGrid: "rgba(30,60,120,0.35)",
-        roomFill: "rgba(0,102,204,0.09)", roomBorder: "#0066cc",
-        scaleStroke: "rgba(0,0,0,0.55)", scaleFill: "rgba(0,0,0,0.65)",
-      };
-}
-
-const ROOM_COLORS = [
-  "#00c8e0","#818cf8","#fbbf24","#34d399","#fb7185",
-  "#a78bfa","#22d3ee","#fb923c","#4ade80","#f87171",
-];
-const getRoomAccent = (id) => ROOM_COLORS[(id - 1) % ROOM_COLORS.length];
+// ── Colours — see src/theme.js (theme-aware, mirrors CSS tokens) ─────────────
+const getTheme = getCanvasTheme;
+const C = new Proxy({}, { get: (_, k) => getCanvasTheme()[k] });
 
 // ── Coordinate utilities ─────────────────────────────────────────────────────
 const toCanvas = (wx, wz, cam) => [cam.ox + wx * cam.scale, cam.oy + wz * cam.scale];
@@ -224,8 +192,8 @@ function drawBoxSelect(ctx, box, mode) {
   const { cx1, cy1, cx2, cy2 } = box;
   const x = Math.min(cx1, cx2), y = Math.min(cy1, cy2), w = Math.abs(cx2 - cx1), h = Math.abs(cy2 - cy1);
   if (w < 2 && h < 2) return;
-  const col = mode === "delete" ? "rgba(255,80,80,0.9)" : "rgba(74,160,220,0.9)";
-  const fill = mode === "delete" ? "rgba(255,60,60,0.08)" : "rgba(74,140,220,0.08)";
+  const col = mode === "delete" ? "rgba(var(--red-rgb),0.9)" : "rgba(var(--accent-rgb),0.9)";
+  const fill = mode === "delete" ? "rgba(var(--red-rgb),0.08)" : "rgba(var(--accent-rgb),0.08)";
   ctx.save();
   ctx.fillStyle = fill; ctx.fillRect(x, y, w, h);
   ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash([6, 4]);
@@ -271,7 +239,7 @@ function drawWalls(ctx, lines, cam, hovIdx, addStart, snapInfo, mode, room, TC, 
     const { pts: [[x1, z1], [x2, z2]], source } = l;
     const isHov = i === hovIdx && (mode === "delete" || mode === "hide");
     const isOpHov = (mode === "add-door" || mode === "add-window") && hoverOp?.wallIdx === i;
-    const color = isHov ? TC.wallHover : isOpHov ? "#a78bfa" : source === "user" ? TC.wallUser : TC.wall;
+    const color = isHov ? TC.wallHover : isOpHov ? C.corner : source === "user" ? TC.wallUser : TC.wall;
     const glow  = isHov ? TC.wallHoverGlow : source === "user" ? TC.wallUserGlow : TC.wallGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam), [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save(); ctx.lineCap = "round";
@@ -302,7 +270,7 @@ function drawWalls(ctx, lines, cam, hovIdx, addStart, snapInfo, mode, room, TC, 
       const mx = (cax + csx) / 2, my = (cay + csy) / 2;
       ctx.save(); ctx.font = '10px "JetBrains Mono",monospace'; ctx.textAlign = "center"; ctx.textBaseline = "middle";
       const tw = ctx.measureText(label).width;
-      ctx.fillStyle = "rgba(12,14,26,0.88)"; ctx.fillRect(mx - tw / 2 - 4, my - 8, tw + 8, 16);
+      ctx.fillStyle = withAlpha(C.bg, 0.88); ctx.fillRect(mx - tw / 2 - 4, my - 8, tw + 8, 16);
       ctx.fillStyle = TC.wallUser; ctx.fillText(label, mx, my); ctx.restore();
     }
     ctx.save(); ctx.setLineDash([6, 4]); ctx.lineCap = "round";
@@ -392,8 +360,8 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
   const [cmx, cmy]   = toCanvas(mx, mz, cam);
 
   const baseCol   = op.type === "door" ? TC.door : TC.window;
-  const strokeCol = isSelected ? "#38bdf8" : isHovered ? "#fbbf24" : baseCol;
-  const glowCol   = isSelected ? "rgba(56,189,248,0.5)" : isHovered ? "rgba(251,191,36,0.4)" : baseCol;
+  const strokeCol = isSelected ? C.hover : isHovered ? C.sel : baseCol;
+  const glowCol   = isSelected ? withAlpha(C.hover, 0.5) : isHovered ? withAlpha(C.sel, 0.4) : baseCol;
 
   if (op.type === "door") {
     const hingeSide = op.side === -1 ? -1 : 1;
@@ -481,7 +449,7 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
       const tw = ctx.measureText(dimLabel).width;
       const lx = (chx + ctx_p) / 2 + cnx * 14;
       const ly = (chy + cty_p) / 2 + cny * 14;
-      ctx.fillStyle = "rgba(10,14,26,0.85)";
+      ctx.fillStyle = withAlpha(C.bg, 0.85);
       ctx.fillRect(lx - tw / 2 - 4, ly - 7, tw + 8, 14);
       ctx.fillStyle = strokeCol;
       ctx.fillText(dimLabel, lx, ly);
@@ -531,7 +499,7 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
       const cny =   (cjbx - cjax) / (Math.hypot(cjbx - cjax, cjby - cjay) || 1);
       const lx = cmx + cnx * 14;
       const ly = cmy + cny * 14;
-      ctx.fillStyle = "rgba(10,14,26,0.85)";
+      ctx.fillStyle = withAlpha(C.bg, 0.85);
       ctx.fillRect(lx - tw / 2 - 4, ly - 7, tw + 8, 14);
       ctx.fillStyle = strokeCol;
       ctx.fillText(dimLabel, lx, ly);
@@ -1225,9 +1193,9 @@ export default function RoomEditorPanel({
                   onClick={() => switchMode(t.id)}
                   title={t.title}
                   style={isActive ? {
-                    background: isOpTool ? "rgba(129,140,248,0.16)" : "rgba(251,191,36,0.14)",
-                    borderColor: isOpTool ? "rgba(129,140,248,0.6)"  : "rgba(251,191,36,0.5)",
-                    color:       isOpTool ? "#818cf8" : "#fbbf24",
+                    background: isOpTool ? "rgba(var(--layer-window-rgb),0.16)" : "rgba(var(--sel-rgb),0.14)",
+                    borderColor: isOpTool ? "rgba(var(--layer-window-rgb),0.6)"  : "rgba(var(--sel-rgb),0.5)",
+                    color:       isOpTool ? "var(--layer-window)" : "var(--sel)",
                     fontWeight: 700,
                   } : {}}
                 >
@@ -1245,8 +1213,8 @@ export default function RoomEditorPanel({
 
           <span className="rep-wall-info">
             {wallCount}W
-            {userCount   > 0 && <span style={{ color:"#fbbf24", marginLeft:4 }}>+{userCount}</span>}
-            {hiddenCount > 0 && <span style={{ color:"#4a6080", marginLeft:4 }}>👁{hiddenCount}</span>}
+            {userCount   > 0 && <span style={{ color:"var(--sel)", marginLeft:4 }}>+{userCount}</span>}
+            {hiddenCount > 0 && <span style={{ color:"var(--text-2)", marginLeft:4 }}>👁{hiddenCount}</span>}
           </span>
 
           {isAnyDirty && (
@@ -1466,7 +1434,7 @@ export default function RoomEditorPanel({
             </div>
           )}
           {loadState === "error" && (
-            <div className="rep-overlay-state" style={{ color:"#ef4444" }}>
+            <div className="rep-overlay-state" style={{ color:"var(--red)" }}>
               <span style={{ fontSize:28 }}>⚠</span>
               <span>Could not load floor data</span>
             </div>
@@ -1476,7 +1444,7 @@ export default function RoomEditorPanel({
             <div className="rep-toast">✓ Saved — rooms recalculated</div>
           )}
           {saveState === "error" && (
-            <div className="rep-toast" style={{ background:"rgba(239,68,68,0.16)", borderColor:"rgba(239,68,68,0.4)", color:"#ef4444" }}>
+            <div className="rep-toast" style={{ background:"rgba(var(--red-rgb),0.16)", borderColor:"rgba(var(--red-rgb),0.4)", color:"var(--red)" }}>
               ✗ Save failed
             </div>
           )}

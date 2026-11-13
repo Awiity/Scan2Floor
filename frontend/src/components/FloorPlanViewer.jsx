@@ -12,7 +12,7 @@
  *   hidden wall  #4a5568  (slate-grey, dashed, excluded from room recalc)
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback } from "react"; e
 
 // ── Colour constants — theme-aware ────────────────────────────────────────────
 // Returns a palette matching the current data-theme on the root .app element.

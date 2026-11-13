@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef } from "react";
 
-function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, defaultVal, onChange, accent = "#67e8f9" }) {
+/** Translucent version of any CSS colour (works with var(--token)). */
+const mix = (c, pct) => `color-mix(in srgb, ${c} ${pct}%, transparent)`;
+
+function ParamSlider({ label, hint, value, min, max, step, unit, precision = 2, defaultVal, onChange, accent = "var(--accent)" }) {
   const isDefault = Math.abs(value - defaultVal) < step * 0.5;
   return (
     <div>
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:4 }}>
         <div>
           <span style={{ fontSize:11, color:"var(--text-2)", fontWeight:600 }}>{label}</span>
-          {!isDefault && <span style={{ marginLeft:5, fontSize:9, background:`${accent}22`, color:accent, border:`1px solid ${accent}44`, borderRadius:3, padding:"1px 4px", fontWeight:700 }}>modified</span>}
+          {!isDefault && <span style={{ marginLeft:5, fontSize:9, background:mix(accent,13), color:accent, border:`1px solid ${mix(accent,27)}`, borderRadius:3, padding:"1px 4px", fontWeight:700 }}>modified</span>}
         </div>
         <span style={{ fontSize:11, fontWeight:700, color:accent, fontFamily:"JetBrains Mono, monospace", minWidth:48, textAlign:"right" }}>{value.toFixed(precision)}{unit}</span>
       </div>
@@ -283,8 +286,8 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
     : null;
 
   const btnStyle = (clr, disabled) => ({
-    width:"100%", border:`1px solid ${clr}88`, borderRadius:6, color:clr,
-    background:`${clr}18`, fontSize:11, fontWeight:700, padding:"7px 10px",
+    width:"100%", border:`1px solid ${mix(clr,53)}`, borderRadius:"var(--radius-sm)", color:clr,
+    background:mix(clr,9), fontSize:11, fontWeight:700, padding:"7px 10px",
     cursor:disabled?"not-allowed":"pointer", opacity:disabled?0.5:1, transition:"all 0.2s", letterSpacing:0.2,
   });
 
@@ -301,7 +304,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
             onClick={() => setShowSaves(v => !v)}
             style={{
               width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
-              background:showSaves?"var(--surface-3)":"var(--surface-1)",
+              background:showSaves?"var(--surface-3)":"var(--surface-2)",
               border:`1px solid ${showSaves?"var(--border-hi)":"var(--border)"}`,
               borderRadius:6,color:showSaves?"var(--text-1)":"var(--text-2)",
               fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4,
@@ -325,7 +328,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                     onKeyDown={e => e.key === "Enter" && handleSaveCurrent()}
                     placeholder={derivedSaveName || "output-name"}
                     style={{
-                      flex:1,minWidth:0,background:"var(--surface-1)",
+                      flex:1,minWidth:0,background:"var(--surface-2)",
                       border:"1px solid var(--border)",borderRadius:6,
                       color:"var(--text-1)",fontSize:11,padding:"5px 8px",
                       outline:"none",fontFamily:"monospace",
@@ -345,7 +348,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                     {saveLoading ? "⏳" : "💾 Save"}
                   </button>
                 </div>
-                {saveMsg && <div style={{fontSize:10,color:saveMsg.startsWith("✓")?"#00c850":"#ef4444"}}>{saveMsg}</div>}
+                {saveMsg && <div style={{fontSize:10,color:saveMsg.startsWith("✓")?"var(--green)":"var(--red)"}}>{saveMsg}</div>}
               </div>
 
               {/* Divider */}
@@ -366,7 +369,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                     style={{
                       display:"flex",alignItems:"center",gap:6,
                       padding:"6px 8px",borderRadius:5,marginBottom:3,
-                      background:"var(--surface-1)",
+                      background:"var(--surface-2)",
                       border:"1px solid var(--border)",
                     }}
                   >
@@ -405,10 +408,10 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                       onClick={() => handleDeleteSave(sv.name)}
                       title={deleteConfirm===sv.name?"Click again to confirm delete":"Delete this save"}
                       style={{
-                        background:deleteConfirm===sv.name?"rgba(239,68,68,0.15)":"var(--surface-2)",
-                        border:deleteConfirm===sv.name?"1px solid rgba(239,68,68,0.4)":"1px solid var(--border)",
+                        background:deleteConfirm===sv.name?"rgba(var(--red-rgb),0.15)":"var(--surface-2)",
+                        border:deleteConfirm===sv.name?"1px solid rgba(var(--red-rgb),0.4)":"1px solid var(--border)",
                         borderRadius:5,
-                        color:deleteConfirm===sv.name?"#ef4444":"var(--text-3)",
+                        color:deleteConfirm===sv.name?"var(--red)":"var(--text-3)",
                         fontSize:10,fontWeight:600,
                         padding:"3px 7px",cursor:"pointer",whiteSpace:"nowrap",flexShrink:0,transition:"all 0.15s",
                       }}
@@ -434,8 +437,8 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
               onKeyDown={e => e.key === "Enter" && fetchScans()}
               placeholder="/data"
               style={{
-                flex:1,minWidth:0,background:"var(--surface-2,#111827)",
-                border:"1px solid var(--border,#1e2d4a)",borderRadius:6,
+                flex:1,minWidth:0,background:"var(--surface-2,var(--surface-2))",
+                border:"1px solid var(--border,var(--border))",borderRadius:6,
                 color:"var(--text-1)",fontSize:11,padding:"5px 8px",
                 outline:"none",fontFamily:"monospace",
               }}
@@ -445,8 +448,8 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
               onClick={() => fetchScans()}
               disabled={browseLoading}
               style={{
-                background:"rgba(6,182,212,0.15)",border:"1px solid rgba(6,182,212,0.35)",
-                borderRadius:6,color:"#67e8f9",fontSize:11,fontWeight:700,
+                background:"rgba(var(--accent-rgb),0.15)",border:"1px solid rgba(var(--accent-rgb),0.35)",
+                borderRadius:6,color:"var(--accent)",fontSize:11,fontWeight:700,
                 padding:"5px 10px",cursor:browseLoading?"not-allowed":"pointer",
                 whiteSpace:"nowrap",transition:"all 0.15s",flexShrink:0,
               }}
@@ -457,13 +460,13 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
 
           {/* Error */}
           {browseError && (
-            <div style={{fontSize:10,color:"#ef4444",marginBottom:5}}>{browseError}</div>
+            <div style={{fontSize:10,color:"var(--red)",marginBottom:5}}>{browseError}</div>
           )}
 
           {/* Summary header */}
           {scanTotal !== null && !browseLoading && (
             <div style={{
-              fontSize:10,color: scanTotal===0 ? "#ef4444" : "#67e8f9",
+              fontSize:10,color: scanTotal===0 ? "var(--red)" : "var(--accent)",
               marginBottom: scanTotal>0 ? 6 : 0,
               fontWeight:600,
             }}>
@@ -495,8 +498,8 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                     style={{
                       display:"flex",alignItems:"center",gap:6,
                       padding:"5px 8px",borderRadius:5,marginBottom:2,
-                      background: isSel ? "rgba(6,182,212,0.15)" : "rgba(255,255,255,0.03)",
-                      border:`1px solid ${isSel?"rgba(6,182,212,0.4)":"rgba(255,255,255,0.06)"}`,
+                      background: isSel ? "rgba(var(--accent-rgb),0.15)" : "rgba(var(--fg-rgb),0.03)",
+                      border:`1px solid ${isSel?"rgba(var(--accent-rgb),0.4)":"rgba(var(--fg-rgb),0.06)"}`,
                       cursor:"pointer",transition:"all 0.15s",marginLeft:12,
                     }}
                   >
@@ -504,7 +507,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{
                         fontSize:11,
-                        color: isSel ? "#67e8f9" : "var(--text-1)",
+                        color: isSel ? "var(--accent)" : "var(--text-1)",
                         fontWeight: isSel ? 700 : 400,
                         whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
                       }}>
@@ -514,7 +517,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                         <div style={{fontSize:9,color:"var(--text-3)"}}>{f.size_mb.toFixed(1)} MB</div>
                       )}
                     </div>
-                    {isSel && <span style={{color:"#67e8f9",fontSize:12}}>✓</span>}
+                    {isSel && <span style={{color:"var(--accent)",fontSize:12}}>✓</span>}
                   </div>
                 );
               })}
@@ -525,8 +528,8 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
           {selected && (
             <div style={{
               marginTop:6,fontSize:11,padding:"5px 8px",
-              background:"rgba(0,200,80,0.08)",border:"1px solid rgba(0,200,80,0.25)",
-              borderRadius:5,color:"#00c850",fontFamily:"monospace",wordBreak:"break-all",
+              background:"rgba(var(--green-rgb),0.08)",border:"1px solid rgba(var(--green-rgb),0.25)",
+              borderRadius:5,color:"var(--green)",fontFamily:"monospace",wordBreak:"break-all",
             }}>
               ✓ {selected.name}
             </div>
@@ -535,23 +538,23 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
 
         {/* Stage progress */}
         {pipeStatus&&(
-          <div style={{marginBottom:8,background:"rgba(0,0,0,0.25)",border:"1px solid rgba(6,182,212,0.15)",borderRadius:8,padding:"8px 10px"}}>
+          <div style={{marginBottom:8,background:"rgba(var(--shadow-rgb),0.25)",border:"1px solid rgba(var(--accent-rgb),0.15)",borderRadius:8,padding:"8px 10px"}}>
             {STAGE_NAMES.map((name,i)=>{
               const idx=i+1;
               const done=stagesDone.includes(idx);
               const active=pipeRunning&&currentStage===idx;
-              const color=done?"#00c850":active?"#fb923c":"var(--text-3)";
+              const color=done?"var(--green)":active?"var(--sel)":"var(--text-3)";
               return (
-                <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 0",borderBottom:i<4?"1px solid rgba(255,255,255,0.04)":"none"}}>
+                <div key={i} style={{display:"flex",alignItems:"center",gap:8,padding:"3px 0",borderBottom:i<4?"1px solid rgba(var(--fg-rgb),0.04)":"none"}}>
                   <span style={{fontSize:14,width:18,textAlign:"center"}}>{done?"✓":active?"⏳":"○"}</span>
                   <span style={{fontSize:11,color,fontWeight:done||active?600:400}}>{idx}. {name}</span>
-                  {active&&pipeStatus.elapsed_s&&<span style={{marginLeft:"auto",fontSize:10,color:"#fb923c"}}>{pipeStatus.elapsed_s}s</span>}
+                  {active&&pipeStatus.elapsed_s&&<span style={{marginLeft:"auto",fontSize:10,color:"var(--sel)"}}>{pipeStatus.elapsed_s}s</span>}
                 </div>
               );
             })}
-            {pipeDone&&!pipeRunning&&!pipeCancelled&&<div style={{marginTop:6,fontSize:11,color:"#00c850",fontWeight:700,textAlign:"center"}}>✓ Pipeline complete!</div>}
-            {pipeCancelled&&!pipeRunning&&<div style={{marginTop:6,fontSize:11,color:"#fb923c",fontWeight:700,textAlign:"center"}}>⚠ Cancelled — partial results may be available</div>}
-            {pipeError&&!pipeCancelled&&<div style={{marginTop:6,fontSize:11,color:"#ef4444",lineHeight:1.4}}>{pipeError}</div>}
+            {pipeDone&&!pipeRunning&&!pipeCancelled&&<div style={{marginTop:6,fontSize:11,color:"var(--green)",fontWeight:700,textAlign:"center"}}>✓ Pipeline complete!</div>}
+            {pipeCancelled&&!pipeRunning&&<div style={{marginTop:6,fontSize:11,color:"var(--sel)",fontWeight:700,textAlign:"center"}}>⚠ Cancelled — partial results may be available</div>}
+            {pipeError&&!pipeCancelled&&<div style={{marginTop:6,fontSize:11,color:"var(--red)",lineHeight:1.4}}>{pipeError}</div>}
             <button onClick={()=>setShowLog(v=>!v)} style={{marginTop:6,fontSize:10,color:"var(--text-3)",background:"none",border:"none",cursor:"pointer",padding:0}}>{showLog?"▲ Hide log":"▼ Show log"}</button>
             {showLog&&pipeLog.length>0&&(
               <div style={{marginTop:4,fontSize:10,fontFamily:"monospace",background:"rgba(0,0,0,0.4)",borderRadius:4,padding:"4px 6px",maxHeight:80,overflow:"auto",color:"var(--text-3)",lineHeight:1.5}}>
@@ -563,7 +566,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
 
         {/* Run / Cancel / Resume buttons */}
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          <button id="pipeline-run-btn" onClick={runPipeline} disabled={!effectivePath||pipeRunning} style={{...btnStyle(pipeRunning?"#fb923c":pipeDone&&!pipeError&&!pipeCancelled?"#00c850":"#67e8f9", !effectivePath||pipeRunning), flex:1}}>
+          <button id="pipeline-run-btn" onClick={runPipeline} disabled={!effectivePath||pipeRunning} style={{...btnStyle(pipeRunning?"var(--sel)":pipeDone&&!pipeError&&!pipeCancelled?"var(--green)":"var(--accent)", !effectivePath||pipeRunning), flex:1}}>
             {pipeRunning&&!pipeCancelling?`⏳ Running… Stage ${currentStage}/${STAGE_NAMES.length}`:pipeDone&&!pipeError&&!pipeCancelled?"✓ Pipeline done — rerun?":"▶ Run Full Pipeline"}
           </button>
           {pipeRunning&&(
@@ -573,9 +576,9 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
               disabled={pipeCancelling}
               title="Cancel the running pipeline"
               style={{
-                border:"1px solid #fb923c88", borderRadius:6,
-                color: pipeCancelling ? "#fb923c88" : "#fb923c",
-                background:"rgba(251,146,60,0.12)", fontSize:11, fontWeight:700,
+                border:"1px solid rgba(var(--sel-rgb),0.5)", borderRadius:6,
+                color: pipeCancelling ? "rgba(var(--sel-rgb),0.5)" : "var(--sel)",
+                background:"rgba(var(--sel-rgb),0.12)", fontSize:11, fontWeight:700,
                 padding:"7px 11px", cursor:pipeCancelling?"not-allowed":"pointer",
                 transition:"all 0.2s", whiteSpace:"nowrap",
               }}
@@ -592,9 +595,9 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
             disabled={!effectivePath}
             title={`Skip stages 1–${resumeStage - 1} and continue from stage ${resumeStage}: ${STAGE_NAMES[resumeStage - 1]}`}
             style={{
-              ...btnStyle("#fb923c", !effectivePath),
+              ...btnStyle("var(--sel)", !effectivePath),
               marginTop: 4,
-              background: "rgba(251,146,60,0.10)",
+              background: "rgba(var(--sel-rgb),0.10)",
               display: "flex", alignItems: "center", justifyContent: "center", gap: 5,
             }}
           >
@@ -606,11 +609,11 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
 
         {/* Point cloud cleaning params */}
         <div style={{marginTop:8}}>
-          <button onClick={()=>setShowCleanPanel(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:showCleanPanel?"rgba(6,182,212,0.08)":"rgba(255,255,255,0.03)",border:`1px solid ${showCleanPanel?"rgba(6,182,212,0.25)":"rgba(255,255,255,0.08)"}`,borderRadius:6,color:showCleanPanel?"#67e8f9":"var(--text-2)",fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4}}>
+          <button onClick={()=>setShowCleanPanel(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:showCleanPanel?"rgba(var(--accent-rgb),0.08)":"rgba(var(--fg-rgb),0.03)",border:`1px solid ${showCleanPanel?"rgba(var(--accent-rgb),0.25)":"rgba(var(--fg-rgb),0.08)"}`,borderRadius:6,color:showCleanPanel?"var(--accent)":"var(--text-2)",fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4}}>
             <span>🧹 Point Cloud Cleaning</span><span style={{fontSize:10,opacity:0.7}}>{showCleanPanel?"▲":"▼"}</span>
           </button>
           {showCleanPanel&&(
-            <div style={{background:"rgba(0,0,0,0.25)",border:"1px solid rgba(6,182,212,0.12)",borderRadius:8,padding:"10px 12px",display:"flex",flexDirection:"column",gap:10}}>
+            <div style={{background:"rgba(var(--shadow-rgb),0.25)",border:"1px solid rgba(var(--accent-rgb),0.12)",borderRadius:8,padding:"10px 12px",display:"flex",flexDirection:"column",gap:10}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                 <div><div style={{fontSize:11,color:"var(--text-2)",fontWeight:600}}>Enable Cleaning</div><div style={{fontSize:10,color:"var(--text-3)"}}>Remove foreign objects</div></div>
                 <Toggle checked={enableClean} onChange={setEnableClean}/>
@@ -628,15 +631,15 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
 
         {/* Detection params */}
         <div style={{marginTop:8}}>
-          <button onClick={()=>setShowWP(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:showWP?"rgba(6,182,212,0.08)":"rgba(255,255,255,0.03)",border:`1px solid ${showWP?"rgba(6,182,212,0.25)":"rgba(255,255,255,0.08)"}`,borderRadius:6,color:showWP?"#67e8f9":"var(--text-2)",fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4}}>
+          <button onClick={()=>setShowWP(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:showWP?"rgba(var(--accent-rgb),0.08)":"rgba(var(--fg-rgb),0.03)",border:`1px solid ${showWP?"rgba(var(--accent-rgb),0.25)":"rgba(var(--fg-rgb),0.08)"}`,borderRadius:6,color:showWP?"var(--accent)":"var(--text-2)",fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4}}>
             <span>⚙ Detection Parameters</span><span style={{fontSize:10,opacity:0.7}}>{showWP?"▲":"▼"}</span>
           </button>
           {showWP&&(
-            <div style={{background:"rgba(0,0,0,0.25)",border:"1px solid rgba(6,182,212,0.12)",borderRadius:8,padding:"10px 12px",display:"flex",flexDirection:"column",gap:10}}>
+            <div style={{background:"rgba(var(--shadow-rgb),0.25)",border:"1px solid rgba(var(--accent-rgb),0.12)",borderRadius:8,padding:"10px 12px",display:"flex",flexDirection:"column",gap:10}}>
               {/* ── Room Shape Mode switch ── */}
               <div>
                 <div style={{fontSize:11,color:"var(--text-2)",fontWeight:600,marginBottom:6}}>Room Shape Mode</div>
-                <div style={{display:"flex",borderRadius:7,overflow:"hidden",border:"1px solid rgba(103,232,249,0.25)",background:"rgba(0,0,0,0.3)"}}>
+                <div style={{display:"flex",borderRadius:7,overflow:"hidden",border:"1px solid rgba(var(--accent-rgb),0.25)",background:"rgba(var(--shadow-rgb),0.3)"}}>
                   {[
                     {id:"rectangular", label:"▭  Rectangular", hint:"Legacy bbox"},
                     {id:"polygon",     label:"⬡  Polygon",     hint:"True shape"},
@@ -652,10 +655,10 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                           flex:1, border:"none", cursor:"pointer",
                           padding:"6px 4px", fontSize:11, fontWeight:active?700:500,
                           transition:"all 0.18s",
-                          background: active ? "rgba(6,182,212,0.22)" : "transparent",
-                          color: active ? "#67e8f9" : "var(--text-3)",
-                          borderRight: opt.id==="rectangular" ? "1px solid rgba(103,232,249,0.15)" : "none",
-                          boxShadow: active ? "inset 0 0 0 1px rgba(6,182,212,0.35)" : "none",
+                          background: active ? "rgba(var(--accent-rgb),0.22)" : "transparent",
+                          color: active ? "var(--accent)" : "var(--text-3)",
+                          borderRight: opt.id==="rectangular" ? "1px solid rgba(var(--accent-rgb),0.15)" : "none",
+                          boxShadow: active ? "inset 0 0 0 1px rgba(var(--accent-rgb),0.35)" : "none",
                         }}
                       >
                         {opt.label}
@@ -677,7 +680,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                 <div><div style={{fontSize:11,color:"var(--text-2)",fontWeight:600}}>Manhattan Snap</div><div style={{fontSize:10,color:"var(--text-3)"}}>Force H/V alignment</div></div>
                 <Toggle checked={snapToAxis} onChange={setSnapToAxis}/>
               </div>
-              <button onClick={()=>{setGridSize(0.02);setThreshFrac(0.01);setMinWallM(0.40);setMaxWallThick(0.75);setDpTol(0.04);setSnapToAxis(true);setWallReachFrac(0.35);}} style={{fontSize:10,color:"var(--text-3)",background:"none",border:"1px solid rgba(255,255,255,0.08)",borderRadius:4,padding:"3px 8px",cursor:"pointer",alignSelf:"flex-end"}}>↩ Reset</button>
+              <button onClick={()=>{setGridSize(0.02);setThreshFrac(0.01);setMinWallM(0.40);setMaxWallThick(0.75);setDpTol(0.04);setSnapToAxis(true);setWallReachFrac(0.35);}} style={{fontSize:10,color:"var(--text-3)",background:"none",border:"1px solid rgba(var(--fg-rgb),0.08)",borderRadius:4,padding:"3px 8px",cursor:"pointer",alignSelf:"flex-end"}}>↩ Reset</button>
             </div>
           )}
         </div>
@@ -707,27 +710,27 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
           <div style={{flex:1}}><div className="layer-label">Floor Plans</div><div className="layer-sub">Matterport color plans</div></div>
           <Toggle checked={showFloorPlan} onChange={setShowFloorPlan}/>
         </div>
-        <div className="layer-item" onClick={()=>setShowFloorPlanViewer(v=>!v)} style={{background:showFloorPlanViewer?"rgba(0,200,224,0.07)":undefined,borderRadius:10}}>
-          <div className="layer-icon" style={{background:"rgba(0,200,224,0.15)"}}>🗺️</div>
+        <div className="layer-item" onClick={()=>setShowFloorPlanViewer(v=>!v)} style={{background:showFloorPlanViewer?"rgba(var(--accent-rgb),0.07)":undefined,borderRadius:10}}>
+          <div className="layer-icon" style={{background:"rgba(var(--accent-rgb),0.15)"}}>🗺️</div>
           <div style={{flex:1}}><div className="layer-label">Vector Floor Plan</div><div className="layer-sub">{modelInfo?.floor_levels?.length?`${modelInfo.floor_levels.length} floors · walls, rooms & openings`:"Canvas renderer"}</div></div>
           <Toggle checked={!!showFloorPlanViewer} onChange={setShowFloorPlanViewer}/>
         </div>
-        <div className="layer-item" onClick={()=>setShowBim3D?.(v=>!v)} style={{background:showBim3D?"rgba(59,130,246,0.09)":undefined,borderRadius:10}}>
-          <div className="layer-icon" style={{background:"rgba(59,130,246,0.18)"}}>🏛️</div>
+        <div className="layer-item" onClick={()=>setShowBim3D?.(v=>!v)} style={{background:showBim3D?"rgba(var(--accent-rgb),0.09)":undefined,borderRadius:10}}>
+          <div className="layer-icon" style={{background:"rgba(var(--accent-rgb),0.18)"}}>🏛️</div>
           <div style={{flex:1}}><div className="layer-label">3D Walls & Floors</div><div className="layer-sub">Interactable 3D BIM entities</div></div>
           <Toggle checked={!!showBim3D} onChange={setShowBim3D}/>
         </div>
 
         {/* ── Photo Texture Layer ── */}
-        <div className="layer-item" onClick={()=>setShowTexture?.(v=>!v)} style={{background:showTexture?"rgba(245,158,11,0.09)":undefined,borderRadius:10}}>
-          <div className="layer-icon" style={{background:"rgba(245,158,11,0.18)"}}>📷</div>
+        <div className="layer-item" onClick={()=>setShowTexture?.(v=>!v)} style={{background:showTexture?"rgba(var(--sel-rgb),0.09)":undefined,borderRadius:10}}>
+          <div className="layer-icon" style={{background:"rgba(var(--sel-rgb),0.18)"}}>📷</div>
           <div style={{flex:1}}><div className="layer-label">Photo Texture</div><div className="layer-sub">Matterport photos on 3D mesh</div></div>
           <Toggle checked={!!showTexture} onChange={setShowTexture}/>
         </div>
         {showTexture && (
           <div style={{padding:"2px 12px 8px",display:"flex",alignItems:"center",gap:8,fontSize:10,color:"var(--text-3)"}}>
             <span>Opacity</span>
-            <input type="range" min="0.1" max="1" step="0.05" value={textureOpacity} onChange={e=>setTextureOpacity?.(parseFloat(e.target.value))} style={{flex:1,accentColor:"#f59e0b",cursor:"pointer"}}/>
+            <input type="range" min="0.1" max="1" step="0.05" value={textureOpacity} onChange={e=>setTextureOpacity?.(parseFloat(e.target.value))} style={{flex:1,accentColor:"var(--sel)",cursor:"pointer"}}/>
             <span>{Math.round(textureOpacity*100)}%</span>
           </div>
         )}
@@ -739,9 +742,9 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
             onClick={() => setShowColorPanel(v => !v)}
             style={{
               width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
-              background:showColorPanel?"rgba(168,85,247,0.10)":"rgba(255,255,255,0.03)",
-              border:`1px solid ${showColorPanel?"rgba(168,85,247,0.35)":"rgba(255,255,255,0.08)"}`,
-              borderRadius:6,color:showColorPanel?"#c084fc":"var(--text-2)",
+              background:showColorPanel?"rgba(var(--layer-window-rgb),0.10)":"rgba(var(--fg-rgb),0.03)",
+              border:`1px solid ${showColorPanel?"rgba(var(--layer-window-rgb),0.35)":"rgba(var(--fg-rgb),0.08)"}`,
+              borderRadius:6,color:showColorPanel?"var(--layer-window)":"var(--text-2)",
               fontSize:11,fontWeight:600,padding:"5px 10px",cursor:"pointer",transition:"all 0.2s",marginBottom:4,
             }}
           >
@@ -751,7 +754,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
 
           {showColorPanel && (
             <div style={{
-              background:"rgba(0,0,0,0.25)",border:"1px solid rgba(168,85,247,0.18)",
+              background:"rgba(var(--shadow-rgb),0.25)",border:"1px solid rgba(var(--layer-window-rgb),0.18)",
               borderRadius:8,padding:"10px 12px",display:"flex",flexDirection:"column",gap:10,
             }}>
 
@@ -770,7 +773,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                     <div style={{
                       width:28,height:28,borderRadius:6,cursor:"pointer",
                       background: cloudColors?.wall ?? "#f5f5f5",
-                      border:"2px solid rgba(168,85,247,0.4)",
+                      border:"2px solid rgba(var(--layer-window-rgb),0.4)",
                       boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
                       transition:"box-shadow 0.15s",
                     }} />
@@ -800,7 +803,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                     <div style={{
                       width:28,height:28,borderRadius:6,cursor:"pointer",
                       background: cloudColors?.floor ?? "#2ed16b",
-                      border:"2px solid rgba(168,85,247,0.4)",
+                      border:"2px solid rgba(var(--layer-window-rgb),0.4)",
                       boxShadow:"0 1px 4px rgba(0,0,0,0.4)",
                       transition:"box-shadow 0.15s",
                     }} />
@@ -825,7 +828,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
                 }}
                 style={{
                   fontSize:10,color:"var(--text-3)",background:"none",
-                  border:"1px solid rgba(255,255,255,0.08)",borderRadius:4,
+                  border:"1px solid rgba(var(--fg-rgb),0.08)",borderRadius:4,
                   padding:"3px 8px",cursor:"pointer",alignSelf:"flex-end",
                 }}
               >↩ Reset defaults</button>
@@ -848,7 +851,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
         ))}
         <div className="stat-row">
           <span className="stat-label">Wall slices</span>
-          <span className="stat-value" style={{color:modelInfo?.wall_slices_ready?"#00c850":modelInfo?.preprocess_walls_running?"#ffa000":"var(--text-3)",fontWeight:600}}>
+          <span className="stat-value" style={{color:modelInfo?.wall_slices_ready?"var(--green)":modelInfo?.preprocess_walls_running?"var(--sel)":"var(--text-3)",fontWeight:600}}>
             {modelInfo?.preprocess_walls_running?"⧗ Extracting…":modelInfo?.wall_slices_ready?"✓ Dense":"⚠ Not ready"}
           </span>
         </div>
@@ -857,14 +860,14 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
           <>
             <div className="stat-row">
               <span className="stat-label">Openings</span>
-              <span className="stat-value" style={{color:"#00c850",fontWeight:600}}>
+              <span className="stat-value" style={{color:"var(--green)",fontWeight:600}}>
                 {openingQuality.n_doors}D · {openingQuality.n_windows}W
               </span>
             </div>
             <div className="stat-row">
               <span className="stat-label">Quality</span>
               <span className="stat-value" style={{
-                color: openingQuality.n_low_confidence > 0 ? "#fbbf24" : "#00c850",
+                color: openingQuality.n_low_confidence > 0 ? "var(--sel)" : "var(--green)",
                 fontWeight: 600,
               }}>
                 {openingQuality.n_low_confidence > 0
@@ -880,7 +883,7 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
 
       {/* ── Advanced ── */}
       <div className="sidebar-section">
-        <button onClick={()=>setShowAdv(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:6,color:"var(--text-2)",fontSize:11,fontWeight:600,padding:"6px 10px",cursor:"pointer"}}>
+        <button onClick={()=>setShowAdv(v=>!v)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",background:"rgba(var(--fg-rgb),0.03)",border:"1px solid rgba(var(--fg-rgb),0.08)",borderRadius:6,color:"var(--text-2)",fontSize:11,fontWeight:600,padding:"6px 10px",cursor:"pointer"}}>
           <span>⚙ Advanced — Single Floor</span><span style={{fontSize:10,opacity:0.7}}>{showAdv?"▲":"▼"}</span>
         </button>
         {showAdv&&(
@@ -888,14 +891,14 @@ export default function Sidebar({ showCloud, setShowCloud, showTexture, setShowT
             <div style={{fontSize:11,color:"var(--text-3)",marginBottom:8,lineHeight:1.5}}>Run wall detection for one floor only, using pre-existing wall slices (skips C2B and slice extraction).</div>
             <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
               <span style={{fontSize:11,color:"var(--text-3)",flexShrink:0}}>Floor</span>
-              <select value={advFloor} onChange={e=>setAdvFloor(Number(e.target.value))} style={{flex:1,background:"var(--surface-2,#111827)",border:"1px solid var(--border,#1e2d4a)",borderRadius:5,color:"var(--text-1)",fontSize:11,padding:"4px 6px",cursor:"pointer"}}>
+              <select value={advFloor} onChange={e=>setAdvFloor(Number(e.target.value))} style={{flex:1,background:"var(--surface-2,var(--surface-2))",border:"1px solid var(--border,var(--border))",borderRadius:5,color:"var(--text-1)",fontSize:11,padding:"4px 6px",cursor:"pointer"}}>
                 {(modelInfo?.floor_levels ?? [0]).map((_,i)=><option key={i} value={i}>Floor {i}</option>)}
               </select>
             </div>
-            <button id="c2b-walls-btn" onClick={runSingleFloor} disabled={advBusy||!modelInfo?.wall_slices_ready} style={btnStyle("#67e8f9",advBusy||!modelInfo?.wall_slices_ready)}>
+            <button id="c2b-walls-btn" onClick={runSingleFloor} disabled={advBusy||!modelInfo?.wall_slices_ready} style={btnStyle("var(--accent)",advBusy||!modelInfo?.wall_slices_ready)}>
               {advBusy?"⏳ Detecting…":"🧱 Detect Walls + Rooms (this floor)"}
             </button>
-            {advMsg&&<div style={{marginTop:5,fontSize:11,color:advMsg.startsWith("⚠")?"#ef4444":"#00c850",lineHeight:1.4}}>{advMsg}</div>}
+            {advMsg&&<div style={{marginTop:5,fontSize:11,color:advMsg.startsWith("⚠")?"var(--red)":"var(--green)",lineHeight:1.4}}>{advMsg}</div>}
             {!modelInfo?.wall_slices_ready&&<div style={{marginTop:4,fontSize:10,color:"var(--text-3)"}}>Run the full pipeline first to extract wall slices.</div>}
           </div>
         )}

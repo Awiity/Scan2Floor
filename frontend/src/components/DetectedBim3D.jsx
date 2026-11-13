@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import * as THREE from "three";
+import { getSceneTheme } from "../theme";
 
 /**
  * Geometric distance from point (px, pz) to line segment (x1, z1)-(x2, z2)
@@ -37,9 +38,10 @@ function Door3DMesh({
   const openAngle = Math.PI / 10; // ~18 deg ajar for architectural realism
 
   // Highlight colors
-  const frameColor = isSelected ? "#f59e0b" : isHovered ? "#00e5ff" : "#334155";
-  const leafColor = isSelected ? "#d97706" : isHovered ? "#38bdf8" : "#854d0e";
-  const edgeColor = isSelected ? "#fbbf24" : isHovered ? "#a5f3fc" : "#64748b";
+  const S = getSceneTheme();
+  const frameColor = isSelected ? S.wallSelected : isHovered ? S.wallHover : S.frame;
+  const leafColor = isSelected ? S.wallSelected : isHovered ? S.wallHover : S.door;
+  const edgeColor = isSelected ? S.wallSelected : isHovered ? S.wallHover : S.edge;
 
   return (
     <group
@@ -87,11 +89,11 @@ function Door3DMesh({
         <group position={[leafW - 0.08, -leafH / 2 + 1.0, leafThick / 2 + 0.02]}>
           <mesh rotation={[Math.PI / 2, 0, 0]}>
             <cylinderGeometry args={[0.012, 0.012, 0.04, 12]} />
-            <meshStandardMaterial color="#f59e0b" metalness={0.9} roughness={0.2} />
+            <meshStandardMaterial color={S.sel} metalness={0.9} roughness={0.2} />
           </mesh>
           <mesh position={[0.04, 0, 0.02]}>
             <boxGeometry args={[0.09, 0.018, 0.018]} />
-            <meshStandardMaterial color="#f59e0b" metalness={0.9} roughness={0.2} />
+            <meshStandardMaterial color={S.sel} metalness={0.9} roughness={0.2} />
           </mesh>
         </group>
       </group>
@@ -125,8 +127,9 @@ function Window3DMesh({
   const glassW = Math.max(0.1, width - frameW * 2);
   const glassH = Math.max(0.1, height - frameW * 2);
 
-  const frameColor = isSelected ? "#f59e0b" : isHovered ? "#00e5ff" : "#1e293b";
-  const edgeColor = isSelected ? "#fbbf24" : isHovered ? "#a5f3fc" : "#38bdf8";
+  const S = getSceneTheme();
+  const frameColor = isSelected ? S.wallSelected : isHovered ? S.wallHover : S.frame;
+  const edgeColor = isSelected ? S.wallSelected : isHovered ? S.wallHover : S.window;
 
   return (
     <group
@@ -171,7 +174,7 @@ function Window3DMesh({
       <mesh position={[0, 0, 0]}>
         <boxGeometry args={[glassW, glassH, 0.018]} />
         <meshStandardMaterial
-          color="#38bdf8"
+          color={S.window}
           transparent
           opacity={0.35}
           roughness={0.08}
@@ -235,20 +238,21 @@ function WallMesh3D({
   const uz = length > 1e-4 ? dz / length : 0;
 
   // Color styling based on wall selection/hover
-  let wallColor = "#3b82f6"; // BIM blue
+  const S = getSceneTheme();
+  let wallColor = S.wall;
   let wallOpacity = 0.55;
-  let edgeColor = "#60a5fa";
+  let edgeColor = S.wallEdge;
   let edgeOpacity = 0.8;
 
   if (isSelected) {
-    wallColor = "#f59e0b"; // vibrant amber
+    wallColor = S.wallSelected; // selection colour
     wallOpacity = 0.90;
-    edgeColor = "#fbbf24";
+    edgeColor = S.wallSelected;
     edgeOpacity = 1.0;
   } else if (isHovered) {
-    wallColor = "#00e5ff"; // bright cyan
+    wallColor = S.wallHover; // hover highlight
     wallOpacity = 0.80;
-    edgeColor = "#a5f3fc";
+    edgeColor = S.wallHover;
     edgeOpacity = 1.0;
   }
 
@@ -569,20 +573,21 @@ function RoomFloorMesh3D({
 
   if (!geomData) return null;
 
-  let floorColor = "#10b981"; // emerald for detected room floor
+  const S = getSceneTheme();
+  let floorColor = S.room; // neutral detected-room floor
   let floorOpacity = 0.28;
-  let edgeColor = "#34d399";
+  let edgeColor = S.room;
   let edgeOpacity = 0.7;
 
   if (isSelected) {
-    floorColor = "#00e5ff"; // bright cyan when selected
+    floorColor = S.floorSelected; // selection colour
     floorOpacity = 0.65;
-    edgeColor = "#67e8f9";
+    edgeColor = S.floorSelected;
     edgeOpacity = 1.0;
   } else if (isHovered) {
-    floorColor = "#34d399";
+    floorColor = S.wallHover;
     floorOpacity = 0.48;
-    edgeColor = "#a7f3d0";
+    edgeColor = S.wallHover;
     edgeOpacity = 0.9;
   }
 

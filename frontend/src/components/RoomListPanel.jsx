@@ -7,12 +7,8 @@
  */
 
 import { useState, useEffect } from "react";
+import { ROOM_COLORS } from "../theme";
 
-// Palette matching FloorPlanViewer room colours (same order)
-const ROOM_COLORS = [
-  "#00c8e0", "#818cf8", "#fbbf24", "#34d399", "#fb7185",
-  "#a78bfa", "#22d3ee", "#fb923c", "#4ade80", "#f87171",
-];
 
 export default function RoomListPanel({
   floor,

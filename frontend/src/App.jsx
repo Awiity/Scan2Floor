@@ -705,11 +705,11 @@ export default function App() {
             <div className="corner-info">
               {modelInfo.n_points?.toLocaleString()} pts &nbsp;·&nbsp;
               {modelInfo.wall_slices_ready ? (
-                <span style={{ color: "#00c850" }}>✓ dense slices</span>
+                <span style={{ color: "var(--green)" }}>✓ dense slices</span>
               ) : modelInfo.preprocess_walls_running ? (
-                <span style={{ color: "#ffa000" }}>⏳ extracting…</span>
+                <span style={{ color: "var(--sel)" }}>⏳ extracting…</span>
               ) : (
-                <span style={{ color: "#ffa000" }}>⚠ 1:100 sparse</span>
+                <span style={{ color: "var(--sel)" }}>⚠ 1:100 sparse</span>
               )}
             </div>
           )}
