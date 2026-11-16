@@ -186,44 +186,150 @@ function fitCamera(bounds, canvasW, canvasH, padding = 0.05) {
 
 // ── Geometry helpers for editing ───────────────────────────────────────────────
 
-function distPointToSeg(px, pz, x1, z1, x2, z2) {
+function projectPointToSeg(px, pz, x1, z1, x2, z2) {
   const dx = x2 - x1, dz = z2 - z1;
   const len2 = dx * dx + dz * dz;
-  if (len2 === 0) return Math.hypot(px - x1, pz - z1);
+  if (len2 === 0) return { x: x1, z: z1, t: 0, dist: Math.hypot(px - x1, pz - z1) };
   const t = Math.max(0, Math.min(1, ((px - x1) * dx + (pz - z1) * dz) / len2));
-  return Math.hypot(px - (x1 + t * dx), pz - (z1 + t * dz));
+  const x = x1 + t * dx, z = z1 + t * dz;
+  return { x, z, t, dist: Math.hypot(px - x, pz - z) };
 }
 
-/** Snap world point to nearest endpoint (within pixThresh px) or configured grid step. */
-function computeSnap(wx, wz, editedLines, cam, pixThresh = 14, gridStep = 0.05, snapToVertices = true) {
+function distPointToSeg(px, pz, x1, z1, x2, z2) {
+  return projectPointToSeg(px, pz, x1, z1, x2, z2).dist;
+}
+
+function getWallMetrics(line) {
+  const [[x1, z1], [x2, z2]] = line.pts;
+  const dx = x2 - x1, dz = z2 - z1;
+  const len = Math.hypot(dx, dz);
+  const mx = (x1 + x2) * 0.5, mz = (z1 + z2) * 0.5;
+  const ux = len > 1e-6 ? dx / len : 1;
+  const uz = len > 1e-6 ? dz / len : 0;
+  const nx = -uz, nz = ux;
+  const angleRad = Math.atan2(dz, dx);
+  const angleDeg = ((angleRad * 180) / Math.PI + 360) % 360;
+  const thickness = normalizeWallThickness(line.thickness);
+  return { x1, z1, x2, z2, mx, mz, dx, dz, len, ux, uz, nx, nz, angleRad, angleDeg, thickness };
+}
+
+function syncOpeningsWithWalls(lines, openings) {
+  if (!openings?.length) return { openings, changed: false };
+  let changed = false;
+  const next = openings.map((op) => {
+    const wi = op.wall_idx;
+    if (wi == null || wi < 0 || wi >= lines.length) return op;
+    const [[x1, z1], [x2, z2]] = lines[wi].pts;
+    const t = Math.max(0.02, Math.min(0.98, op.position_t ?? 0.5));
+    const nx = x1 + t * (x2 - x1);
+    const nz = z1 + t * (z2 - z1);
+    if (
+      Math.abs((op.wall_x1 ?? 0) - x1) > 1e-5 ||
+      Math.abs((op.wall_z1 ?? 0) - z1) > 1e-5 ||
+      Math.abs((op.wall_x2 ?? 0) - x2) > 1e-5 ||
+      Math.abs((op.wall_z2 ?? 0) - z2) > 1e-5 ||
+      Math.abs((op.x ?? 0) - nx) > 1e-5 ||
+      Math.abs((op.z ?? 0) - nz) > 1e-5
+    ) {
+      changed = true;
+      return { ...op, wall_x1: x1, wall_z1: z1, wall_x2: x2, wall_z2: z2, x: nx, z: nz };
+    }
+    return op;
+  });
+  return { openings: changed ? next : openings, changed };
+}
+
+/** Snap world point to nearest endpoint, midpoint, wall edge, alignment guide, or grid step. */
+function computeSnap(wx, wz, editedLines, cam, pixThresh = 14, gridStep = 0.05, snapToVertices = true, excludeIdx = -1) {
   if (snapToVertices) {
-    const worldThresh = pixThresh / cam.scale;
-    let best = worldThresh, snapped = null;
-    for (const { pts: [[x1, z1], [x2, z2]] } of editedLines) {
+    const epThresh = pixThresh / cam.scale;
+    const subThresh = (pixThresh * 0.85) / cam.scale;
+
+    let bestEp = epThresh, epSnapped = null;
+    for (let i = 0; i < editedLines.length; i++) {
+      if (i === excludeIdx || editedLines[i].hidden) continue;
+      const [[x1, z1], [x2, z2]] = editedLines[i].pts;
       const d1 = Math.hypot(wx - x1, wz - z1);
       const d2 = Math.hypot(wx - x2, wz - z2);
-      if (d1 < best) { best = d1; snapped = { pt: [x1, z1], kind: "endpoint" }; }
-      if (d2 < best) { best = d2; snapped = { pt: [x2, z2], kind: "endpoint" }; }
+      if (d1 < bestEp) { bestEp = d1; epSnapped = { pt: [x1, z1], kind: "endpoint" }; }
+      if (d2 < bestEp) { bestEp = d2; epSnapped = { pt: [x2, z2], kind: "endpoint" }; }
     }
-    if (snapped) return snapped;
+    if (epSnapped) return epSnapped;
+
+    let bestMid = subThresh, midSnapped = null;
+    for (let i = 0; i < editedLines.length; i++) {
+      if (i === excludeIdx || editedLines[i].hidden) continue;
+      const [[x1, z1], [x2, z2]] = editedLines[i].pts;
+      const mx = (x1 + x2) * 0.5, mz = (z1 + z2) * 0.5;
+      const dm = Math.hypot(wx - mx, wz - mz);
+      if (dm < bestMid) { bestMid = dm; midSnapped = { pt: [mx, mz], kind: "midpoint" }; }
+    }
+    if (midSnapped) return midSnapped;
+
+    let bestEdge = subThresh, edgeSnapped = null;
+    for (let i = 0; i < editedLines.length; i++) {
+      if (i === excludeIdx || editedLines[i].hidden) continue;
+      const [[x1, z1], [x2, z2]] = editedLines[i].pts;
+      const proj = projectPointToSeg(wx, wz, x1, z1, x2, z2);
+      if (proj.t >= 0.03 && proj.t <= 0.97 && proj.dist < bestEdge) {
+        bestEdge = proj.dist;
+        let pt = [proj.x, proj.z];
+        if (gridStep > 0) {
+          const len = Math.hypot(x2 - x1, z2 - z1);
+          if (len > 1e-4) {
+            const snappedAlong = Math.round((proj.t * len) / gridStep) * gridStep;
+            const tSnapped = Math.max(0.03, Math.min(0.97, snappedAlong / len));
+            const sx = x1 + (x2 - x1) * tSnapped;
+            const sz = z1 + (z2 - z1) * tSnapped;
+            if (Math.hypot(sx - proj.x, sz - proj.z) <= Math.min(gridStep, subThresh * 1.25)) {
+              pt = [sx, sz];
+            }
+          }
+        }
+        edgeSnapped = { pt, kind: "edge" };
+      }
+    }
+    if (edgeSnapped) return edgeSnapped;
   }
+
+  let sx = !gridStep || gridStep <= 0 ? wx : Math.round(wx / gridStep) * gridStep;
+  let sz = !gridStep || gridStep <= 0 ? wz : Math.round(wz / gridStep) * gridStep;
+  let alignX = null;
+  let alignZ = null;
+
+  if (snapToVertices) {
+    const alignThresh = 6 / cam.scale;
+    let bestDx = alignThresh, bestDz = alignThresh;
+    for (let i = 0; i < editedLines.length; i++) {
+      if (i === excludeIdx || editedLines[i].hidden) continue;
+      for (const [ex, ez] of editedLines[i].pts) {
+        const dx = Math.abs(wx - ex);
+        const dz = Math.abs(wz - ez);
+        if (dx < bestDx) { bestDx = dx; sx = ex; alignX = [ex, ez]; }
+        if (dz < bestDz) { bestDz = dz; sz = ez; alignZ = [ex, ez]; }
+      }
+    }
+  }
+
   if (!gridStep || gridStep <= 0) {
-    return { pt: [wx, wz], kind: "free" };
+    return { pt: [sx, sz], kind: "free", alignX, alignZ };
   }
-  const g = gridStep;
-  return { pt: [Math.round(wx / g) * g, Math.round(wz / g) * g], kind: "grid" };
+  return { pt: [sx, sz], kind: "grid", alignX, alignZ };
 }
 
 /**
- * Projects (wx, wz) onto the nearest 45° axis emanating from (fromX, fromZ).
- * Returns { pt, angle, dist } — the constrained world point, the snapped angle
- * in radians, and the distance from fromX/fromZ.
+ * Projects (wx, wz) onto the nearest 45° or 90° axis emanating from (fromX, fromZ).
+ * Returns { pt, angle, dist }.
  */
-function applyAngleConstraint(wx, wz, fromX, fromZ) {
+function applyAngleConstraint(wx, wz, fromX, fromZ, angleMode = "45") {
   const dx = wx - fromX, dz = wz - fromZ;
   const raw = Math.atan2(dz, dx);
-  const snapAngle = Math.round(raw / (Math.PI / 4)) * (Math.PI / 4);
   const dist = Math.hypot(dx, dz);
+  if (angleMode === "free") {
+    return { pt: [wx, wz], angle: raw, dist };
+  }
+  const step = angleMode === "90" ? Math.PI / 2 : Math.PI / 4;
+  const snapAngle = Math.round(raw / step) * step;
   return {
     pt: [fromX + Math.cos(snapAngle) * dist, fromZ + Math.sin(snapAngle) * dist],
     angle: snapAngle,
@@ -233,29 +339,60 @@ function applyAngleConstraint(wx, wz, fromX, fromZ) {
 
 /**
  * Like computeSnap but after applying an angle constraint from `fromPt`.
- * Endpoint snapping is restricted to points within `epPixThresh` of the
- * constrained ray (so you can still snap-to-endpoint along the axis).
+ * Endpoint, midpoint, and edge-intersection snapping are restricted to points along the ray.
  */
-function computeSnapConstrained(wx, wz, editedLines, cam, fromX, fromZ, pixThresh = 14, gridStep = 0.05, snapToVertices = true) {
-  const { pt: [cx, cz], angle, dist } = applyAngleConstraint(wx, wz, fromX, fromZ);
+function computeSnapConstrained(
+  wx, wz, editedLines, cam, fromX, fromZ,
+  pixThresh = 14, gridStep = 0.05, snapToVertices = true,
+  angleMode = "45", excludeIdx = -1,
+) {
+  if (angleMode === "free") {
+    return computeSnap(wx, wz, editedLines, cam, pixThresh, gridStep, snapToVertices, excludeIdx);
+  }
+  const { pt: [cx, cz], angle, dist } = applyAngleConstraint(wx, wz, fromX, fromZ, angleMode);
   const cosA = Math.cos(angle), sinA = Math.sin(angle);
-  // Try to find an endpoint close to the constrained ray
-  let epPt = null;
+  const worldEpThresh = pixThresh / cam.scale;
+
+  let epPt = null, epKind = "endpoint";
   if (snapToVertices) {
-    const worldEpThresh = pixThresh / cam.scale;
     let bestEp = worldEpThresh;
-    for (const { pts: [[x1, z1], [x2, z2]] } of editedLines) {
-      for (const [ex, ez] of [[x1, z1], [x2, z2]]) {
-        // Project endpoint onto the constrained axis
-        const tPt = (ex - fromX) * cosA + (ez - fromZ) * sinA; // scalar along ray
-        if (tPt < 0) continue; // behind start point
+    for (let i = 0; i < editedLines.length; i++) {
+      if (i === excludeIdx || editedLines[i].hidden) continue;
+      const [[x1, z1], [x2, z2]] = editedLines[i].pts;
+      const cands = [
+        { pt: [x1, z1], kind: "endpoint" },
+        { pt: [x2, z2], kind: "endpoint" },
+        { pt: [(x1 + x2) * 0.5, (z1 + z2) * 0.5], kind: "midpoint" },
+      ];
+      for (const cand of cands) {
+        const [ex, ez] = cand.pt;
+        const tPt = (ex - fromX) * cosA + (ez - fromZ) * sinA;
+        if (tPt < 0) continue;
         const projX = fromX + tPt * cosA;
         const projZ = fromZ + tPt * sinA;
         const perpDist = Math.hypot(ex - projX, ez - projZ);
-        if (perpDist < worldEpThresh && perpDist < bestEp) {
-          // Snap to the endpoint projected onto the ray (keeps the angle exact)
+        const thresh = cand.kind === "midpoint" ? worldEpThresh * 0.85 : worldEpThresh;
+        if (perpDist < thresh && perpDist < bestEp) {
           bestEp = perpDist;
-          epPt = [projX, projZ]; // stay on the constrained axis
+          epPt = [projX, projZ];
+          epKind = cand.kind;
+        }
+      }
+    }
+
+    if (!epPt) {
+      let bestEdgeDist = worldEpThresh;
+      for (let i = 0; i < editedLines.length; i++) {
+        if (i === excludeIdx || editedLines[i].hidden) continue;
+        const [[x1, z1], [x2, z2]] = editedLines[i].pts;
+        const hit = lineIntersect(fromX, fromZ, fromX + cosA, fromZ + sinA, x1, z1, x2, z2);
+        if (hit && hit.t > 0.01 && hit.s >= 0 && hit.s <= 1) {
+          const dEdge = Math.hypot(cx - hit.pt[0], cz - hit.pt[1]);
+          if (dEdge < bestEdgeDist) {
+            bestEdgeDist = dEdge;
+            epPt = hit.pt;
+            epKind = "edge";
+          }
         }
       }
     }
@@ -264,11 +401,48 @@ function computeSnapConstrained(wx, wz, editedLines, cam, fromX, fromZ, pixThres
   if (epPt) {
     return {
       pt: epPt,
-      kind: "endpoint",
+      kind: epKind,
       angle,
       dist: Math.hypot(epPt[0] - fromX, epPt[1] - fromZ),
       fromPt: [fromX, fromZ],
     };
+  }
+
+  // Ortho alignment guide along horizontal or vertical ray
+  let alignX = null, alignZ = null;
+  if (snapToVertices) {
+    const alignThresh = 6 / cam.scale;
+    if (Math.abs(sinA) < 1e-4) {
+      let bestDx = alignThresh, alignedXVal = null;
+      for (let i = 0; i < editedLines.length; i++) {
+        if (i === excludeIdx || editedLines[i].hidden) continue;
+        for (const [ex, ez] of editedLines[i].pts) {
+          const tAlong = (ex - fromX) * cosA;
+          if (tAlong < 0) continue;
+          const dx = Math.abs(cx - ex);
+          if (dx < bestDx) { bestDx = dx; alignedXVal = ex; alignX = [ex, ez]; }
+        }
+      }
+      if (alignedXVal != null) {
+        const pt = [alignedXVal, fromZ];
+        return { pt, kind: "angle", angle, dist: Math.abs(alignedXVal - fromX), fromPt: [fromX, fromZ], alignX };
+      }
+    } else if (Math.abs(cosA) < 1e-4) {
+      let bestDz = alignThresh, alignedZVal = null;
+      for (let i = 0; i < editedLines.length; i++) {
+        if (i === excludeIdx || editedLines[i].hidden) continue;
+        for (const [ex, ez] of editedLines[i].pts) {
+          const tAlong = (ez - fromZ) * sinA;
+          if (tAlong < 0) continue;
+          const dz = Math.abs(cz - ez);
+          if (dz < bestDz) { bestDz = dz; alignedZVal = ez; alignZ = [ex, ez]; }
+        }
+      }
+      if (alignedZVal != null) {
+        const pt = [fromX, alignedZVal];
+        return { pt, kind: "angle", angle, dist: Math.abs(alignedZVal - fromZ), fromPt: [fromX, fromZ], alignZ };
+      }
+    }
   }
 
   if (!gridStep || gridStep <= 0) {
@@ -281,10 +455,10 @@ function computeSnapConstrained(wx, wz, editedLines, cam, fromX, fromZ, pixThres
     };
   }
 
-  // Grid-snap along the constrained ray when no endpoint found
+  // Grid-snap along the constrained ray when no endpoint/alignment found
   const g = gridStep;
   const tSnapped = Math.round(dist / g) * g;
-  const snappedPt = [fromX + Math.cos(angle) * tSnapped, fromZ + Math.sin(angle) * tSnapped];
+  const snappedPt = [fromX + cosA * tSnapped, fromZ + sinA * tSnapped];
   return {
     pt: snappedPt,
     kind: "angle",
@@ -517,7 +691,23 @@ function traceWallRect(ctx, cx1, cy1, cx2, cy2, wPx) {
   return true;
 }
 
-function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, editMode, TC) {
+function drawEditedWalls(
+  ctx,
+  editedLines,
+  cam,
+  hoveredIdx,
+  addStart,
+  snapInfo,
+  editMode,
+  TC,
+  {
+    selectedWallIdx = null,
+    hoveredHandle = null,
+    wallDragState = null,
+    toolWallThickness = 0.20,
+    typedLength = "",
+  } = {},
+) {
   const lw = Math.max(1.0, cam.scale * 0.09);
 
   // Draw hidden walls first (below active walls)
@@ -527,25 +717,26 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const [[x1, z1], [x2, z2]] = line.pts;
     const tM = normalizeWallThickness(line.thickness);
     const wPx = Math.max(1.8, tM * cam.scale);
-    const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
-    const color = isHovered ? TC.wallHover : TC.wallHidden;
-    const glow = isHovered ? TC.wallHoverGlow : TC.wallHiddenGlow;
+    const isSelected = i === selectedWallIdx;
+    const isHovered = !isSelected && i === hoveredIdx && (editMode === "delete" || editMode === "hide" || editMode === "select");
+    const color = isSelected ? TC.sel : isHovered ? (editMode === "select" ? TC.text1 : TC.wallHover) : TC.wallHidden;
+    const glow = isSelected ? TC.sel : isHovered ? TC.wallHoverGlow : TC.wallHiddenGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
-    ctx.globalAlpha = isHovered ? 0.85 : 0.45;
+    ctx.globalAlpha = isSelected ? 0.85 : isHovered ? 0.80 : 0.45;
     ctx.lineCap = "butt";
-    if (!isHovered) ctx.setLineDash([5, 6]);
+    if (!isHovered && !isSelected) ctx.setLineDash([5, 6]);
     if (wPx >= 4.5 && traceWallRect(ctx, cx1, cy1, cx2, cy2, wPx)) {
       ctx.strokeStyle = color;
-      ctx.lineWidth = isHovered ? 2.0 : 1.1;
-      ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 8 : 2;
+      ctx.lineWidth = isSelected ? 2.2 : isHovered ? 2.0 : 1.1;
+      ctx.shadowColor = color; ctx.shadowBlur = isSelected ? 10 : isHovered ? 8 : 2;
       ctx.stroke();
     } else {
       ctx.strokeStyle = glow; ctx.lineWidth = wPx + 3;
       ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
-      ctx.strokeStyle = color; ctx.lineWidth = isHovered ? wPx + 2 : wPx;
-      ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 8 : 2;
+      ctx.strokeStyle = color; ctx.lineWidth = isSelected ? wPx + 2 : isHovered ? wPx + 2 : wPx;
+      ctx.shadowColor = color; ctx.shadowBlur = isSelected ? 10 : isHovered ? 8 : 2;
       ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
     }
     ctx.setLineDash([]);
@@ -557,9 +748,24 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const line = editedLines[i];
     if (line.hidden) continue;
     const { pts: [[x1, z1], [x2, z2]], source } = line;
-    const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
-    const color = isHovered ? TC.wallHover : source === "user" ? TC.wallUser : TC.wall;
-    const glow = isHovered ? TC.wallHoverGlow : source === "user" ? TC.wallUserGlow : TC.wallGlow;
+    const isSelected = i === selectedWallIdx;
+    const isDeleteHideHovered = !isSelected && i === hoveredIdx && (editMode === "delete" || editMode === "hide");
+    const isSelectHovered = !isSelected && i === hoveredIdx && editMode === "select";
+    const isHovered = isDeleteHideHovered || isSelectHovered;
+    const color = isSelected
+      ? TC.sel
+      : isDeleteHideHovered
+        ? TC.wallHover
+        : source === "user"
+          ? TC.wallUser
+          : TC.wall;
+    const glow = isSelected
+      ? TC.sel
+      : isDeleteHideHovered
+        ? TC.wallHoverGlow
+        : source === "user"
+          ? TC.wallUserGlow
+          : TC.wallGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     const tM = normalizeWallThickness(line.thickness);
@@ -568,27 +774,27 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     ctx.save();
     ctx.lineCap = "butt";
     if (wPx >= 4.5 && traceWallRect(ctx, cx1, cy1, cx2, cy2, wPx)) {
-      ctx.globalAlpha = isHovered ? 0.55 : 0.32;
+      ctx.globalAlpha = isSelected ? 0.42 : isDeleteHideHovered ? 0.55 : isSelectHovered ? 0.40 : 0.32;
       ctx.fillStyle = color;
       ctx.fill();
       ctx.globalAlpha = 1.0;
       ctx.strokeStyle = color;
-      ctx.lineWidth = isHovered ? 2.0 : 1.25;
-      ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 10 : 3;
+      ctx.lineWidth = isSelected ? 2.4 : isHovered ? 2.0 : 1.25;
+      ctx.shadowColor = color; ctx.shadowBlur = isSelected ? 10 : isHovered ? 8 : 3;
       ctx.stroke();
       // Subtle centre-line
       ctx.shadowBlur = 0;
-      ctx.globalAlpha = 0.45;
+      ctx.globalAlpha = isSelected ? 0.7 : 0.45;
       ctx.lineWidth = 1;
       ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
     } else {
       ctx.strokeStyle = glow; ctx.lineWidth = wPx + 3;
       ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
-      ctx.strokeStyle = color; ctx.lineWidth = isHovered ? wPx + 2 : wPx;
-      ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 10 : 3;
+      ctx.strokeStyle = color; ctx.lineWidth = isSelected ? wPx + 2.5 : isHovered ? wPx + 2 : wPx;
+      ctx.shadowColor = color; ctx.shadowBlur = isSelected ? 10 : isHovered ? 8 : 3;
       ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
     }
-    if (isHovered || (cam.scale >= 32 && segPx >= 42)) {
+    if (!isSelected && (isHovered || (cam.scale >= 32 && segPx >= 42))) {
       const mx = (cx1 + cx2) * 0.5;
       const my = (cy1 + cy2) * 0.5;
       const lbl = `${Math.round(tM * 100)} cm`;
@@ -606,22 +812,186 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     ctx.restore();
   }
 
+  // Active drag ghost of original wall + delta readout
+  if (wallDragState?.origPts) {
+    const [[ox1, oz1], [ox2, oz2]] = wallDragState.origPts;
+    const [ocx1, ocy1] = toCanvas(ox1, oz1, cam);
+    const [ocx2, ocy2] = toCanvas(ox2, oz2, cam);
+    const curLine = editedLines[wallDragState.wallIdx];
+    const origT = normalizeWallThickness(curLine?.thickness);
+    const origWPx = Math.max(1.8, origT * cam.scale);
+    ctx.save();
+    ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = TC.text3 || "rgba(180,180,180,0.6)";
+    ctx.lineWidth = 1.4;
+    ctx.globalAlpha = 0.7;
+    if (origWPx >= 4.5 && traceWallRect(ctx, ocx1, ocy1, ocx2, ocy2, origWPx)) {
+      ctx.stroke();
+    } else {
+      ctx.beginPath(); ctx.moveTo(ocx1, ocy1); ctx.lineTo(ocx2, ocy2); ctx.stroke();
+    }
+
+    if (curLine) {
+      const m = getWallMetrics(curLine);
+      const omx = (ox1 + ox2) * 0.5, omz = (oz1 + oz2) * 0.5;
+      const [ocmx, ocmy] = toCanvas(omx, omz, cam);
+      const [ccmx, ccmy] = toCanvas(m.mx, m.mz, cam);
+      let dragLabel = null;
+      let labelX = ccmx, labelY = ccmy - 26;
+
+      if (wallDragState.kind === "body") {
+        ctx.beginPath(); ctx.moveTo(ocmx, ocmy); ctx.lineTo(ccmx, ccmy); ctx.stroke();
+        ctx.setLineDash([]);
+        if (wallDragState.freeMove) {
+          const dx = m.mx - omx, dz = m.mz - omz;
+          dragLabel = `Δ (${dx >= 0 ? "+" : ""}${dx.toFixed(2)}, ${dz >= 0 ? "+" : ""}${dz.toFixed(2)}) m`;
+        } else {
+          const nCm = (wallDragState.normalOffset ?? 0) * 100;
+          dragLabel = `Δ⊥ ${nCm >= 0 ? "+" : ""}${nCm.toFixed(1)} cm`;
+        }
+        labelX = (ocmx + ccmx) * 0.5;
+        labelY = (ocmy + ccmy) * 0.5 - 16;
+      } else {
+        const origLen = Math.hypot(ox2 - ox1, oz2 - oz1);
+        const dLen = m.len - origLen;
+        dragLabel = `L ${m.len.toFixed(2)} m (${dLen >= 0 ? "+" : ""}${dLen.toFixed(2)} m) · ${Math.round(m.angleDeg)}°`;
+        const [hx, hy] = toCanvas(
+          wallDragState.kind === "p1" ? m.x1 : m.x2,
+          wallDragState.kind === "p1" ? m.z1 : m.z2,
+          cam,
+        );
+        labelX = hx;
+        labelY = hy - 20;
+      }
+
+      if (dragLabel) {
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.font = 'bold 10.5px "JetBrains Mono", monospace';
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        const tw = ctx.measureText(dragLabel).width;
+        ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(15,15,15,0.92)" : "rgba(255,255,255,0.94)";
+        ctx.fillRect(labelX - tw / 2 - 6, labelY - 9, tw + 12, 18);
+        ctx.strokeStyle = TC.sel;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(labelX - tw / 2 - 6, labelY - 9, tw + 12, 18);
+        ctx.fillStyle = TC.sel;
+        ctx.fillText(dragLabel, labelX, labelY);
+      }
+    }
+    ctx.restore();
+  }
+
+  // Selected wall handles, normal (+) direction tick, and crisp dimension pill
+  if (selectedWallIdx != null && selectedWallIdx >= 0 && selectedWallIdx < editedLines.length) {
+    const selLine = editedLines[selectedWallIdx];
+    const m = getWallMetrics(selLine);
+    const [cx1, cy1] = toCanvas(m.x1, m.z1, cam);
+    const [cx2, cy2] = toCanvas(m.x2, m.z2, cam);
+    const [cmx, cmy] = toCanvas(m.mx, m.mz, cam);
+    const segPx = Math.hypot(cx2 - cx1, cy2 - cy1);
+    const wPx = Math.max(1.8, m.thickness * cam.scale);
+    const snx = m.nx, sny = m.nz;
+
+    ctx.save();
+    // Normal (+) direction indicator arrow at midpoint
+    if (segPx >= 16) {
+      const tipDist = Math.max(14, wPx * 0.5 + 12);
+      const ax = cmx + snx * tipDist;
+      const ay = cmy + sny * tipDist;
+      const uxScreen = m.ux, uyScreen = m.uz;
+      ctx.strokeStyle = TC.sel;
+      ctx.fillStyle = TC.sel;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(cmx + snx * (wPx * 0.5 + 2), cmy + sny * (wPx * 0.5 + 2));
+      ctx.lineTo(ax, ay);
+      ctx.stroke();
+      // Arrowhead
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ax - snx * 5 - uxScreen * 3.5, ay - sny * 5 - uyScreen * 3.5);
+      ctx.lineTo(ax - snx * 5 + uxScreen * 3.5, ay - sny * 5 + uyScreen * 3.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.font = 'bold 9.5px "JetBrains Mono", monospace';
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("+", ax + snx * 8, ay + sny * 8);
+    }
+
+    // Endpoint handles (P1 and P2)
+    for (const [key, hx, hy] of [["p1", cx1, cy1], ["p2", cx2, cy2]]) {
+      const isHovHandle = hoveredHandle === key || wallDragState?.kind === key;
+      const r = isHovHandle ? 7.5 : 5.5;
+      ctx.beginPath();
+      ctx.arc(hx, hy, r, 0, Math.PI * 2);
+      ctx.fillStyle = isHovHandle ? "#ffffff" : TC.sel;
+      ctx.fill();
+      ctx.strokeStyle = TC.bg;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      if (segPx >= 36) {
+        ctx.font = 'bold 9px "JetBrains Mono", monospace';
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        const pxLblX = hx - snx * 13, pxLblY = hy - sny * 13;
+        ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(15,15,15,0.85)" : "rgba(255,255,255,0.9)";
+        ctx.fillRect(pxLblX - 9, pxLblY - 6, 18, 12);
+        ctx.fillStyle = TC.sel;
+        ctx.fillText(key.toUpperCase(), pxLblX, pxLblY);
+      }
+    }
+
+    // Midpoint body-move handle (diamond)
+    const isBodyHov = hoveredHandle === "body" || wallDragState?.kind === "body";
+    const dr = isBodyHov ? 7 : 5.5;
+    ctx.beginPath();
+    ctx.moveTo(cmx, cmy - dr);
+    ctx.lineTo(cmx + dr, cmy);
+    ctx.lineTo(cmx, cmy + dr);
+    ctx.lineTo(cmx - dr, cmy);
+    ctx.closePath();
+    ctx.fillStyle = isBodyHov ? "#ffffff" : TC.sel;
+    ctx.fill();
+    ctx.strokeStyle = TC.bg;
+    ctx.lineWidth = 1.8;
+    ctx.stroke();
+
+    // Dimension readout pill on the -normal side (unless active drag badge is drawn)
+    if (!wallDragState?.moved) {
+      const pill = `${m.len.toFixed(2)} m · ${Math.round(m.angleDeg)}° · ${Math.round(m.thickness * 100)} cm`;
+      ctx.font = 'bold 10px "JetBrains Mono", monospace';
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const tw = ctx.measureText(pill).width;
+      const off = Math.max(20, wPx * 0.5 + 16);
+      const px = cmx - snx * off;
+      const py = cmy - sny * off;
+      ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(15,15,15,0.90)" : "rgba(255,255,255,0.94)";
+      ctx.fillRect(px - tw / 2 - 5, py - 8, tw + 10, 16);
+      ctx.strokeStyle = TC.sel;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(px - tw / 2 - 5, py - 8, tw + 10, 16);
+      ctx.fillStyle = TC.sel;
+      ctx.fillText(pill, px, py);
+    }
+    ctx.restore();
+  }
+
   // In-progress wall preview (add mode with first point placed)
   if (editMode === "add" && addStart && snapInfo) {
     const [ax, az] = addStart, [sx, sz] = snapInfo.pt;
     const [cax, cay] = toCanvas(ax, az, cam), [csx, csy] = toCanvas(sx, sz, cam);
+    const previewWPx = Math.max(1.8, normalizeWallThickness(toolWallThickness) * cam.scale);
+    const isConstrained = snapInfo.kind === "angle" || ((snapInfo.kind === "endpoint" || snapInfo.kind === "midpoint" || snapInfo.kind === "edge") && snapInfo.angle != null);
 
     // ── Angle-constraint ghost guide line ───────────────────────────────────
-    if (snapInfo.kind === "angle" || snapInfo.kind === "endpoint" && snapInfo.angle != null) {
+    if (isConstrained) {
       const angle = snapInfo.angle;
-      // Extend the axis line far beyond the canvas in both directions
       const FAR = 4000;
       const cosA = Math.cos(angle), sinA = Math.sin(angle);
-      // Convert axis direction to canvas scale
       const cdx = cosA * cam.scale, cdz = sinA * cam.scale;
       ctx.save();
       ctx.setLineDash([4, 8]);
-      ctx.strokeStyle = TC.wall + "30";
+      ctx.strokeStyle = TC.wall + "35";
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(cax - cdx * FAR, cay - cdz * FAR);
@@ -629,71 +999,111 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.restore();
-
-      // Angle badge (e.g. "90°  4.5 m")
-      const angleDeg = Math.round(((angle * 180 / Math.PI) % 360 + 360) % 360);
-      const dist = snapInfo.dist ?? Math.hypot(sx - ax, sz - az);
-      const label = `${angleDeg}°  ${dist.toFixed(2)} m`;
-      // Position label near the cursor
-      const midCx = (cax + csx) / 2, midCy = (cay + csy) / 2;
-      ctx.save();
-      ctx.font = 'bold 10px "JetBrains Mono", monospace';
-      ctx.textAlign = "center"; ctx.textBaseline = "middle";
-      const tw = ctx.measureText(label).width;
-      ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(20,20,20,0.85)" : "rgba(245,245,245,0.9)";
-      ctx.fillRect(midCx - tw / 2 - 5, midCy - 9, tw + 10, 18);
-      ctx.fillStyle = TC.wall;
-      ctx.fillText(label, midCx, midCy);
-      ctx.restore();
-    } else {
-      // Free snap — show length readout
-      const dist = Math.hypot(sx - ax, sz - az);
-      if (dist > 0.01) {
-        const rawAngle = Math.atan2(sz - az, sx - ax);
-        const angleDeg = Math.round(((rawAngle * 180 / Math.PI) % 360 + 360) % 360);
-        const label = `${angleDeg}°  ${dist.toFixed(2)} m`;
-        const midCx = (cax + csx) / 2, midCy = (cay + csy) / 2;
-        ctx.save();
-        ctx.font = '10px "JetBrains Mono", monospace';
-        ctx.textAlign = "center"; ctx.textBaseline = "middle";
-        const tw = ctx.measureText(label).width;
-        ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(20,20,20,0.85)" : "rgba(245,245,245,0.9)";
-        ctx.fillRect(midCx - tw / 2 - 4, midCy - 8, tw + 8, 16);
-        ctx.fillStyle = TC.wallUser;
-        ctx.fillText(label, midCx, midCy);
-        ctx.restore();
-      }
     }
 
-    // Wall preview line
+    // Wall preview body with actual configured thickness
     ctx.save();
+    if (previewWPx >= 4.5 && traceWallRect(ctx, cax, cay, csx, csy, previewWPx)) {
+      ctx.globalAlpha = 0.24;
+      ctx.fillStyle = TC.wallPreview;
+      ctx.fill();
+      ctx.globalAlpha = 0.9;
+      ctx.setLineDash([5, 4]);
+      ctx.strokeStyle = TC.wallPreview;
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
     ctx.setLineDash([6, 4]); ctx.lineCap = "round";
-    ctx.strokeStyle = TC.wallPreview; ctx.lineWidth = lw;
+    ctx.globalAlpha = 0.95;
+    ctx.strokeStyle = TC.wallPreview; ctx.lineWidth = Math.max(1.2, lw * 0.85);
     ctx.shadowColor = TC.wallPreview; ctx.shadowBlur = 6;
     ctx.beginPath(); ctx.moveTo(cax, cay); ctx.lineTo(csx, csy); ctx.stroke();
     ctx.setLineDash([]);
     // Start point dot
     ctx.fillStyle = TC.wallPreview;
-    ctx.beginPath(); ctx.arc(cax, cay, Math.max(3, lw * 1.5), 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(cax, cay, Math.max(3.5, lw * 1.6), 0, Math.PI * 2); ctx.fill();
     ctx.restore();
+
+    // Angle / length / typed length readout badge
+    const dist = snapInfo.dist ?? Math.hypot(sx - ax, sz - az);
+    const rawAngle = isConstrained ? snapInfo.angle : Math.atan2(sz - az, sx - ax);
+    const angleDeg = Math.round(((rawAngle * 180 / Math.PI) % 360 + 360) % 360);
+    if (dist > 0.01 || typedLength) {
+      const lenStr = typedLength ? `⌨ ${typedLength} m ↵` : `${dist.toFixed(2)} m`;
+      const label = `${angleDeg}° · ${lenStr} · ${Math.round(normalizeWallThickness(toolWallThickness) * 100)} cm`;
+      const midCx = (cax + csx) / 2, midCy = (cay + csy) / 2;
+      ctx.save();
+      ctx.font = 'bold 10px "JetBrains Mono", monospace';
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      const tw = ctx.measureText(label).width;
+      ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(20,20,20,0.88)" : "rgba(245,245,245,0.92)";
+      ctx.fillRect(midCx - tw / 2 - 5, midCy - 9, tw + 10, 18);
+      ctx.fillStyle = typedLength ? TC.sel : isConstrained ? TC.wall : TC.wallUser;
+      ctx.fillText(label, midCx, midCy);
+      ctx.restore();
+    }
   }
 
-  // Snap indicator
-  if (snapInfo && editMode !== "select") {
+  // Snap indicator + ortho alignment guide lines
+  if (snapInfo && (editMode !== "select" || wallDragState)) {
     const [sx, sz] = snapInfo.pt;
     const [csx, csy] = toCanvas(sx, sz, cam);
+
+    if (snapInfo.alignX || snapInfo.alignZ) {
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = TC.sel;
+      ctx.globalAlpha = 0.6;
+      ctx.lineWidth = 1;
+      if (snapInfo.alignX) {
+        const [ax, az] = snapInfo.alignX;
+        const [cax, caz] = toCanvas(ax, az, cam);
+        ctx.beginPath(); ctx.moveTo(cax, caz); ctx.lineTo(csx, csy); ctx.stroke();
+      }
+      if (snapInfo.alignZ) {
+        const [ax, az] = snapInfo.alignZ;
+        const [cax, caz] = toCanvas(ax, az, cam);
+        ctx.beginPath(); ctx.moveTo(cax, caz); ctx.lineTo(csx, csy); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
     const isAngle = snapInfo.kind === "angle";
     const isEp = snapInfo.kind === "endpoint";
+    const isMid = snapInfo.kind === "midpoint";
+    const isEdge = snapInfo.kind === "edge";
     const isFree = snapInfo.kind === "free";
-    const r = isEp ? 7 : isFree ? 3.5 : 5;
-    const color = isEp ? TC.snapEp : isAngle ? TC.wall : isFree ? "rgba(255,255,255,0.45)" : TC.snapGrid;
+    const r = isEp ? 7 : isMid ? 6 : isEdge ? 5.5 : isFree ? 3.5 : 5;
+    const color = isEp
+      ? TC.snapEp
+      : isMid
+        ? "#fbbf24"
+        : isEdge
+          ? "#38bdf8"
+          : isAngle
+            ? TC.wall
+            : isFree
+              ? "rgba(255,255,255,0.45)"
+              : TC.snapGrid;
     ctx.save();
     ctx.strokeStyle = color;
-    ctx.lineWidth = isEp ? 2 : 1;
+    ctx.lineWidth = (isEp || isMid || isEdge) ? 1.8 : 1;
     if (isFree) {
-      // Subtle precision dot for free placement
       ctx.fillStyle = color;
       ctx.beginPath(); ctx.arc(csx, csy, 2.5, 0, Math.PI * 2); ctx.fill();
+    } else if (isMid) {
+      const cross = r + 4;
+      ctx.beginPath();
+      ctx.moveTo(csx - cross, csy); ctx.lineTo(csx + cross, csy);
+      ctx.moveTo(csx, csy - cross); ctx.lineTo(csx, csy + cross);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(csx, csy - r); ctx.lineTo(csx + r, csy);
+      ctx.lineTo(csx, csy + r); ctx.lineTo(csx - r, csy);
+      ctx.closePath(); ctx.stroke();
+    } else if (isEdge) {
+      ctx.strokeRect(csx - r, csy - r, r * 2, r * 2);
+      ctx.beginPath(); ctx.arc(csx, csy, 2, 0, Math.PI * 2); ctx.fillStyle = color; ctx.fill();
     } else {
       const cross = r + 4;
       ctx.beginPath();
@@ -1071,7 +1481,7 @@ function drawCompass(ctx, w, TC) {
 // ── EditToolbar ────────────────────────────────────────────────────────────────
 
 const TOOLS = [
-  { id: "select", icon: "✋", label: "Pan", key: "S", title: "Pan & Zoom (S)" },
+  { id: "select", icon: "✋", label: "Select / Pan", key: "S", title: "Select & Move Walls, Rooms, or Pan (S)" },
   { id: "add", icon: "✏️", label: "Add Wall", key: "A", title: "Add Wall (A)" },
   { id: "add-door", icon: "🚪", label: "Door", key: "Q", title: "Add Door — click wall (Q)" },
   { id: "add-window", icon: "🪟", label: "Window", key: "W", title: "Add Window — click wall (W)" },
@@ -1228,15 +1638,15 @@ function EditToolbar({
 // ── Mode hint bar ──────────────────────────────────────────────────────────────
 
 const MODE_HINTS = {
-  select: "Drag to pan · Scroll to zoom · Double-click to fit · Click room to select",
-  add: "Click to place first point → click again to draw wall · Esc to cancel",
+  select: "Click wall to select & move · Drag handles to resize/offset · Arrows to nudge · Drag empty space to pan",
+  add: "Click to place first point → click again or type length + Enter · Esc to end chain",
   delete: "Click a wall to delete · Hold & drag to box-delete all walls in area · Esc to exit",
   hide: "Click a wall to hide/unhide · Hold & drag to box-hide all walls in area · Esc to exit",
   corner: "Click first wall → click second wall → both extend to their intersection  ·  Esc to cancel",
 };
-const ADD_HINT_FREE = "Click to set first point  ·  Hold Alt for free snap  ·  Esc to cancel";
-const ADD_HINT_PLACED = "🔒 0°/45°/90° lock  ·  Shift: free angle  ·  Alt: free snap  ·  Esc to cancel";
-const ADD_HINT_FREE_DRAW = "✏ Free angle  ·  Alt: free snap  ·  Release Shift to lock  ·  Esc to cancel";
+const ADD_HINT_FREE = "Click to start wall  ·  T-snap / midpoint / vertex snap ON  ·  Alt: free snap";
+const ADD_HINT_PLACED = "🔒 Angle lock  ·  Type length (m) + Enter  ·  Shift: free angle  ·  Alt: free snap  ·  Esc: end chain";
+const ADD_HINT_FREE_DRAW = "✏ Free angle  ·  Type length (m) + Enter  ·  Alt: free snap  ·  Esc: end chain";
 const CORNER_HINT_STEP1 = "⌐ Select first wall to extend  ·  Esc to cancel";
 const CORNER_HINT_STEP2 = "⌐ Select second wall — both will extend to intersection  ·  Esc to cancel";
 const CORNER_HINT_NONE = "⌐ No valid intersection found for these walls";
@@ -1409,6 +1819,67 @@ function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect 
   );
 }
 
+function DraftNumberInput({
+  value,
+  onCommit,
+  step = 0.01,
+  min,
+  max,
+  decimals = 2,
+  style,
+  className = "rep-subbar-input",
+  title,
+}) {
+  const [focused, setFocused] = useState(false);
+  const [draft, setDraft] = useState("");
+  const numVal = Number.isFinite(Number(value)) ? Number(value) : 0;
+  const displayVal = focused ? draft : String(Number(numVal.toFixed(decimals)));
+
+  const tryCommit = (raw) => {
+    if (raw === "" || raw === "-" || raw === "." || raw === "-." || raw.endsWith(".")) return;
+    let parsed = parseFloat(raw);
+    if (!Number.isFinite(parsed)) return;
+    if (min != null) parsed = Math.max(min, parsed);
+    if (max != null) parsed = Math.min(max, parsed);
+    if (Math.abs(parsed - numVal) > 1e-6) {
+      onCommit(parsed);
+    }
+  };
+
+  return (
+    <input
+      type="number"
+      step={step}
+      min={min}
+      max={max}
+      title={title}
+      className={className}
+      style={style}
+      value={displayVal}
+      onFocus={() => {
+        setFocused(true);
+        setDraft(String(Number(numVal.toFixed(decimals))));
+      }}
+      onChange={(e) => {
+        const raw = e.target.value;
+        setDraft(raw);
+        tryCommit(raw);
+      }}
+      onBlur={(e) => {
+        tryCommit(e.target.value);
+        setFocused(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          tryCommit(e.currentTarget.value);
+          setFocused(false);
+          e.currentTarget.blur();
+        }
+      }}
+    />
+  );
+}
+
 export default function FloorPlanViewer({
   modelInfo,
   dataVersion = 0,
@@ -1560,6 +2031,10 @@ export default function FloorPlanViewer({
     const fNum = activeFloor === "all" || activeFloor == null ? 0 : Number(activeFloor);
     if (!Number.isNaN(fNum) && fNum !== selectedFloor) {
       addStepRef.current = null; setAddStep(null); snapRef.current = null;
+      wallDragRef.current = null;
+      setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+      setHoveredHandle(null); hoveredHandleRef.current = null;
+      setTypedWallLength(""); typedWallLengthRef.current = "";
       setEditMode("select"); editModeRef.current = "select";
       setSelectedFloor(fNum);
     }
@@ -1584,11 +2059,29 @@ export default function FloorPlanViewer({
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
 
+  // Wall selection & precision customization / placement state
+  const [selectedWallIdx, setSelectedWallIdx] = useState(null);
+  const [hoveredHandle, setHoveredHandle] = useState(null);
+  const [moveConnectedCorners, setMoveConnectedCorners] = useState(true);
+  const [resizeAnchor, setResizeAnchor] = useState("p1");
+  const [toolWallThickness, setToolWallThickness] = useState(0.20);
+  const [wallChainMode, setWallChainMode] = useState(true);
+  const [wallAngleLockMode, setWallAngleLockMode] = useState("45"); // '45' | '90' | 'free'
+  const [typedWallLength, setTypedWallLength] = useState("");
+
   // Refs for event handlers (avoid stale closures)
   const editModeRef = useRef("select");
   const editedLinesRef = useRef([]);
   const addStepRef = useRef(null);
   const hoveredLineRef = useRef(-1);
+  const selectedWallIdxRef = useRef(null);
+  const hoveredHandleRef = useRef(null);
+  const wallDragRef = useRef(null);
+  const moveConnectedCornersRef = useRef(true);
+  const toolWallThicknessRef = useRef(0.20);
+  const wallChainModeRef = useRef(true);
+  const wallAngleLockModeRef = useRef("45");
+  const typedWallLengthRef = useRef("");
   const snapRef = useRef(null);
   const dragRef = useRef(null);
   // Box-select drag state for delete/hide modes
@@ -1596,7 +2089,7 @@ export default function FloorPlanViewer({
   const boxSelectRef = useRef(null);
   // Tracks whether Shift is currently held (for angle-snap in add mode)
   const shiftRef = useRef(false);
-  // freeDrawMode: true when Shift is held to override the default 45° angle-lock
+  // freeDrawMode: true when Shift is held to override angle-lock
   const [freeDrawMode, setFreeDrawMode] = useState(false);
 
   // Corner tool state: { firstIdx } when first wall is selected, null otherwise
@@ -1639,6 +2132,13 @@ export default function FloorPlanViewer({
   useEffect(() => { editedLinesRef.current = editedLines; }, [editedLines]);
   useEffect(() => { addStepRef.current = addStep; }, [addStep]);
   useEffect(() => { hoveredLineRef.current = hoveredLine; }, [hoveredLine]);
+  useEffect(() => { selectedWallIdxRef.current = selectedWallIdx; }, [selectedWallIdx]);
+  useEffect(() => { hoveredHandleRef.current = hoveredHandle; }, [hoveredHandle]);
+  useEffect(() => { moveConnectedCornersRef.current = moveConnectedCorners; }, [moveConnectedCorners]);
+  useEffect(() => { toolWallThicknessRef.current = toolWallThickness; }, [toolWallThickness]);
+  useEffect(() => { wallChainModeRef.current = wallChainMode; }, [wallChainMode]);
+  useEffect(() => { wallAngleLockModeRef.current = wallAngleLockMode; }, [wallAngleLockMode]);
+  useEffect(() => { typedWallLengthRef.current = typedWallLength; }, [typedWallLength]);
   useEffect(() => { userOpeningsRef.current = userOpenings; }, [userOpenings]);
   useEffect(() => { hoverManualOpRef.current = hoverManualOp; }, [hoverManualOp]);
   useEffect(() => { hoverOpeningRef.current = hoverOp; }, [hoverOp]);
@@ -1673,6 +2173,13 @@ export default function FloorPlanViewer({
           ctx, editedLinesRef.current, cam,
           hoveredLineRef.current, addStepRef.current, snapRef.current,
           editModeRef.current, TC,
+          {
+            selectedWallIdx: selectedWallIdxRef.current,
+            hoveredHandle: hoveredHandleRef.current,
+            wallDragState: wallDragRef.current,
+            toolWallThickness: toolWallThicknessRef.current,
+            typedLength: typedWallLengthRef.current,
+          },
         );
       }
       // Corner mode overlay (drawn on top of walls, below openings)
@@ -1737,7 +2244,7 @@ export default function FloorPlanViewer({
         drawCompass(ctx, w, TC);
       }
     });
-  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, mpInstances, mpSweeps, mpPoints, livePose, showMpEquip, showMpSweeps, showMpAiHints, showMpPoints, showMpLive, hiddenMpLabels, selectedMpItem, selectedFloor, showWalls, showRooms, showRoomLabels, showDoors, showWindows, showGrid, showScale]);
+  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, toolWallThickness, typedWallLength, selectedWallIdx, hoveredHandle, mpInstances, mpSweeps, mpPoints, livePose, showMpEquip, showMpSweeps, showMpAiHints, showMpPoints, showMpLive, hiddenMpLabels, selectedMpItem, selectedFloor, showWalls, showRooms, showRoomLabels, showDoors, showWindows, showGrid, showScale]);
 
   const isDirtyRef = useRef(false);
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
@@ -1764,6 +2271,10 @@ export default function FloorPlanViewer({
       setIsDirty(false); setOpeningsDirty(false); setUndoStack([]); setRedoStack([]);
       setAddStep(null); addStepRef.current = null; snapRef.current = null;
       setHoveredLine(-1); hoveredLineRef.current = -1;
+      setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+      setHoveredHandle(null); hoveredHandleRef.current = null;
+      wallDragRef.current = null;
+      setTypedWallLength(""); typedWallLengthRef.current = "";
       setSelectedOpIdx(null); setHoverManualOp(-1); setHoverOp(null);
     }
 
@@ -1781,6 +2292,7 @@ export default function FloorPlanViewer({
         if (w) {
           const converted = wallJsonToEditedLines(w);
           setEditedLines(converted); editedLinesRef.current = converted;
+          setSelectedWallIdx(prev => (prev != null && prev >= converted.length ? null : prev));
           if (r) setRoomsData(r);
           setIsDirty(false);
           const cvs = canvasRef.current;
@@ -1821,6 +2333,11 @@ export default function FloorPlanViewer({
       const last = prev[prev.length - 1];
       setRedoStack(r => [editedLinesRef.current, ...r.slice(0, 49)]);
       setEditedLines(last); editedLinesRef.current = last;
+      if (selectedWallIdxRef.current != null && selectedWallIdxRef.current >= last.length) {
+        setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+      }
+      const synced = syncOpeningsWithWalls(last, userOpeningsRef.current);
+      if (synced.changed) { userOpeningsRef.current = synced.openings; setUserOpenings(synced.openings); }
       setIsDirty(true); scheduleDraw();
       return prev.slice(0, -1);
     });
@@ -1832,10 +2349,294 @@ export default function FloorPlanViewer({
       const next = prev[0];
       setUndoStack(u => [...u.slice(-49), editedLinesRef.current]);
       setEditedLines(next); editedLinesRef.current = next;
+      if (selectedWallIdxRef.current != null && selectedWallIdxRef.current >= next.length) {
+        setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+      }
+      const synced = syncOpeningsWithWalls(next, userOpeningsRef.current);
+      if (synced.changed) { userOpeningsRef.current = synced.openings; setUserOpenings(synced.openings); }
       setIsDirty(true); scheduleDraw();
       return prev.slice(1);
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Selected wall customization & precision move helpers ────────────────────
+  const applyWallTransform = useCallback((
+    wallIdx,
+    updaterFn,
+    { pushUndo = true, moveConnected = moveConnectedCornersRef.current } = {},
+  ) => {
+    const lines = editedLinesRef.current;
+    if (wallIdx == null || wallIdx < 0 || wallIdx >= lines.length) return;
+    const oldLine = lines[wallIdx];
+    const [[ox1, oz1], [ox2, oz2]] = oldLine.pts;
+    const patch = updaterFn(oldLine, getWallMetrics(oldLine));
+    if (!patch) return;
+
+    const nextPts = patch.pts ?? oldLine.pts;
+    const [[nx1, nz1], [nx2, nz2]] = nextPts;
+    const p1Moved = Math.hypot(nx1 - ox1, nz1 - oz1) > 1e-5;
+    const p2Moved = Math.hypot(nx2 - ox2, nz2 - oz2) > 1e-5;
+
+    if (pushUndo) pushHistory(lines);
+
+    const CONN_THRESH = 0.025;
+    const newLines = lines.map((line, i) => {
+      if (i === wallIdx) {
+        return {
+          ...line,
+          ...patch,
+          pts: [[nx1, nz1], [nx2, nz2]],
+          source: patch.source ?? (p1Moved || p2Moved ? "user" : line.source),
+        };
+      }
+      if (moveConnected && (p1Moved || p2Moved)) {
+        let [[lx1, lz1], [lx2, lz2]] = line.pts;
+        let touched = false;
+        if (p1Moved && Math.hypot(lx1 - ox1, lz1 - oz1) <= CONN_THRESH) {
+          lx1 = nx1; lz1 = nz1; touched = true;
+        } else if (p2Moved && Math.hypot(lx1 - ox2, lz1 - oz2) <= CONN_THRESH) {
+          lx1 = nx2; lz1 = nz2; touched = true;
+        }
+        if (p1Moved && Math.hypot(lx2 - ox1, lz2 - oz1) <= CONN_THRESH) {
+          lx2 = nx1; lz2 = nz1; touched = true;
+        } else if (p2Moved && Math.hypot(lx2 - ox2, lz2 - oz2) <= CONN_THRESH) {
+          lx2 = nx2; lz2 = nz2; touched = true;
+        }
+        if (touched) {
+          return {
+            ...line,
+            pts: [[lx1, lz1], [lx2, lz2]],
+            source: line.source === "algo" ? "user" : line.source,
+          };
+        }
+      }
+      return line;
+    });
+
+    setEditedLines(newLines);
+    editedLinesRef.current = newLines;
+    const synced = syncOpeningsWithWalls(newLines, userOpeningsRef.current);
+    if (synced.changed) {
+      userOpeningsRef.current = synced.openings;
+      setUserOpenings(synced.openings);
+      setOpeningsDirty(true);
+    }
+    setIsDirty(true);
+    scheduleDraw();
+  }, [pushHistory, scheduleDraw]);
+
+  const nudgeSelectedWall = useCallback((dnNormal, dtAlong, dxWorld = 0, dzWorld = 0) => {
+    const idx = selectedWallIdxRef.current;
+    if (idx == null) return;
+    applyWallTransform(idx, (_, m) => {
+      const dx = m.nx * dnNormal + m.ux * dtAlong + dxWorld;
+      const dz = m.nz * dnNormal + m.uz * dtAlong + dzWorld;
+      return { pts: [[m.x1 + dx, m.z1 + dz], [m.x2 + dx, m.z2 + dz]] };
+    });
+  }, [applyWallTransform]);
+
+  const setSelectedWallLength = useCallback((newLenM, anchor = resizeAnchor) => {
+    const idx = selectedWallIdxRef.current;
+    if (idx == null) return;
+    const len = Math.max(0.05, Number(newLenM) || 0.05);
+    applyWallTransform(idx, (_, m) => {
+      if (anchor === "p2") {
+        return { pts: [[m.x2 - m.ux * len, m.z2 - m.uz * len], [m.x2, m.z2]] };
+      }
+      if (anchor === "center") {
+        const half = len * 0.5;
+        return { pts: [[m.mx - m.ux * half, m.mz - m.uz * half], [m.mx + m.ux * half, m.mz + m.uz * half]] };
+      }
+      return { pts: [[m.x1, m.z1], [m.x1 + m.ux * len, m.z1 + m.uz * len]] };
+    });
+  }, [applyWallTransform, resizeAnchor]);
+
+  const setSelectedWallAngle = useCallback((newAngleDeg, anchor = resizeAnchor) => {
+    const idx = selectedWallIdxRef.current;
+    if (idx == null) return;
+    const deg = Number(newAngleDeg);
+    if (!Number.isFinite(deg)) return;
+    const rad = (deg * Math.PI) / 180;
+    const ux = Math.cos(rad), uz = Math.sin(rad);
+    applyWallTransform(idx, (_, m) => {
+      const len = Math.max(0.05, m.len);
+      if (anchor === "p2") {
+        return { pts: [[m.x2 - ux * len, m.z2 - uz * len], [m.x2, m.z2]] };
+      }
+      if (anchor === "center") {
+        const half = len * 0.5;
+        return { pts: [[m.mx - ux * half, m.mz - uz * half], [m.mx + ux * half, m.mz + uz * half]] };
+      }
+      return { pts: [[m.x1, m.z1], [m.x1 + ux * len, m.z1 + uz * len]] };
+    });
+  }, [applyWallTransform, resizeAnchor]);
+
+  const splitSelectedWall = useCallback((splitRatio = 0.5) => {
+    const idx = selectedWallIdxRef.current;
+    const lines = editedLinesRef.current;
+    if (idx == null || idx < 0 || idx >= lines.length) return;
+    const r = Math.max(0.1, Math.min(0.9, splitRatio));
+    const oldLine = lines[idx];
+    const [[x1, z1], [x2, z2]] = oldLine.pts;
+    if (Math.hypot(x2 - x1, z2 - z1) < 0.10) return;
+
+    const mx = x1 + (x2 - x1) * r;
+    const mz = z1 + (z2 - z1) * r;
+    const segA = {
+      ...oldLine,
+      pts: [[x1, z1], [mx, mz]],
+      source: oldLine.source === "algo" ? "user" : oldLine.source,
+    };
+    const segB = {
+      ...oldLine,
+      pts: [[mx, mz], [x2, z2]],
+      source: "user",
+    };
+
+    pushHistory(lines);
+    const newLines = [...lines.slice(0, idx), segA, segB, ...lines.slice(idx + 1)];
+    setEditedLines(newLines);
+    editedLinesRef.current = newLines;
+
+    if (userOpeningsRef.current.length > 0) {
+      const remappedOps = userOpeningsRef.current.map((op) => {
+        if (op.wall_idx > idx) return { ...op, wall_idx: op.wall_idx + 1 };
+        if (op.wall_idx === idx) {
+          const t = Math.max(0.02, Math.min(0.98, op.position_t ?? 0.5));
+          if (t <= r) {
+            return { ...op, wall_idx: idx, position_t: Math.max(0.02, Math.min(0.98, t / r)) };
+          }
+          return { ...op, wall_idx: idx + 1, position_t: Math.max(0.02, Math.min(0.98, (t - r) / (1 - r))) };
+        }
+        return op;
+      });
+      const synced = syncOpeningsWithWalls(newLines, remappedOps);
+      userOpeningsRef.current = synced.openings;
+      setUserOpenings(synced.openings);
+      setOpeningsDirty(true);
+    }
+
+    setSelectedWallIdx(idx + 1);
+    selectedWallIdxRef.current = idx + 1;
+    setIsDirty(true);
+    scheduleDraw();
+  }, [pushHistory, scheduleDraw]);
+
+  const duplicateSelectedWall = useCallback((offsetM = 0.25) => {
+    const idx = selectedWallIdxRef.current;
+    const lines = editedLinesRef.current;
+    if (idx == null || idx < 0 || idx >= lines.length) return;
+    const line = lines[idx];
+    const m = getWallMetrics(line);
+    const dx = m.nx * offsetM, dz = m.nz * offsetM;
+    const copy = {
+      ...line,
+      pts: [[m.x1 + dx, m.z1 + dz], [m.x2 + dx, m.z2 + dz]],
+      source: "user",
+      hidden: false,
+    };
+    pushHistory(lines);
+    const newLines = [...lines, copy];
+    setEditedLines(newLines);
+    editedLinesRef.current = newLines;
+    setSelectedWallIdx(newLines.length - 1);
+    selectedWallIdxRef.current = newLines.length - 1;
+    setIsDirty(true);
+    scheduleDraw();
+  }, [pushHistory, scheduleDraw]);
+
+  const deleteSelectedWall = useCallback(() => {
+    const idx = selectedWallIdxRef.current;
+    const lines = editedLinesRef.current;
+    if (idx == null || idx < 0 || idx >= lines.length) return;
+    pushHistory(lines);
+    const newLines = lines.filter((_, i) => i !== idx);
+    setEditedLines(newLines);
+    editedLinesRef.current = newLines;
+    setSelectedWallIdx(null);
+    selectedWallIdxRef.current = null;
+    setHoveredHandle(null);
+    hoveredHandleRef.current = null;
+
+    if (userOpeningsRef.current.length > 0) {
+      const updatedOps = userOpeningsRef.current
+        .filter(op => op.wall_idx !== idx)
+        .map(op => op.wall_idx > idx ? { ...op, wall_idx: op.wall_idx - 1 } : op);
+      userOpeningsRef.current = updatedOps;
+      setUserOpenings(updatedOps);
+      setSelectedOpIdx(null);
+      setOpeningsDirty(true);
+    }
+
+    setIsDirty(true);
+    scheduleDraw();
+  }, [pushHistory, scheduleDraw]);
+
+  const toggleHideSelectedWall = useCallback(() => {
+    const idx = selectedWallIdxRef.current;
+    if (idx == null) return;
+    applyWallTransform(idx, (line) => ({ hidden: !line.hidden }), { moveConnected: false });
+  }, [applyWallTransform]);
+
+  const commitAddWallWithLength = useCallback((exactLenM) => {
+    const start = addStepRef.current;
+    const len = Number(exactLenM);
+    if (!start || !Number.isFinite(len) || len < 0.05) return;
+    const [ax, az] = start;
+    let ux = 1, uz = 0;
+    const snap = snapRef.current;
+    if (snap?.angle != null) {
+      ux = Math.cos(snap.angle);
+      uz = Math.sin(snap.angle);
+    } else if (snap?.pt) {
+      const dx = snap.pt[0] - ax, dz = snap.pt[1] - az;
+      const d = Math.hypot(dx, dz);
+      if (d > 1e-4) { ux = dx / d; uz = dz / d; }
+    }
+    const endPt = [ax + ux * len, az + uz * len];
+    const newLine = {
+      pts: [[ax, az], endPt],
+      source: "user",
+      thickness: normalizeWallThickness(toolWallThicknessRef.current),
+      thicknessSource: "edited",
+    };
+    const newLines = [...editedLinesRef.current, newLine];
+    pushHistory(editedLinesRef.current);
+    setEditedLines(newLines);
+    editedLinesRef.current = newLines;
+    setSelectedWallIdx(newLines.length - 1);
+    selectedWallIdxRef.current = newLines.length - 1;
+    setTypedWallLength("");
+    typedWallLengthRef.current = "";
+    if (wallChainModeRef.current) {
+      addStepRef.current = endPt;
+      setAddStep(endPt);
+    } else {
+      addStepRef.current = null;
+      setAddStep(null);
+    }
+    setIsDirty(true);
+    scheduleDraw();
+  }, [pushHistory, scheduleDraw]);
+
+  const hitTestSelectedWallHandle = useCallback((wx, wz, cam) => {
+    const idx = selectedWallIdxRef.current;
+    const lines = editedLinesRef.current;
+    if (idx == null || idx < 0 || idx >= lines.length) return null;
+    const line = lines[idx];
+    const [[x1, z1], [x2, z2]] = line.pts;
+    const handleWorldR = 10 / cam.scale;
+    const d1 = Math.hypot(wx - x1, wz - z1);
+    const d2 = Math.hypot(wx - x2, wz - z2);
+    if (d1 <= handleWorldR || d2 <= handleWorldR) {
+      return d1 <= d2 ? "p1" : "p2";
+    }
+    const mx = (x1 + x2) * 0.5, mz = (z1 + z2) * 0.5;
+    if (Math.hypot(wx - mx, wz - mz) <= handleWorldR) return "body";
+    const bodyThresh = Math.max(8 / cam.scale, normalizeWallThickness(line.thickness) * 0.5 + 3 / cam.scale);
+    if (distPointToSeg(wx, wz, x1, z1, x2, z2) <= bodyThresh) return "body";
+    return null;
+  }, []);
 
   // ── Openings helpers ────────────────────────────────────────────────────────
   const updateSelectedOp = useCallback((changes) => {
@@ -1916,7 +2717,7 @@ export default function FloorPlanViewer({
   }, [isDirty, openingsDirty, selectedFloor, apiBase, roomMode, onWallsSaved, openingsData]);
 
   // redraw when data changes
-  useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, userOpenings, selectedOpIdx, hoverManualOp, hoverOp, highlightedRoomId, gridStep, snapToVertices, scheduleDraw]);
+  useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, userOpenings, selectedOpIdx, hoverManualOp, hoverOp, highlightedRoomId, selectedWallIdx, hoveredHandle, toolWallThickness, typedWallLength, gridStep, snapToVertices, scheduleDraw]);
 
   // ── Center camera on selected room ──────────────────────────────────────────
   useEffect(() => {
@@ -1964,28 +2765,86 @@ export default function FloorPlanViewer({
       if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); undo(); return; }
       if ((e.ctrlKey || e.metaKey) && (e.key === "y" || e.key === "Z")) { e.preventDefault(); redo(); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); handleSave(); return; }
+
+      if (editModeRef.current === "add" && addStepRef.current && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (/^[0-9.]$/.test(e.key)) {
+          e.preventDefault();
+          const cur = typedWallLengthRef.current;
+          if (e.key === "." && cur.includes(".")) return;
+          const next = cur + e.key;
+          typedWallLengthRef.current = next;
+          setTypedWallLength(next);
+          scheduleDraw();
+          return;
+        }
+        if (e.key === "Backspace" && typedWallLengthRef.current.length > 0) {
+          e.preventDefault();
+          const next = typedWallLengthRef.current.slice(0, -1);
+          typedWallLengthRef.current = next;
+          setTypedWallLength(next);
+          scheduleDraw();
+          return;
+        }
+        if (e.key === "Enter") {
+          e.preventDefault();
+          const val = parseFloat(typedWallLengthRef.current);
+          if (Number.isFinite(val) && val >= 0.05) {
+            commitAddWallWithLength(val);
+          } else {
+            addStepRef.current = null; setAddStep(null);
+            snapRef.current = null;
+            typedWallLengthRef.current = ""; setTypedWallLength("");
+            scheduleDraw();
+          }
+          return;
+        }
+      }
+
       if (e.key === "Escape") {
         if (selectedOpIdxRef.current !== null) {
           setSelectedOpIdx(null); selectedOpIdxRef.current = null; scheduleDraw();
         } else if (addStepRef.current) {
-          addStepRef.current = null; setAddStep(null); snapRef.current = null; scheduleDraw();
+          addStepRef.current = null; setAddStep(null); snapRef.current = null;
+          typedWallLengthRef.current = ""; setTypedWallLength("");
+          scheduleDraw();
         } else if (editModeRef.current === "corner" && cornerStateRef.current) {
           cornerStateRef.current = null;
           setCornerStep(0); setCornerHoverIdx(-1); setCornerIntersection(null);
+          scheduleDraw();
+        } else if (selectedWallIdxRef.current !== null) {
+          setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+          setHoveredHandle(null); hoveredHandleRef.current = null;
           scheduleDraw();
         } else {
           setEditMode("select"); editModeRef.current = "select"; scheduleDraw();
         }
         return;
       }
+
       if ((e.key === "Delete" || e.key === "Backspace") && selectedOpIdxRef.current !== null) {
         e.preventDefault();
         deleteSelectedOp();
         return;
       }
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedWallIdxRef.current !== null) {
+        e.preventDefault();
+        deleteSelectedWall();
+        return;
+      }
+
+      if (selectedWallIdxRef.current !== null && !e.ctrlKey && !e.metaKey) {
+        const step = e.altKey ? 0.01 : e.shiftKey ? 0.10 : (gridStepRef.current > 0 ? gridStepRef.current : 0.05);
+        if (e.key === "ArrowLeft") { e.preventDefault(); nudgeSelectedWall(0, 0, -step, 0); return; }
+        if (e.key === "ArrowRight") { e.preventDefault(); nudgeSelectedWall(0, 0, step, 0); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); nudgeSelectedWall(0, 0, 0, -step); return; }
+        if (e.key === "ArrowDown") { e.preventDefault(); nudgeSelectedWall(0, 0, 0, step); return; }
+        if (e.key === "[") { e.preventDefault(); nudgeSelectedWall(-step, 0); return; }
+        if (e.key === "]") { e.preventDefault(); nudgeSelectedWall(step, 0); return; }
+      }
+
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.key === "s" || e.key === "S") { setEditMode("select"); editModeRef.current = "select"; scheduleDraw(); }
-        if (e.key === "a" || e.key === "A") { setEditMode("add"); editModeRef.current = "add"; scheduleDraw(); }
+        if (e.key === "a" || e.key === "A") { setEditMode("add"); editModeRef.current = "add"; setSelectedOpIdx(null); scheduleDraw(); }
         if (e.key === "q" || e.key === "Q") { setEditMode("add-door"); editModeRef.current = "add-door"; scheduleDraw(); }
         if (e.key === "w" || e.key === "W") { setEditMode("add-window"); editModeRef.current = "add-window"; scheduleDraw(); }
         if (e.key === "d" || e.key === "D") { setEditMode("delete"); editModeRef.current = "delete"; scheduleDraw(); }
@@ -1995,7 +2854,7 @@ export default function FloorPlanViewer({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, handleSave, deleteSelectedOp, scheduleDraw]);
+  }, [undo, redo, handleSave, deleteSelectedOp, deleteSelectedWall, nudgeSelectedWall, commitAddWallWithLength, scheduleDraw]);
 
   // ── Helper: get world pos from mouse event ──────────────────────────────────
   const getWorldFromEvent = useCallback((e) => {
@@ -2015,6 +2874,46 @@ export default function FloorPlanViewer({
     const mode = editModeRef.current;
     if (mode === "select") {
       didPanRef.current = false;
+      const [wx, wz] = getWorldFromEvent(e);
+      const handle = showWalls && hoverManualOpRef.current < 0
+        ? hitTestSelectedWallHandle(wx, wz, camRef.current)
+        : null;
+      if (handle) {
+        const wallIdx = selectedWallIdxRef.current;
+        const origLines = editedLinesRef.current;
+        const origLine = origLines[wallIdx];
+        const [[x1, z1], [x2, z2]] = origLine.pts;
+        const origPts = [[x1, z1], [x2, z2]];
+        const origMetrics = getWallMetrics(origLine);
+        const CONN_THRESH = 0.025;
+        const connectedEndpoints = [];
+        origLines.forEach((l, i) => {
+          if (i === wallIdx) return;
+          l.pts.forEach(([ex, ez], epIdx) => {
+            if (Math.hypot(ex - x1, ez - z1) <= CONN_THRESH) {
+              connectedEndpoints.push({ lineIdx: i, epIdx, whichOrig: 0 });
+            } else if (Math.hypot(ex - x2, ez - z2) <= CONN_THRESH) {
+              connectedEndpoints.push({ lineIdx: i, epIdx, whichOrig: 1 });
+            }
+          });
+        });
+        wallDragRef.current = {
+          kind: handle,
+          wallIdx,
+          startWx: wx,
+          startWz: wz,
+          origLines,
+          origPts,
+          origMetrics,
+          connectedEndpoints,
+          moved: false,
+          historyPushed: false,
+          normalOffset: 0,
+          freeMove: false,
+        };
+        dragRef.current = null;
+        return;
+      }
       dragRef.current = { startX: e.clientX, startY: e.clientY, ox: camRef.current.ox, oy: camRef.current.oy, moved: false };
     } else if (mode === "delete" || mode === "hide") {
       const cvs = canvasRef.current;
@@ -2024,10 +2923,136 @@ export default function FloorPlanViewer({
       const cy = e.clientY - rect.top;
       boxSelectRef.current = { startCx: cx, startCy: cy, cx1: cx, cy1: cy, cx2: cx, cy2: cy, moved: false };
     }
-  }, []);
+  }, [getWorldFromEvent, hitTestSelectedWallHandle, showWalls]);
 
   const onMouseMove = useCallback((e) => {
     const mode = editModeRef.current;
+
+    // Wall handle / body drag in select mode
+    if (mode === "select" && wallDragRef.current) {
+      const drag = wallDragRef.current;
+      const [wx, wz] = getWorldFromEvent(e);
+      if (!drag.moved && Math.hypot(wx - drag.startWx, wz - drag.startWz) * camRef.current.scale <= 2) {
+        return;
+      }
+      if (!drag.historyPushed) {
+        pushHistory(drag.origLines);
+        drag.historyPushed = true;
+      }
+      drag.moved = true;
+      didPanRef.current = true;
+
+      const effectiveGridStep = e.altKey ? 0 : gridStepRef.current;
+      const effectiveSnapEp = e.altKey ? false : snapToVerticesRef.current;
+      const moveConn = moveConnectedCornersRef.current && !e.ctrlKey;
+
+      let newP1 = drag.origPts[0];
+      let newP2 = drag.origPts[1];
+
+      if (drag.kind === "p1" || drag.kind === "p2") {
+        const isP1 = drag.kind === "p1";
+        const anchor = drag.origPts[isP1 ? 1 : 0];
+        let snap;
+        if (e.shiftKey) {
+          const lock = wallAngleLockModeRef.current === "free" ? "45" : wallAngleLockModeRef.current;
+          snap = computeSnapConstrained(
+            wx, wz, drag.origLines, camRef.current, anchor[0], anchor[1],
+            14, effectiveGridStep, effectiveSnapEp, lock, drag.wallIdx,
+          );
+        } else {
+          snap = computeSnap(
+            wx, wz, drag.origLines, camRef.current,
+            14, effectiveGridStep, effectiveSnapEp, drag.wallIdx,
+          );
+          if ((snap.kind === "grid" || snap.kind === "free") && !e.altKey) {
+            const dx = snap.pt[0] - anchor[0], dz = snap.pt[1] - anchor[1];
+            const rawDist = Math.hypot(dx, dz);
+            if (rawDist > 0.05) {
+              const rawA = Math.atan2(dz, dx);
+              const magAngles = [drag.origMetrics.angleRad, drag.origMetrics.angleRad + Math.PI];
+              for (let k = 0; k < 8; k++) magAngles.push((k * Math.PI) / 4);
+              const thresh = (3.5 * Math.PI) / 180;
+              let bestDiff = thresh, bestAngle = null;
+              for (const ca of magAngles) {
+                const diff = Math.abs(Math.atan2(Math.sin(rawA - ca), Math.cos(rawA - ca)));
+                if (diff < bestDiff) { bestDiff = diff; bestAngle = ca; }
+              }
+              if (bestAngle != null) {
+                const dSnapped = effectiveGridStep > 0
+                  ? Math.max(0.05, Math.round(rawDist / effectiveGridStep) * effectiveGridStep)
+                  : rawDist;
+                snap = {
+                  ...snap,
+                  pt: [anchor[0] + Math.cos(bestAngle) * dSnapped, anchor[1] + Math.sin(bestAngle) * dSnapped],
+                  angle: bestAngle,
+                  dist: dSnapped,
+                };
+              }
+            }
+          }
+        }
+        snapRef.current = snap;
+        if (isP1) newP1 = snap.pt;
+        else newP2 = snap.pt;
+      } else {
+        const dxRaw = wx - drag.startWx, dzRaw = wz - drag.startWz;
+        const m = drag.origMetrics;
+        let dx = dxRaw, dz = dzRaw;
+        if (e.shiftKey) {
+          drag.freeMove = true;
+          if (effectiveGridStep > 0) {
+            dx = Math.round(dx / effectiveGridStep) * effectiveGridStep;
+            dz = Math.round(dz / effectiveGridStep) * effectiveGridStep;
+          }
+        } else {
+          drag.freeMove = false;
+          let rawN = dxRaw * m.nx + dzRaw * m.nz;
+          if (effectiveGridStep > 0) {
+            rawN = Math.round(rawN / effectiveGridStep) * effectiveGridStep;
+          }
+          drag.normalOffset = rawN;
+          dx = m.nx * rawN;
+          dz = m.nz * rawN;
+        }
+        snapRef.current = null;
+        newP1 = [drag.origPts[0][0] + dx, drag.origPts[0][1] + dz];
+        newP2 = [drag.origPts[1][0] + dx, drag.origPts[1][1] + dz];
+      }
+
+      const connByLine = new Map();
+      if (moveConn) {
+        for (const ce of drag.connectedEndpoints) {
+          if (!connByLine.has(ce.lineIdx)) connByLine.set(ce.lineIdx, []);
+          connByLine.get(ce.lineIdx).push(ce);
+        }
+      }
+
+      const nextLines = drag.origLines.map((line, i) => {
+        if (i === drag.wallIdx) {
+          return { ...line, pts: [newP1, newP2], source: "user" };
+        }
+        const conns = connByLine.get(i);
+        if (conns) {
+          const newPts = [line.pts[0].slice(), line.pts[1].slice()];
+          for (const ce of conns) {
+            newPts[ce.epIdx] = ce.whichOrig === 0 ? newP1 : newP2;
+          }
+          return { ...line, pts: newPts, source: line.source === "algo" ? "user" : line.source };
+        }
+        return line;
+      });
+
+      setEditedLines(nextLines);
+      editedLinesRef.current = nextLines;
+      const synced = syncOpeningsWithWalls(nextLines, userOpeningsRef.current);
+      if (synced.changed) {
+        userOpeningsRef.current = synced.openings;
+        setUserOpenings(synced.openings);
+        setOpeningsDirty(true);
+      }
+      scheduleDraw();
+      return;
+    }
 
     // Pan in select mode
     if (mode === "select" && dragRef.current) {
@@ -2071,14 +3096,16 @@ export default function FloorPlanViewer({
       const effectiveSnapEp = altHeld ? false : snapToVerticesRef.current;
 
       if (mode === "add" && addStepRef.current) {
-        if (shiftHeld) {
-          // Shift held → free-angle (no constraint), endpoint/grid snap according to settings
+        const effectiveAngleMode = shiftHeld ? "free" : wallAngleLockModeRef.current;
+        if (effectiveAngleMode === "free") {
           snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current, 14, effectiveGridStep, effectiveSnapEp);
           if (!freeDrawMode) setFreeDrawMode(true);
         } else {
-          // Default: 45° angle-constrained snap from the first point
           const [ax, az] = addStepRef.current;
-          snapRef.current = computeSnapConstrained(wx, wz, editedLinesRef.current, camRef.current, ax, az, 14, effectiveGridStep, effectiveSnapEp);
+          snapRef.current = computeSnapConstrained(
+            wx, wz, editedLinesRef.current, camRef.current, ax, az,
+            14, effectiveGridStep, effectiveSnapEp, effectiveAngleMode,
+          );
           if (freeDrawMode) setFreeDrawMode(false);
         }
       } else if (mode === "corner") {
@@ -2149,7 +3176,7 @@ export default function FloorPlanViewer({
 
       scheduleDraw();
     } else {
-      // In select mode: check hover over manual openings so user can click to inspect
+      // In select mode: check hover over manual openings, selected wall handles, and walls
       const [wx, wz] = getWorldFromEvent(e);
       let bestOp = 16 / camRef.current.scale, hitOpIdx = -1;
       userOpeningsRef.current.forEach((op, oIdx) => {
@@ -2169,17 +3196,49 @@ export default function FloorPlanViewer({
         const d = Math.hypot(wx - mx, wz - mz);
         if (d < bestOp) { bestOp = d; hitOpIdx = oIdx; }
       });
+
+      const nextHandle = showWalls && hitOpIdx < 0
+        ? hitTestSelectedWallHandle(wx, wz, camRef.current)
+        : null;
+      const nextWallHover = showWalls && hitOpIdx < 0 && !nextHandle
+        ? findNearestLine(wx, wz, editedLinesRef.current, camRef.current, 10)
+        : -1;
+
+      const changed =
+        hitOpIdx !== hoverManualOpRef.current ||
+        nextHandle !== hoveredHandleRef.current ||
+        nextWallHover !== hoveredLineRef.current;
+
       if (hitOpIdx !== hoverManualOpRef.current) {
         hoverManualOpRef.current = hitOpIdx;
         setHoverManualOp(hitOpIdx);
-        scheduleDraw();
       }
+      if (nextHandle !== hoveredHandleRef.current) {
+        hoveredHandleRef.current = nextHandle;
+        setHoveredHandle(nextHandle);
+      }
+      if (nextWallHover !== hoveredLineRef.current) {
+        hoveredLineRef.current = nextWallHover;
+        setHoveredLine(nextWallHover);
+      }
+      if (changed) scheduleDraw();
+
       // Reset free-draw flag when not in add mode
       if (freeDrawMode) setFreeDrawMode(false);
     }
-  }, [scheduleDraw, getWorldFromEvent, freeDrawMode]);
+  }, [scheduleDraw, getWorldFromEvent, pushHistory, hitTestSelectedWallHandle, freeDrawMode, showWalls]);
 
   const onMouseUp = useCallback((e) => {
+    // Wall drag end
+    if (wallDragRef.current) {
+      const moved = wallDragRef.current.moved;
+      wallDragRef.current = null;
+      snapRef.current = null;
+      if (moved) setIsDirty(true);
+      scheduleDraw();
+      return;
+    }
+
     // Pan drag end
     if (dragRef.current) {
       if (dragRef.current.moved) {
@@ -2224,6 +3283,9 @@ export default function FloorPlanViewer({
           userOpeningsRef.current = updatedOps;
           setUserOpenings(updatedOps);
           setOpeningsDirty(true);
+          setSelectedWallIdx(null);
+          selectedWallIdxRef.current = null;
+          setSelectedOpIdx(null);
         } else {
           // hide: toggle hidden flag on all intersecting walls
           // Determine majority state — if most are visible, hide all; otherwise unhide all
@@ -2306,13 +3368,14 @@ export default function FloorPlanViewer({
     }
 
     if (mode === "select") {
-      // If user was panning, do not treat this as a click
+      // If user was panning or dragging a wall, do not treat this as a click
       if (didPanRef.current) {
         didPanRef.current = false;
         return;
       }
       if (hoverManualOpRef.current >= 0) {
         setSelectedOpIdx(hoverManualOpRef.current);
+        setSelectedWallIdx(null); selectedWallIdxRef.current = null;
         scheduleDraw();
         return;
       }
@@ -2362,9 +3425,24 @@ export default function FloorPlanViewer({
         }
       }
 
+      const [wx, wz] = getWorldFromEvent(e);
+      if (showWalls) {
+        const wallHit = findNearestLine(wx, wz, editedLinesRef.current, camRef.current, 10);
+        if (wallHit >= 0) {
+          setSelectedWallIdx(wallHit); selectedWallIdxRef.current = wallHit;
+          setSelectedOpIdx(null); selectedOpIdxRef.current = null;
+          scheduleDraw();
+          return;
+        }
+      }
+      if (selectedWallIdxRef.current !== null) {
+        setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+        setHoveredHandle(null); hoveredHandleRef.current = null;
+        scheduleDraw();
+      }
+
       // Check if click falls inside a room polygon / bbox → toggle selection
       if (onSelectRoom && roomsData?.rooms?.length) {
-        const [wx, wz] = getWorldFromEvent(e);
         for (const room of roomsData.rooms) {
           let inside = false;
           if (room.polygon && room.polygon.length >= 3) {
@@ -2402,14 +3480,34 @@ export default function FloorPlanViewer({
         // Place first point
         addStepRef.current = [wx, wz];
         setAddStep([wx, wz]);
+        typedWallLengthRef.current = "";
+        setTypedWallLength("");
         scheduleDraw();
       } else {
         // Place second point → commit
-        const newLine = { pts: [addStepRef.current, [wx, wz]], source: "user", thickness: 0.20, thicknessSource: "edited" };
+        const [ax, az] = addStepRef.current;
+        if (Math.hypot(wx - ax, wz - az) < 0.03) return;
+        const newLine = {
+          pts: [[ax, az], [wx, wz]],
+          source: "user",
+          thickness: normalizeWallThickness(toolWallThicknessRef.current),
+          thicknessSource: "edited",
+        };
         const newLines = [...editedLinesRef.current, newLine];
         pushHistory(editedLinesRef.current);
         setEditedLines(newLines); editedLinesRef.current = newLines;
-        addStepRef.current = null; setAddStep(null);
+        setSelectedWallIdx(newLines.length - 1);
+        selectedWallIdxRef.current = newLines.length - 1;
+        setSelectedOpIdx(null); selectedOpIdxRef.current = null;
+        typedWallLengthRef.current = "";
+        setTypedWallLength("");
+        if (wallChainModeRef.current && !e.ctrlKey) {
+          addStepRef.current = [wx, wz];
+          setAddStep([wx, wz]);
+        } else {
+          addStepRef.current = null;
+          setAddStep(null);
+        }
         setIsDirty(true);
         scheduleDraw();
       }
@@ -2437,6 +3535,12 @@ export default function FloorPlanViewer({
         pushHistory(editedLinesRef.current);
         setEditedLines(newLines); editedLinesRef.current = newLines;
         hoveredLineRef.current = -1; setHoveredLine(-1);
+        if (selectedWallIdxRef.current === idx) {
+          setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+        } else if (selectedWallIdxRef.current != null && selectedWallIdxRef.current > idx) {
+          const nxt = selectedWallIdxRef.current - 1;
+          setSelectedWallIdx(nxt); selectedWallIdxRef.current = nxt;
+        }
         snapRef.current = null;
         setIsDirty(true);
 
@@ -2518,7 +3622,7 @@ export default function FloorPlanViewer({
       }
       return;
     }
-  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, showMpPoints, hiddenMpLabels, onSelectMpItem]);
+  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, showMpPoints, hiddenMpLabels, onSelectMpItem, showWalls]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -2566,6 +3670,10 @@ export default function FloorPlanViewer({
       setEditedLines(converted); editedLinesRef.current = converted;
       setUndoStack([]); setRedoStack([]);
       setIsDirty(false); setAddStep(null); addStepRef.current = null;
+      setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+      setHoveredHandle(null); hoveredHandleRef.current = null;
+      wallDragRef.current = null;
+      setTypedWallLength(""); typedWallLengthRef.current = "";
       scheduleDraw();
     }).catch(() => { });
     fetch(`${apiBase}/openings/${selectedFloor}`).then(r => r.json()).then(o => {
@@ -2597,7 +3705,17 @@ export default function FloorPlanViewer({
 
   // Cursor style
   const cursorStyle = editMode === "select"
-    ? (dragRef.current ? "grabbing" : "grab")
+    ? (wallDragRef.current
+      ? (wallDragRef.current.kind === "body" ? "move" : "crosshair")
+      : hoveredHandle === "p1" || hoveredHandle === "p2"
+        ? "crosshair"
+        : hoveredHandle === "body"
+          ? "move"
+          : dragRef.current
+            ? "grabbing"
+            : hoveredLine >= 0
+              ? "pointer"
+              : "grab")
     : editMode === "add"
       ? "crosshair"
       : editMode === "corner"
@@ -2627,9 +3745,21 @@ export default function FloorPlanViewer({
         mode={editMode}
         onMode={(m) => {
           setEditMode(m); editModeRef.current = m;
-          if (m !== "add") { addStepRef.current = null; setAddStep(null); scheduleDraw(); }
+          wallDragRef.current = null;
+          setHoveredHandle(null); hoveredHandleRef.current = null;
+          if (m !== "add") {
+            addStepRef.current = null; setAddStep(null);
+            typedWallLengthRef.current = ""; setTypedWallLength("");
+            scheduleDraw();
+          }
+          if (m !== "select" && m !== "add") {
+            setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+          }
+          if (m === "add") {
+            setSelectedOpIdx(null); selectedOpIdxRef.current = null;
+          }
           if (m !== "corner") { cornerStateRef.current = null; setCornerStep(0); setCornerHoverIdx(-1); setCornerIntersection(null); }
-          if (m !== "delete" && m !== "hide") { hoveredLineRef.current = -1; setHoveredLine(-1); scheduleDraw(); }
+          if (m !== "delete" && m !== "hide" && m !== "select") { hoveredLineRef.current = -1; setHoveredLine(-1); scheduleDraw(); }
           snapRef.current = null;
         }}
         canUndo={canUndo} canRedo={canRedo}
@@ -2659,6 +3789,122 @@ export default function FloorPlanViewer({
         selectedFloor={selectedFloor}
         saveName={saveName}
       />
+
+      {/* ── Wall Placement Parameter Subbar ──────────────────────────────────── */}
+      {editMode === "add" && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "6px 14px",
+          background: "var(--surface-2)",
+          borderBottom: "1px solid var(--border)",
+          color: "var(--text-1)",
+          flexWrap: "wrap",
+          fontSize: 11,
+          zIndex: 5,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Thickness:</span>
+            {[0.10, 0.15, 0.20, 0.25, 0.30].map(t => (
+              <button
+                key={t}
+                type="button"
+                className={`rep-pill-btn${Math.abs(toolWallThickness - t) < 0.004 ? " active" : ""}`}
+                onClick={() => setToolWallThickness(t)}
+              >{Math.round(t * 100)}cm</button>
+            ))}
+            <DraftNumberInput
+              min={0.05}
+              max={1.0}
+              step={0.01}
+              decimals={2}
+              value={toolWallThickness}
+              onCommit={(v) => setToolWallThickness(v)}
+              style={{ width: 56 }}
+              title="Custom wall thickness (meters)"
+            />
+            <span style={{ color: "var(--text-3)" }}>m</span>
+          </div>
+
+          <span className="rep-sep" />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Angle:</span>
+            {[
+              ["45", "45° Lock"],
+              ["90", "90° Ortho"],
+              ["free", "Free"],
+            ].map(([val, lbl]) => (
+              <button
+                key={val}
+                type="button"
+                className={`rep-pill-btn${wallAngleLockMode === val ? " active" : ""}`}
+                onClick={() => setWallAngleLockMode(val)}
+              >{lbl}</button>
+            ))}
+          </div>
+
+          <span className="rep-sep" />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <button
+              type="button"
+              className={`rep-pill-btn${wallChainMode ? " active" : ""}`}
+              onClick={() => setWallChainMode(v => !v)}
+              title="Continue placing connected wall segments from the previous endpoint"
+            >🔗 Chain: {wallChainMode ? "ON" : "OFF"}</button>
+            {addStep && (
+              <button
+                type="button"
+                className="rep-pill-btn"
+                onClick={() => {
+                  addStepRef.current = null; setAddStep(null);
+                  snapRef.current = null;
+                  typedWallLengthRef.current = ""; setTypedWallLength("");
+                  scheduleDraw();
+                }}
+              >End Chain (Esc)</button>
+            )}
+          </div>
+
+          <span className="rep-sep" />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Exact Length:</span>
+            <input
+              type="number"
+              min="0.05"
+              max="200"
+              step="0.01"
+              placeholder="Length (m)"
+              className="rep-subbar-input"
+              style={{ width: 82 }}
+              value={typedWallLength}
+              onChange={(e) => {
+                typedWallLengthRef.current = e.target.value;
+                setTypedWallLength(e.target.value);
+                scheduleDraw();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && addStep) {
+                  const v = parseFloat(typedWallLength);
+                  if (Number.isFinite(v) && v >= 0.05) {
+                    commitAddWallWithLength(v);
+                  }
+                }
+              }}
+            />
+            <button
+              type="button"
+              className={`rep-pill-btn${addStep && parseFloat(typedWallLength) >= 0.05 ? " active" : ""}`}
+              disabled={!addStep || !(parseFloat(typedWallLength) >= 0.05)}
+              onClick={() => commitAddWallWithLength(parseFloat(typedWallLength))}
+              title="Place wall segment along active direction with exact length"
+            >Place ↵</button>
+          </div>
+        </div>
+      )}
 
       {/* ── Door / Window Parameter Subbar ───────────────────────────────────── */}
       {(editMode === "add-door" || editMode === "add-window") && (
@@ -3004,6 +4250,301 @@ export default function FloorPlanViewer({
             </div>
           )}
         </div>
+
+        {/* ── Selected Wall Inspector ───────────────────────────────────────────── */}
+        {selectedWallIdx !== null && selectedOpIdx === null && selectedWallIdx >= 0 && selectedWallIdx < editedLines.length && (() => {
+          const selLine = editedLines[selectedWallIdx];
+          const wm = getWallMetrics(selLine);
+          const normButtons = [
+            [-0.10, "-10cm"],
+            [-0.05, "-5cm"],
+            [-0.01, "-1cm"],
+            [0.01, "+1cm"],
+            [0.05, "+5cm"],
+            [0.10, "+10cm"],
+          ];
+          const alongButtons = [
+            [-0.05, "-5cm"],
+            [-0.01, "-1cm"],
+            [0.01, "+1cm"],
+            [0.05, "+5cm"],
+          ];
+          return (
+            <div
+              className="rep-opening-inspector"
+              style={{ position: "absolute", top: 12, right: 12, zIndex: 15, width: 292 }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
+              onWheel={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+            >
+              <div className="rep-inspector-header">
+                <span className="rep-inspector-title">
+                  <span>🧱</span>
+                  <span>Wall #{selectedWallIdx + 1}</span>
+                  <span className={`badge${selLine.hidden ? "" : " badge-sel"}`} style={{ fontSize: 9.5, padding: "1px 6px" }}>
+                    {selLine.hidden ? "Hidden" : selLine.source === "user" ? "Edited" : "Detected"}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="rep-close"
+                  onClick={() => {
+                    setSelectedWallIdx(null); selectedWallIdxRef.current = null;
+                    setHoveredHandle(null); hoveredHandleRef.current = null;
+                    scheduleDraw();
+                  }}
+                  title="Close Wall Inspector (Esc)"
+                >✕</button>
+              </div>
+
+              <div className="rep-inspector-body" style={{ maxHeight: "calc(100vh - 210px)", overflowY: "auto", gap: 10 }}>
+                {/* Dimensions summary */}
+                <div style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr 1fr",
+                  gap: 6,
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  background: "var(--surface-2)",
+                  border: "1px solid var(--border)",
+                  fontSize: 10.5,
+                  textAlign: "center",
+                }}>
+                  <div>
+                    <div style={{ color: "var(--text-3)", fontSize: 9.5, textTransform: "uppercase" }}>Length</div>
+                    <div className="s2f-mono" style={{ color: "var(--text-1)", fontWeight: 700 }}>{wm.len.toFixed(2)} m</div>
+                  </div>
+                  <div>
+                    <div style={{ color: "var(--text-3)", fontSize: 9.5, textTransform: "uppercase" }}>Angle</div>
+                    <div className="s2f-mono" style={{ color: "var(--text-1)", fontWeight: 700 }}>{wm.angleDeg.toFixed(1)}°</div>
+                  </div>
+                  <div>
+                    <div style={{ color: "var(--text-3)", fontSize: 9.5, textTransform: "uppercase" }}>Thick</div>
+                    <div className="s2f-mono" style={{ color: "var(--sel)", fontWeight: 700 }}>{Math.round(wm.thickness * 100)} cm</div>
+                  </div>
+                </div>
+
+                {/* Thickness */}
+                <div className="rep-inspector-row">
+                  <div className="rep-inspector-label-line">
+                    <span className="rep-inspector-label">Thickness</span>
+                    <span className="rep-inspector-val">{Math.round(wm.thickness * 100)} cm ({wm.thickness.toFixed(2)} m)</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                    {[0.10, 0.12, 0.15, 0.20, 0.25, 0.30, 0.40].map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        className={`rep-pill-btn${Math.abs(wm.thickness - t) < 0.004 ? " active" : ""}`}
+                        onClick={() => applyWallTransform(selectedWallIdx, () => ({ thickness: t, thicknessSource: "edited" }), { moveConnected: false })}
+                      >{Math.round(t * 100)}</button>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 2 }}>
+                    <input
+                      type="range" min="0.05" max="0.60" step="0.01"
+                      className="rep-range-slider"
+                      value={Math.min(0.60, wm.thickness)}
+                      onChange={(e) => applyWallTransform(
+                        selectedWallIdx,
+                        () => ({ thickness: Math.max(0.05, parseFloat(e.target.value) || 0.20), thicknessSource: "edited" }),
+                        { moveConnected: false },
+                      )}
+                    />
+                    <DraftNumberInput
+                      min={0.05}
+                      max={1.0}
+                      step={0.01}
+                      decimals={2}
+                      value={wm.thickness}
+                      onCommit={(v) => applyWallTransform(selectedWallIdx, () => ({ thickness: v, thicknessSource: "edited" }), { moveConnected: false })}
+                      style={{ width: 58 }}
+                    />
+                    <span style={{ fontSize: 10.5, color: "var(--text-3)" }}>m</span>
+                  </div>
+                </div>
+
+                {/* Length & Angle */}
+                <div className="rep-inspector-row" style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                  <div className="rep-inspector-label-line">
+                    <span className="rep-inspector-label">Length &amp; Angle Anchor</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 4 }}>
+                    {[
+                      ["p1", "P1 Fixed"],
+                      ["center", "Center"],
+                      ["p2", "P2 Fixed"],
+                    ].map(([val, lbl]) => (
+                      <button
+                        key={val}
+                        type="button"
+                        className={`rep-pill-btn${resizeAnchor === val ? " active" : ""}`}
+                        style={{ flex: 1 }}
+                        onClick={() => setResizeAnchor(val)}
+                      >{lbl}</button>
+                    ))}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: 4 }}>
+                    <span style={{ fontSize: 10.5, color: "var(--text-2)", width: 42 }}>Len:</span>
+                    <button
+                      type="button"
+                      className="rep-pill-btn"
+                      onClick={() => setSelectedWallLength(Math.max(0.05, wm.len - 0.05))}
+                    >-5cm</button>
+                    <DraftNumberInput
+                      min={0.05}
+                      max={500}
+                      step={0.01}
+                      decimals={2}
+                      value={wm.len}
+                      onCommit={(v) => setSelectedWallLength(v)}
+                      style={{ flex: 1, minWidth: 58 }}
+                    />
+                    <span style={{ fontSize: 10.5, color: "var(--text-3)" }}>m</span>
+                    <button
+                      type="button"
+                      className="rep-pill-btn"
+                      onClick={() => setSelectedWallLength(wm.len + 0.05)}
+                    >+5cm</button>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: 4 }}>
+                    <span style={{ fontSize: 10.5, color: "var(--text-2)", width: 42 }}>Angle:</span>
+                    <DraftNumberInput
+                      min={-360}
+                      max={360}
+                      step={0.5}
+                      decimals={1}
+                      value={wm.angleDeg}
+                      onCommit={(v) => setSelectedWallAngle(v)}
+                      style={{ width: 62 }}
+                    />
+                    <span style={{ fontSize: 10.5, color: "var(--text-3)" }}>°</span>
+                    <div style={{ display: "flex", gap: 3, flex: 1, justifyContent: "flex-end" }}>
+                      {[0, 45, 90, 135].map(deg => (
+                        <button
+                          key={deg}
+                          type="button"
+                          className={`rep-pill-btn${Math.abs(((wm.angleDeg - deg + 540) % 360) - 180) < 0.25 ? " active" : ""}`}
+                          style={{ padding: "2px 5px" }}
+                          onClick={() => setSelectedWallAngle(deg)}
+                        >{deg}°</button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Precision Move / Offset */}
+                <div className="rep-inspector-row" style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                  <div className="rep-inspector-label-line">
+                    <span className="rep-inspector-label">Precision Move</span>
+                    <span style={{ fontSize: 9.5, color: "var(--text-3)" }}>Arrows / [ ]</span>
+                  </div>
+
+                  <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 1 }}>Normal offset (⊥ toward +)</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 3 }}>
+                    {normButtons.map(([d, lbl]) => (
+                      <button
+                        key={lbl}
+                        type="button"
+                        className="rep-pill-btn"
+                        style={{ padding: "3px 2px", textAlign: "center" }}
+                        onClick={() => nudgeSelectedWall(d, 0)}
+                      >{lbl}</button>
+                    ))}
+                  </div>
+
+                  <div style={{ fontSize: 10, color: "var(--text-3)", marginTop: 4 }}>Slide along wall (∥)</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 4 }}>
+                    {alongButtons.map(([d, lbl]) => (
+                      <button
+                        key={lbl}
+                        type="button"
+                        className="rep-pill-btn"
+                        style={{ padding: "3px 4px", textAlign: "center" }}
+                        onClick={() => nudgeSelectedWall(0, d)}
+                      >{lbl}</button>
+                    ))}
+                  </div>
+
+                  {/* Direct coordinates */}
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 6 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "var(--text-2)" }}>
+                      <span style={{ width: 18 }}>X1</span>
+                      <DraftNumberInput
+                        step={0.01} decimals={2} value={wm.x1}
+                        style={{ flex: 1, minWidth: 0 }}
+                        onCommit={(v) => applyWallTransform(selectedWallIdx, (l) => ({ pts: [[v, l.pts[0][1]], l.pts[1]] }))}
+                      />
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "var(--text-2)" }}>
+                      <span style={{ width: 18 }}>Z1</span>
+                      <DraftNumberInput
+                        step={0.01} decimals={2} value={wm.z1}
+                        style={{ flex: 1, minWidth: 0 }}
+                        onCommit={(v) => applyWallTransform(selectedWallIdx, (l) => ({ pts: [[l.pts[0][0], v], l.pts[1]] }))}
+                      />
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "var(--text-2)" }}>
+                      <span style={{ width: 18 }}>X2</span>
+                      <DraftNumberInput
+                        step={0.01} decimals={2} value={wm.x2}
+                        style={{ flex: 1, minWidth: 0 }}
+                        onCommit={(v) => applyWallTransform(selectedWallIdx, (l) => ({ pts: [l.pts[0], [v, l.pts[1][1]]] }))}
+                      />
+                    </label>
+                    <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "var(--text-2)" }}>
+                      <span style={{ width: 18 }}>Z2</span>
+                      <DraftNumberInput
+                        step={0.01} decimals={2} value={wm.z2}
+                        style={{ flex: 1, minWidth: 0 }}
+                        onCommit={(v) => applyWallTransform(selectedWallIdx, (l) => ({ pts: [l.pts[0], [l.pts[1][0], v]] }))}
+                      />
+                    </label>
+                  </div>
+
+                  <label className="s2f-mini-check" style={{ marginTop: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={moveConnectedCorners}
+                      onChange={(e) => setMoveConnectedCorners(e.target.checked)}
+                    />
+                    <span>🔗 Move connected corners together</span>
+                  </label>
+                </div>
+
+                {/* Actions */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                  <button
+                    type="button"
+                    className="rep-pill-btn"
+                    disabled={wm.len < 0.10}
+                    onClick={() => splitSelectedWall(0.5)}
+                    title="Split wall at midpoint so each half can have a different thickness or position"
+                  >✂ Split Wall in 2</button>
+                  <button
+                    type="button"
+                    className="rep-pill-btn"
+                    onClick={() => duplicateSelectedWall(0.25)}
+                    title="Create a parallel copy offset 25cm along normal"
+                  >⧉ Offset Copy</button>
+                  <button
+                    type="button"
+                    className="rep-pill-btn"
+                    onClick={toggleHideSelectedWall}
+                  >{selLine.hidden ? "👁 Show Wall" : "👁 Hide Wall"}</button>
+                  <button
+                    type="button"
+                    className="rep-discard"
+                    onClick={deleteSelectedWall}
+                  >🗑 Delete</button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Selected Opening Inspector ────────────────────────────────────────── */}
         {selectedOpIdx !== null && selectedOpIdx >= 0 && selectedOpIdx < userOpenings.length && (() => {
