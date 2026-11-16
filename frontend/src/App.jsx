@@ -1109,16 +1109,24 @@ export default function App() {
       mpInstances={mpInstances}
       mpSweeps={mpSweeps}
       mpPoints={mpPoints}
+      mpInventory={mpInventory}
       livePose={liveMpPose}
       selectedMpItem={selectedMpItem}
       onSelectMpItem={onSelectMpItemShared}
       hiddenMpLabels={hiddenMpLabels}
+      setHiddenMpLabels={setHiddenMpLabels}
       sharedShowMpEquip={showMpEquip}
       sharedSetShowMpEquip={setShowMpEquip}
       sharedShowMpSweeps={showMpSweeps}
       sharedSetShowMpSweeps={setShowMpSweeps}
       sharedShowMpAiHints={showMpAiHints}
       sharedSetShowMpAiHints={setShowMpAiHints}
+      sharedShowMpPoints={showMpPoints}
+      sharedSetShowMpPoints={setShowMpPoints}
+      sharedShowMpLive={showMpLive}
+      sharedSetShowMpLive={setShowMpLive}
+      bimFilters={bimFilters}
+      setBimFilters={setBimFilters}
     />
   );
 

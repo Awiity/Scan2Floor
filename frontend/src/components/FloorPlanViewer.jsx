@@ -12,82 +12,13 @@
  *   hidden wall  #4a5568  (slate-grey, dashed, excluded from room recalc)
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { colorForMpLabel } from "./MpObjects3D";
+import { getCanvasTheme, getRoomAccent, withAlpha } from "../theme";
 
-// ── Colour constants — theme-aware ────────────────────────────────────────────
-// Returns a palette matching the current data-theme on the root .app element.
-function getTheme() {
-  const isDark = !document.querySelector('[data-theme="light"]');
-  return isDark ? {
-    bg: "#0f0f0f",
-    gridLine: "#1e1e1e",
-    wall: "#00c8e0", wallGlow: "rgba(0,200,224,0.18)",
-    wallUser: "#fbbf24", wallUserGlow: "rgba(251,191,36,0.20)",
-    wallHover: "#ff6b6b", wallHoverGlow: "rgba(255,107,107,0.25)",
-    wallHidden: "#4a6080", wallHiddenGlow: "rgba(74,96,128,0.15)",
-    wallPreview: "#fbbf24",
-    door: "#fbbf24",
-    window: "#818cf8",
-    snapEp: "#fbbf24",
-    snapGrid: "rgba(200,220,255,0.5)",
-    roomFills: [
-      "rgba(0,200,224,0.07)", "rgba(129,140,248,0.07)",
-      "rgba(251,191,36,0.07)", "rgba(52,211,153,0.07)",
-      "rgba(251,113,133,0.07)", "rgba(167,139,250,0.07)",
-      "rgba(34,211,238,0.07)", "rgba(251,146,60,0.07)",
-      "rgba(74,222,128,0.07)", "rgba(248,113,113,0.07)",
-    ],
-    roomBorder: "rgba(255,255,255,0.08)",
-    labelRoom: "rgba(200,230,255,0.6)",
-    scaleStroke: "rgba(255,255,255,0.6)",
-    scaleFill: "rgba(255,255,255,0.7)",
-  } : {
-    bg: "#f5f5f5",
-    gridLine: "#e0e0e0",
-    wall: "#0066cc", wallGlow: "rgba(0,102,204,0.12)",
-    wallUser: "#d97706", wallUserGlow: "rgba(217,119,6,0.15)",
-    wallHover: "#dc2626", wallHoverGlow: "rgba(220,38,38,0.18)",
-    wallHidden: "#94a3b8", wallHiddenGlow: "rgba(148,163,184,0.12)",
-    wallPreview: "#d97706",
-    door: "#d97706",
-    window: "#6366f1",
-    snapEp: "#d97706",
-    snapGrid: "rgba(30,60,120,0.35)",
-    roomFills: [
-      "rgba(0,102,204,0.07)", "rgba(99,102,241,0.07)",
-      "rgba(217,119,6,0.07)", "rgba(22,163,74,0.07)",
-      "rgba(220,38,38,0.07)", "rgba(124,58,237,0.07)",
-      "rgba(6,182,212,0.07)", "rgba(234,88,12,0.07)",
-      "rgba(74,222,128,0.07)", "rgba(248,113,113,0.07)",
-    ],
-    roomBorder: "rgba(0,0,0,0.06)",
-    labelRoom: "rgba(30,50,80,0.7)",
-    scaleStroke: "rgba(0,0,0,0.55)",
-    scaleFill: "rgba(0,0,0,0.65)",
-  };
-}
-
-// Legacy alias used in non-canvas JSX parts (badge colours etc.)
-const C = {
-  wall: "#00c8e0",
-  wallUser: "#fbbf24",
-  wallHover: "#ff6b6b",
-  wallHidden: "#4a6080",
-  door: "#fbbf24",
-  window: "#818cf8",
-  snapEp: "#fbbf24",
-  snapGrid: "rgba(200,220,255,0.5)",
-  roomFills: [
-    "rgba(0,200,224,0.07)", "rgba(129,140,248,0.07)",
-    "rgba(251,191,36,0.07)", "rgba(52,211,153,0.07)",
-    "rgba(251,113,133,0.07)", "rgba(167,139,250,0.07)",
-    "rgba(34,211,238,0.07)", "rgba(251,146,60,0.07)",
-    "rgba(74,222,128,0.07)", "rgba(248,113,113,0.07)",
-  ],
-  roomBorder: "rgba(255,255,255,0.08)",
-  labelRoom: "rgba(200,230,255,0.6)",
-};
+// ── Colour constants — theme-aware (mirrors src/theme.js) ─────────────────────
+const getTheme = getCanvasTheme;
+const C = new Proxy({}, { get: (_, k) => getCanvasTheme()[k] });
 
 // ── Coordinate utilities ───────────────────────────────────────────────────────
 
@@ -111,6 +42,8 @@ function drawMpOverlays2D(
     showEquip = true,
     showSweeps = false,
     showAiHints = true,
+    showPoints = true,
+    showLive = true,
     hiddenMpLabels = [],
     selectedMpItem = null,
   }
@@ -178,20 +111,22 @@ function drawMpOverlays2D(
   }
 
   // 3. Saved viewpoints
-  for (const pt of mpPoints || []) {
-    if (!onFloor(pt)) continue;
-    const [px, py] = toCanvas(pt.s2f_position.x, pt.s2f_position.z, cam);
-    const isSel = selectedMpItem?.kind === "point" && selectedMpItem?.data?.id === pt.id;
-    ctx.save();
-    ctx.translate(px, py);
-    ctx.rotate(Math.PI / 4);
-    ctx.fillStyle = isSel ? "#ffffff" : "#38bdf8";
-    ctx.fillRect(-4, -4, 8, 8);
-    ctx.restore();
+  if (showPoints) {
+    for (const pt of mpPoints || []) {
+      if (!onFloor(pt)) continue;
+      const [px, py] = toCanvas(pt.s2f_position.x, pt.s2f_position.z, cam);
+      const isSel = selectedMpItem?.kind === "point" && selectedMpItem?.data?.id === pt.id;
+      ctx.save();
+      ctx.translate(px, py);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = isSel ? "#ffffff" : "#38bdf8";
+      ctx.fillRect(-4, -4, 8, 8);
+      ctx.restore();
+    }
   }
 
   // 4. Live 360° Showcase camera wedge
-  if (onFloor(livePose)) {
+  if (showLive && onFloor(livePose)) {
     const [kx, ky] = toCanvas(livePose.s2f_position.x, livePose.s2f_position.z, cam);
     const yawRad = ((Number(livePose.rotation?.y ?? 0) * Math.PI) / 180) + Math.PI / 2;
     ctx.save();
@@ -511,56 +446,55 @@ function drawGrid(ctx, cam, w, h, TC, gridStep = 0.05) {
   ctx.restore();
 }
 
-function drawRooms(ctx, rooms, cam, highlightedRoomId, TC) {
+function drawRooms(ctx, rooms, cam, highlightedRoomId, TC, { showFills = true, showLabels = true } = {}) {
   if (!rooms?.length) return;
   const hasHighlight = highlightedRoomId != null;
   ctx.save();
   for (const room of rooms) {
     const isHighlighted = room.id === highlightedRoomId;
-    const baseAlpha = isHighlighted ? 0.30 : hasHighlight ? 0.03 : 0.07;
-    const fill = TC.roomFills[room.id % TC.roomFills.length].replace(/[\d.]+\)$/, `${baseAlpha})`);
+    if (showFills) {
+      const alpha = isHighlighted ? 0.30 : hasHighlight ? 0.05 : 0.14;
+      const fill = withAlpha(getRoomAccent(room.id), alpha);
 
-    // Build the room boundary path — prefer true polygon, fall back to bbox rect
-    ctx.beginPath();
-    const poly = room.polygon;
-    if (poly && poly.length >= 3) {
-      const [sx, sy] = toCanvas(poly[0][0], poly[0][1], cam);
-      ctx.moveTo(sx, sy);
-      for (let i = 1; i < poly.length; i++) {
-        const [px, py] = toCanvas(poly[i][0], poly[i][1], cam);
-        ctx.lineTo(px, py);
+      // Build the room boundary path — prefer true polygon, fall back to bbox rect
+      ctx.beginPath();
+      const poly = room.polygon;
+      if (poly && poly.length >= 3) {
+        const [sx, sy] = toCanvas(poly[0][0], poly[0][1], cam);
+        ctx.moveTo(sx, sy);
+        for (let i = 1; i < poly.length; i++) {
+          const [px, py] = toCanvas(poly[i][0], poly[i][1], cam);
+          ctx.lineTo(px, py);
+        }
+      } else if (room.bbox) {
+        const { x_min, z_min, x_max, z_max } = room.bbox;
+        const [cx1, cy1] = toCanvas(x_min, z_min, cam);
+        const [cx2, cy2] = toCanvas(x_max, z_max, cam);
+        ctx.rect(cx1, cy1, cx2 - cx1, cy2 - cy1);
       }
-    } else {
-      // Legacy fallback: bounding-box rectangle
-      const { x_min, z_min, x_max, z_max } = room.bbox;
-      const [cx1, cy1] = toCanvas(x_min, z_min, cam);
-      const [cx2, cy2] = toCanvas(x_max, z_max, cam);
-      ctx.rect(cx1, cy1, cx2 - cx1, cy2 - cy1);
-    }
-    ctx.closePath();
+      ctx.closePath();
 
-    ctx.fillStyle = fill;
-    ctx.fill();
+      ctx.fillStyle = fill;
+      ctx.fill();
 
-    if (isHighlighted) {
-      ctx.save();
-      ctx.strokeStyle = TC.wall;
-      ctx.lineWidth = 2.5;
-      ctx.shadowColor = TC.wall;
-      ctx.shadowBlur = 10;
-      ctx.stroke();
-      ctx.restore();
-    } else {
-      ctx.strokeStyle = TC.roomBorder;
-      ctx.lineWidth = 0.5;
-      ctx.stroke();
+      if (isHighlighted) {
+        ctx.save();
+        ctx.strokeStyle = TC.sel;
+        ctx.lineWidth = 2.2;
+        ctx.stroke();
+        ctx.restore();
+      } else {
+        ctx.strokeStyle = TC.roomBorder;
+        ctx.lineWidth = 0.75;
+        ctx.stroke();
+      }
     }
 
-    const fontSize = Math.max(9, Math.min(13, cam.scale * 0.7));
-    if (cam.scale > 3) {
+    if (showLabels && cam.scale > 3) {
+      const fontSize = Math.max(9, Math.min(13, cam.scale * 0.7));
       const [centX, centY] = toCanvas(room.centroid_x, room.centroid_z, cam);
-      ctx.font = `${fontSize}px "Inter", sans-serif`;
-      ctx.fillStyle = isHighlighted ? TC.wall : TC.labelRoom;
+      ctx.font = `600 ${fontSize}px "Inter", sans-serif`;
+      ctx.fillStyle = isHighlighted ? TC.sel : TC.labelRoom;
       ctx.textAlign = "center"; ctx.textBaseline = "middle";
       ctx.fillText(`R${room.id}  ${room.area_m2.toFixed(1)} m²`, centX, centY);
     }
@@ -1089,7 +1023,7 @@ function drawManualOpening(ctx, op, lines, cam, TC, isSelected = false, isHovere
   }
 }
 
-function drawOpenings(ctx, openings, cam) {
+function drawOpenings(ctx, openings, cam, TC, { showDoors = true, showWindows = true } = {}) {
   if (!openings?.length) return;
   // Draw high-confidence openings first so low-conf amber sits on top
   const sorted = [...openings].sort((a, b) =>
@@ -1097,8 +1031,8 @@ function drawOpenings(ctx, openings, cam) {
     ((a.confidence ?? 1) >= LOW_CONF_THRESHOLD ? 1 : 0)
   );
   for (const op of sorted) {
-    if (op.type === "door") drawDoor(ctx, op, cam);
-    if (op.type === "window") drawWindow(ctx, op, cam);
+    if (op.type === "door" && showDoors) drawDoor(ctx, op, cam);
+    if (op.type === "window" && showWindows) drawWindow(ctx, op, cam);
   }
 }
 
@@ -1120,16 +1054,16 @@ function drawScale(ctx, cam, w, h, TC) {
   ctx.restore();
 }
 
-function drawCompass(ctx, w) {
+function drawCompass(ctx, w, TC) {
   const cx = w - 30, cy = 30, r = 14;
   ctx.save();
   ctx.font = 'bold 10px "Inter", sans-serif';
   ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.fillStyle = "#ef4444";
+  ctx.fillStyle = TC.danger || "#ef4444";
   ctx.beginPath(); ctx.moveTo(cx, cy - r); ctx.lineTo(cx - 5, cy); ctx.lineTo(cx + 5, cy); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = "rgba(255,255,255,0.3)";
+  ctx.fillStyle = TC.text3 || "rgba(255,255,255,0.3)";
   ctx.beginPath(); ctx.moveTo(cx, cy + r); ctx.lineTo(cx - 5, cy); ctx.lineTo(cx + 5, cy); ctx.closePath(); ctx.fill();
-  ctx.fillStyle = "#ef4444";
+  ctx.fillStyle = TC.danger || "#ef4444";
   ctx.fillText("N", cx, cy - r - 9);
   ctx.restore();
 }
@@ -1156,16 +1090,14 @@ const SNAP_PRESETS = [
 
 function EditToolbar({
   mode, onMode, canUndo, canRedo, onUndo, onRedo,
-  isDirty, onSave, onReset, saveState, wallCount, userCount, hiddenCount, cornerStep,
+  isDirty, onSave, onReset, saveState, wallCount, roomCount, userCount, hiddenCount, cornerStep,
   gridStep, onGridStep, snapToVertices, onToggleSnapToVertices,
+  onFit, dxfUrl, ifcUrl, ifcAllUrl, selectedFloor, saveName,
 }) {
   const toolBtn = (id, icon, label, title) => {
-    const isHide = id === "hide";
+    const isActive = mode === id;
     const isCorner = id === "corner";
-    const isDoor = id === "add-door";
-    const isWindow = id === "add-window";
-    // Corner button shows step indicator when active
-    const cornerLabel = isCorner && mode === "corner"
+    const cornerLabel = isCorner && isActive
       ? (cornerStep === 1 ? "Corner ①" : "Corner ②")
       : label;
     return (
@@ -1173,161 +1105,121 @@ function EditToolbar({
         key={id}
         onClick={() => onMode(id)}
         title={title}
+        className={`s2f-btn s2f-btn-sm${isActive ? " active" : ""}`}
         style={{
-          display: "flex", alignItems: "center", gap: 4,
-          padding: "4px 9px", borderRadius: 5, fontSize: 11,
-          fontWeight: mode === id ? 700 : 400,
-          background: mode === id
-            ? (isHide ? "rgba(74,96,128,0.22)" : isCorner ? "rgba(167,139,250,0.15)" : isDoor ? "rgba(251,191,36,0.18)" : isWindow ? "rgba(129,140,248,0.18)" : "rgba(251,191,36,0.15)")
-            : "rgba(255,255,255,0.04)",
-          border: mode === id
-            ? (isHide ? "1px solid rgba(74,96,128,0.7)" : isCorner ? "1px solid rgba(167,139,250,0.6)" : isDoor ? "1px solid rgba(251,191,36,0.6)" : isWindow ? "1px solid rgba(129,140,248,0.6)" : "1px solid rgba(251,191,36,0.5)")
-            : "1px solid rgba(255,255,255,0.1)",
-          color: mode === id
-            ? (isHide ? "#94a3b8" : isCorner ? "#a78bfa" : isDoor ? "#fbbf24" : isWindow ? "#818cf8" : "#fbbf24")
-            : "rgba(200,220,255,0.6)",
-          cursor: "pointer", transition: "all 0.15s",
-          fontFamily: "Inter, sans-serif",
+          padding: "4px 9px",
+          fontSize: 11.5,
+          borderColor: isActive ? "var(--sel)" : "var(--border)",
+          background: isActive ? "var(--sel-dim)" : "var(--surface-2)",
+          color: isActive ? "var(--sel)" : "var(--text-2)",
         }}
       >
-        <span>{icon}</span><span style={{ fontSize: 10.5 }}>{cornerLabel}</span>
+        <span>{icon}</span><span>{cornerLabel}</span>
       </button>
     );
   };
 
-  const iconBtn = (label, onClick, disabled, title) => (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-      style={{
-        padding: "4px 8px", borderRadius: 5, fontSize: 13,
-        background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.1)",
-        color: disabled ? "rgba(150,160,180,0.3)" : "rgba(200,220,255,0.7)",
-        cursor: disabled ? "not-allowed" : "pointer", transition: "all 0.15s",
-      }}
-    >
-      {label}
-    </button>
-  );
-
   return (
     <div style={{
-      display: "flex", alignItems: "center", gap: 5,
-      padding: "6px 10px", flexShrink: 0,
-      background: "rgba(0,0,0,0.25)",
-      borderBottom: "1px solid rgba(255,255,255,0.06)",
+      display: "flex", alignItems: "center", gap: 6,
+      padding: "6px 12px", flexShrink: 0,
+      background: "var(--surface)",
+      borderBottom: "1px solid var(--border)",
       flexWrap: "wrap",
     }}>
       {TOOLS.map(t => toolBtn(t.id, t.icon, t.label, t.title))}
 
-      <div style={{ width: 1, height: 18, background: "rgba(255,255,255,0.12)", margin: "0 2px" }} />
+      <div style={{ width: 1, height: 18, background: "var(--border-hi)", margin: "0 2px" }} />
 
-      {iconBtn("↩", onUndo, !canUndo, "Undo (Ctrl+Z)")}
-      {iconBtn("↪", onRedo, !canRedo, "Redo (Ctrl+Y)")}
+      <button className="s2f-iconbtn s2f-iconbtn-sm" onClick={onUndo} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
+      <button className="s2f-iconbtn s2f-iconbtn-sm" onClick={onRedo} disabled={!canRedo} title="Redo (Ctrl+Y)">↪</button>
 
-      <div style={{ width: 1, height: 18, background: "rgba(255,255,255,0.12)", margin: "0 4px" }} />
+      <div style={{ width: 1, height: 18, background: "var(--border-hi)", margin: "0 2px" }} />
 
       {/* Snap controls */}
-      <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
-        <span style={{ fontSize: 10.5, color: "var(--text-3, rgba(200,220,255,0.5))", fontWeight: 600, display: "flex", alignItems: "center", gap: 3 }}>
-          🧲 Grid:
-        </span>
-        <div style={{
-          display: "flex",
-          borderRadius: 5,
-          overflow: "hidden",
-          border: "1px solid var(--border, rgba(255,255,255,0.12))",
-          background: "var(--surface-1, rgba(0,0,0,0.3))",
-        }}>
-          {SNAP_PRESETS.map(p => {
-            const active = gridStep === p.value;
-            return (
-              <button
-                key={p.value}
-                onClick={() => onGridStep(p.value)}
-                title={p.title}
-                style={{
-                  padding: "3px 8px",
-                  fontSize: 10.5,
-                  fontWeight: active ? 700 : 500,
-                  cursor: "pointer",
-                  border: "none",
-                  borderRight: "1px solid var(--border, rgba(255,255,255,0.08))",
-                  background: active ? "var(--accent-dim, rgba(0,200,224,0.2))" : "transparent",
-                  color: active ? "var(--accent, #00c8e0)" : "var(--text-3, rgba(200,220,255,0.5))",
-                  transition: "all 0.15s ease",
-                  fontFamily: "Inter, sans-serif",
-                }}
-              >
-                {p.label}
-              </button>
-            );
-          })}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600 }}>Grid</span>
+        <div className="s2f-seg">
+          {SNAP_PRESETS.map(p => (
+            <button
+              key={p.value}
+              className={gridStep === p.value ? "active" : ""}
+              onClick={() => onGridStep(p.value)}
+              title={p.title}
+              style={{ padding: "3px 8px", fontSize: 11 }}
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
 
-        {/* Vertex snap toggle */}
         <button
           onClick={onToggleSnapToVertices}
           title={snapToVertices ? "Vertex Snap ON (click to disable snapping to wall endpoints)" : "Vertex Snap OFF (click to enable snapping to wall endpoints)"}
+          className="s2f-btn s2f-btn-sm"
           style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 4,
-            padding: "3px 8px",
-            borderRadius: 5,
-            fontSize: 10.5,
-            fontWeight: snapToVertices ? 600 : 400,
-            cursor: "pointer",
-            border: snapToVertices ? "1px solid rgba(251,191,36,0.5)" : "1px solid var(--border, rgba(255,255,255,0.1))",
-            background: snapToVertices ? "rgba(251,191,36,0.15)" : "transparent",
-            color: snapToVertices ? "#fbbf24" : "var(--text-3, rgba(200,220,255,0.4))",
-            transition: "all 0.15s ease",
-            fontFamily: "Inter, sans-serif",
+            padding: "4px 8px",
+            fontSize: 11,
+            borderColor: snapToVertices ? "var(--sel)" : "var(--border)",
+            background: snapToVertices ? "var(--sel-dim)" : "var(--surface-2)",
+            color: snapToVertices ? "var(--sel)" : "var(--text-3)",
           }}
         >
-          <span>{snapToVertices ? "⌖ Vertex ON" : "⌖ Vertex OFF"}</span>
+          {snapToVertices ? "⌖ Vertex ON" : "⌖ Vertex OFF"}
         </button>
       </div>
 
       <div style={{ flex: 1 }} />
 
-      <span style={{ fontSize: 10, color: "rgba(200,220,255,0.35)", fontFamily: "JetBrains Mono, monospace", display: "flex", gap: 6, alignItems: "center" }}>
-        <span>{wallCount}W</span>
-        {userCount > 0 && <span style={{ color: "#fbbf24" }}>+{userCount}</span>}
-        {hiddenCount > 0 && (
-          <span style={{ color: "#94a3b8", display: "inline-flex", alignItems: "center", gap: 2 }}>
-            <span style={{ opacity: 0.7 }}>👁</span>{hiddenCount} hidden
-          </span>
-        )}
+      <span className="s2f-mono" style={{ fontSize: 11, color: "var(--text-3)", display: "flex", gap: 6, alignItems: "center" }}>
+        <span>{wallCount}W · {roomCount}R</span>
+        {userCount > 0 && <span style={{ color: "var(--sel)" }}>+{userCount}</span>}
+        {hiddenCount > 0 && <span>· {hiddenCount} hidden</span>}
       </span>
 
+      <button className="s2f-btn s2f-btn-sm" onClick={onFit} title="Fit plan to view">⌖ Fit</button>
+
+      <a
+        href={dxfUrl}
+        download={`floor_${selectedFloor}.dxf`}
+        className="s2f-btn s2f-btn-sm"
+        style={{ textDecoration: "none", padding: "4px 9px", fontSize: 11.5 }}
+      >
+        ↓ DXF
+      </a>
+      <a
+        href={ifcUrl}
+        download={`floor_${selectedFloor}.ifc`}
+        title={`Download IFC 2x3 for Floor ${selectedFloor}`}
+        className="s2f-btn s2f-btn-sm"
+        style={{ textDecoration: "none", padding: "4px 9px", fontSize: 11.5 }}
+      >
+        ↓ IFC
+      </a>
+      <a
+        href={ifcAllUrl}
+        download={saveName ? `${saveName}_building.ifc` : "building.ifc"}
+        title="Download full-building IFC 2x3 (all floors)"
+        className="s2f-btn s2f-btn-sm"
+        style={{ textDecoration: "none", padding: "4px 9px", fontSize: 11.5 }}
+      >
+        ↓ IFC All
+      </a>
+
       {isDirty && (
-        <button
-          onClick={onReset}
-          title="Discard all edits"
-          style={{
-            padding: "4px 8px", borderRadius: 5, fontSize: 11,
-            background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.3)",
-            color: "#ef4444", cursor: "pointer", fontFamily: "Inter, sans-serif",
-          }}
-        >↺ Discard</button>
+        <button className="s2f-btn s2f-btn-sm s2f-btn-danger" onClick={onReset} title="Discard all edits" style={{ padding: "4px 9px", fontSize: 11.5 }}>
+          ↺ Discard
+        </button>
       )}
 
       <button
         onClick={onSave}
         disabled={!isDirty || saveState === "saving"}
         title="Save edits and recalculate rooms (Ctrl+S) — hidden walls excluded"
-        style={{
-          padding: "4px 10px", borderRadius: 5, fontSize: 11, fontWeight: 700,
-          background: isDirty && saveState !== "saving" ? "rgba(0,200,80,0.15)" : "rgba(255,255,255,0.04)",
-          border: isDirty && saveState !== "saving" ? "1px solid rgba(0,200,80,0.4)" : "1px solid rgba(255,255,255,0.1)",
-          color: isDirty && saveState !== "saving" ? "#00c850" : "rgba(150,160,180,0.4)",
-          cursor: isDirty && saveState !== "saving" ? "pointer" : "not-allowed",
-          transition: "all 0.15s", fontFamily: "Inter, sans-serif",
-        }}
+        className={`s2f-btn s2f-btn-sm${isDirty && saveState !== "saving" ? " s2f-btn-primary" : ""}`}
+        style={{ padding: "4px 10px", fontSize: 11.5 }}
       >
-        {saveState === "saving" ? "⏳ Saving…" : saveState === "saved" ? "✓ Saved" : "💾 Save"}
+        {saveState === "saving" ? "Saving…" : saveState === "saved" ? "✓ Saved" : "Save"}
       </button>
     </div>
   );
@@ -1363,25 +1255,24 @@ function ModeHint({ mode, addStep, freeDrawMode, cornerStep, cornerHasIntersecti
   } else {
     text = MODE_HINTS[mode] ?? "";
   }
-  // Locked = default angle-snap mode while drawing
   const isLocked = mode === "add" && addStep && !freeDrawMode;
   const isCorner = mode === "corner";
   const isNoInter = mode === "corner" && cornerStep === 1 && !cornerHasIntersection;
   return (
     <div style={{
       position: "absolute", bottom: 10, left: "50%", transform: "translateX(-50%)",
-      background: isLocked || isCorner ? "var(--surface-3)" : "var(--surface-1)",
-      border: isLocked ? "1px solid var(--border-hi)"
-        : isCorner ? "1px solid rgba(167,139,250,0.5)"
-          : "1px solid var(--border)",
-      borderRadius: 6, padding: "4px 12px",
-      fontSize: 10,
-      color: isNoInter ? "#ef4444"
-        : isCorner ? "#a78bfa"
-          : isLocked ? "var(--accent)"
-            : mode === "select" ? "var(--text-3)" : "#f59e0b",
+      background: "rgba(var(--panel-rgb), 0.92)",
+      border: isLocked ? "1px solid var(--sel)"
+        : isCorner ? "1px solid var(--layer-window)"
+          : "1px solid var(--border-hi)",
+      borderRadius: "var(--radius-sm)", padding: "4px 12px",
+      fontSize: 10.5,
+      color: isNoInter ? "var(--red)"
+        : isCorner ? "var(--layer-window)"
+          : isLocked ? "var(--sel)"
+            : mode === "select" ? "var(--text-3)" : "var(--amber)",
       fontFamily: "Inter, sans-serif", whiteSpace: "nowrap", pointerEvents: "none",
-      boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+      boxShadow: "0 4px 14px rgba(var(--shadow-rgb), 0.25)",
       transition: "all 0.15s",
     }}>
       {text}
@@ -1395,24 +1286,24 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, hidde
   const visibleAlgo = wallCount - userCount - hiddenCount;
   const TC = getTheme();
   const items = [
-    { color: TC.wall, label: `Algo walls (${Math.max(0, visibleAlgo)})` },
+    { color: TC.wall, label: `Walls (${Math.max(0, visibleAlgo)})` },
     ...(userCount > 0 ? [{ color: TC.wallUser, label: `Added walls (${userCount})` }] : []),
     { color: TC.door, label: `Doors (${doorCount})` },
     { color: TC.window, label: `Windows (${windowCount})` },
-    { color: TC.roomFills[0], label: `Rooms (${roomCount})`, fill: true },
+    { color: TC.room, label: `Rooms (${roomCount})`, fill: true },
   ];
   return (
     <div style={{
       position: "absolute", bottom: 10, right: 10,
-      background: "var(--surface-1)",
-      border: "1px solid var(--border)", borderRadius: 8,
-      padding: "8px 12px", display: "flex", flexDirection: "column", gap: 5, minWidth: 165,
-      boxShadow: "0 2px 8px rgba(0,0,0,0.15)",
+      background: "rgba(var(--panel-rgb), 0.92)",
+      border: "1px solid var(--border-hi)", borderRadius: "var(--radius)",
+      padding: "8px 12px", display: "flex", flexDirection: "column", gap: 5, minWidth: 155,
+      boxShadow: "0 8px 24px rgba(var(--shadow-rgb), 0.3)",
     }}>
       {items.map(({ color, label, fill }) => (
         <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {fill
-            ? <div style={{ width: 14, height: 10, background: color + "33", border: `1px solid ${color}`, borderRadius: 2 }} />
+            ? <div style={{ width: 14, height: 10, background: withAlpha(color, 0.22), border: `1px solid ${color}`, borderRadius: 2 }} />
             : <div style={{ width: 14, height: 2.5, background: color, borderRadius: 2 }} />
           }
           <span style={{ fontSize: 10.5, color: "var(--text-2)", fontFamily: "Inter,sans-serif" }}>{label}</span>
@@ -1421,61 +1312,27 @@ function Legend({ wallCount, doorCount, windowCount, roomCount, userCount, hidde
       {hiddenCount > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 5, marginTop: 2 }}>
           <div style={{
-            width: 14, height: 2, background: TC.wallHidden, borderRadius: 2, opacity: 0.6,
+            width: 14, height: 2, borderRadius: 2, opacity: 0.7,
             backgroundImage: `repeating-linear-gradient(90deg,${TC.wallHidden} 0 5px,transparent 5px 9px)`
           }} />
-          <span style={{ fontSize: 10.5, color: "var(--text-3)", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>👁 {hiddenCount} hidden</span>
+          <span style={{ fontSize: 10.5, color: "var(--text-3)", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>{hiddenCount} hidden</span>
         </div>
       )}
       {lowConfCount > 0 && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 5, marginTop: 2 }}>
-          <div style={{ width: 14, height: 2.5, background: "#fbbf24", borderRadius: 2, backgroundImage: "repeating-linear-gradient(90deg,#fbbf24 0 4px,transparent 4px 7px)" }} />
-          <span style={{ fontSize: 10.5, color: "#fbbf24", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>⚠ {lowConfCount} low-confidence</span>
+          <div style={{ width: 14, height: 2.5, borderRadius: 2, backgroundImage: "repeating-linear-gradient(90deg,#fbbf24 0 4px,transparent 4px 7px)" }} />
+          <span style={{ fontSize: 10.5, color: "var(--amber)", fontFamily: "Inter,sans-serif", fontWeight: 600 }}>⚠ {lowConfCount} low-confidence</span>
         </div>
       )}
     </div>
   );
 }
 
-// ── FloorTab ───────────────────────────────────────────────────────────────────
-
-function Badge({ colour, children }) {
-  const S = {
-    cyan: { background: "var(--surface-3)", color: "var(--accent)", border: "1px solid var(--border-hi)" },
-    green: { background: "var(--surface-3)", color: "#10b981", border: "1px solid var(--border-hi)" },
-    orange: { background: "var(--surface-3)", color: "#f59e0b", border: "1px solid var(--border-hi)" },
-    amber: { background: "var(--surface-3)", color: "#f59e0b", border: "1px solid var(--border-hi)" },
-    grey: { background: "var(--surface-3)", color: "var(--text-3)", border: "1px solid var(--border)" },
-  };
-  return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 4, fontSize: 11, fontWeight: 600, ...(S[colour] ?? S.grey) }}>
-      {children}
-    </span>
-  );
-}
-
-function FloorTab({ active, label, onClick }) {
-  return (
-    <button onClick={onClick} style={{
-      padding: "5px 12px", borderRadius: 5, fontFamily: "Inter, sans-serif",
-      border: active ? "1px solid var(--border-hi)" : "1px solid var(--border)",
-      background: active ? "var(--surface-3)" : "var(--surface-1)",
-      color: active ? "var(--text-1)" : "var(--text-3)",
-      fontSize: 12, fontWeight: active ? 700 : 400, cursor: "pointer", transition: "all 0.18s",
-    }}>
-      {label}
-    </button>
-  );
-}
-
-// ── Main component ─────────────────────────────────────────────────────────────
-
 // ── Room height helper ─────────────────────────────────────────────────────────
 function deriveRoomHeight(modelInfo, floorIdx) {
   const levels = modelInfo?.floor_levels;
   if (!levels || levels.length < 2) return null;
   const sorted = [...levels].sort((a, b) => a - b);
-  // Find gap adjacent to floorIdx
   const idx = Math.min(floorIdx, sorted.length - 2);
   const h = Math.abs(sorted[idx + 1] - sorted[idx]);
   return h > 0.5 ? h : null;
@@ -1485,32 +1342,25 @@ function deriveRoomHeight(modelInfo, floorIdx) {
 function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect }) {
   if (!room) return null;
   const height = deriveRoomHeight(modelInfo, floorIdx);
-  // Derive dimensions from bbox (length = Z span, width = X span)
   const roomLen = Math.abs(room.bbox.z_max - room.bbox.z_min);
   const roomW = Math.abs(room.bbox.x_max - room.bbox.x_min);
-  // Orient so the larger value is shown first
   const dimA = Math.max(roomLen, roomW);
   const dimB = Math.min(roomLen, roomW);
   return (
     <div style={{
-      position: "absolute", top: 12, left: 12,
-      background: "var(--surface-1, #131722)",
-      border: "1px solid var(--border-hi, rgba(255,255,255,0.15))", borderRadius: 8,
+      position: "absolute", bottom: 44, left: 12,
+      background: "rgba(var(--panel-rgb), 0.94)",
+      border: "1px solid var(--border-hi)", borderRadius: "var(--radius)",
       padding: "10px 14px", display: "flex", flexDirection: "column", gap: 6,
-      boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
-      pointerEvents: "auto", minWidth: 175,
-      zIndex: 20,
+      boxShadow: "0 8px 28px rgba(var(--shadow-rgb), 0.35)",
+      pointerEvents: "auto", minWidth: 185,
+      zIndex: 18,
       animation: "fadeIn 0.18s ease",
     }}>
-      {/* Badge row */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{
-            background: "rgba(0,200,224,0.15)", color: "var(--accent, #00c8e0)",
-            border: "1px solid rgba(0,200,224,0.3)", borderRadius: 5,
-            padding: "2px 8px", fontSize: 11, fontWeight: 700, fontFamily: "Inter,sans-serif",
-          }}>Room {room.id}</span>
-          <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "JetBrains Mono, monospace" }}>selected</span>
+          <span className="badge badge-sel">Room {room.id}</span>
+          <span className="s2f-mono" style={{ fontSize: 10, color: "var(--text-3)" }}>selected</span>
         </div>
         {onDeselect && (
           <button
@@ -1523,7 +1373,6 @@ function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect 
           >✕</button>
         )}
       </div>
-      {/* Metrics */}
       <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
           <span style={{ fontSize: 10, color: "var(--text-3)", fontFamily: "Inter,sans-serif", textTransform: "uppercase", letterSpacing: "0.5px" }}>Area</span>
@@ -1546,29 +1395,14 @@ function RoomInfoChip({ room, floorIdx, modelInfo, onOpenRoomEditor, onDeselect 
         </div>
       </div>
 
-      {/* Button to open Room Editor */}
       {onOpenRoomEditor && (
         <button
           onClick={onOpenRoomEditor}
-          style={{
-            marginTop: 4,
-            padding: "6px 10px",
-            background: "linear-gradient(135deg, rgba(0,200,224,0.2), rgba(129,140,248,0.2))",
-            border: "1px solid rgba(0,200,224,0.4)",
-            borderRadius: 6,
-            color: "#00e5ff",
-            fontSize: 11,
-            fontWeight: 600,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 6,
-            transition: "all 0.15s ease",
-          }}
+          className="s2f-btn s2f-btn-sm s2f-btn-primary"
+          style={{ marginTop: 4 }}
           title="Open isolated Room Editor panel"
         >
-          <span>🏠</span> Open Room Editor
+          Open Room Editor
         </button>
       )}
     </div>
@@ -1589,10 +1423,12 @@ export default function FloorPlanViewer({
   mpInstances = [],
   mpSweeps = {},
   mpPoints = [],
+  mpInventory = [],
   livePose = null,
   selectedMpItem = null,
   onSelectMpItem,
-  hiddenMpLabels = [],
+  hiddenMpLabels: sharedHiddenMpLabels,
+  setHiddenMpLabels: sharedSetHiddenMpLabels,
   // Optional shared layer state (synced with the 3D viewer). Falls back to local state.
   sharedShowMpEquip,
   sharedSetShowMpEquip,
@@ -1600,6 +1436,12 @@ export default function FloorPlanViewer({
   sharedSetShowMpSweeps,
   sharedShowMpAiHints,
   sharedSetShowMpAiHints,
+  sharedShowMpPoints,
+  sharedSetShowMpPoints,
+  sharedShowMpLive,
+  sharedSetShowMpLive,
+  bimFilters,
+  setBimFilters,
 }) {
   const canvasRef = useRef(null);
   const camRef = useRef({ scale: 8, ox: 300, oy: 300 });
@@ -1640,25 +1482,88 @@ export default function FloorPlanViewer({
   const [roomsData, setRoomsData] = useState(null);
   const [openingsData, setOpeningsData] = useState(null);
   const [loadState, setLoadState] = useState("idle");
+
+  // ── Layer & equipment filters (matching MiniPlan & 3D Viewer) ───────────────
+  const [layersOpen, setLayersOpen] = useState(true);
+  const [localLayerOpts, setLocalLayerOpts] = useState({
+    walls: true,
+    rooms: true,
+    roomLabels: true,
+    doors: true,
+    windows: true,
+    grid: true,
+    scale: true,
+  });
   const [localMpEquip, setLocalMpEquip] = useState(true);
   const [localMpSweeps, setLocalMpSweeps] = useState(false);
   const [localMpAiHints, setLocalMpAiHints] = useState(true);
+  const [localMpPoints, setLocalMpPoints] = useState(true);
+  const [localMpLive, setLocalMpLive] = useState(true);
+  const [localHiddenMpLabels, setLocalHiddenMpLabels] = useState([]);
+
+  const showWalls = bimFilters ? !!bimFilters.walls : localLayerOpts.walls;
+  const showRooms = bimFilters ? !!bimFilters.rooms : localLayerOpts.rooms;
+  const showRoomLabels = localLayerOpts.roomLabels;
+  const showDoors = bimFilters ? !!bimFilters.doors : localLayerOpts.doors;
+  const showWindows = bimFilters ? !!bimFilters.windows : localLayerOpts.windows;
+  const showGrid = localLayerOpts.grid;
+  const showScale = localLayerOpts.scale;
+
+  const setPlanLayer = (key, val) => {
+    if (setBimFilters && (key === "walls" || key === "rooms" || key === "doors" || key === "windows")) {
+      setBimFilters((prev) => ({ ...prev, [key]: val }));
+    } else {
+      setLocalLayerOpts((prev) => ({ ...prev, [key]: val }));
+    }
+  };
+
   const showMpEquip = sharedShowMpEquip ?? localMpEquip;
   const setShowMpEquip = sharedSetShowMpEquip ?? setLocalMpEquip;
   const showMpSweeps = sharedShowMpSweeps ?? localMpSweeps;
   const setShowMpSweeps = sharedSetShowMpSweeps ?? setLocalMpSweeps;
   const showMpAiHints = sharedShowMpAiHints ?? localMpAiHints;
   const setShowMpAiHints = sharedSetShowMpAiHints ?? setLocalMpAiHints;
+  const showMpPoints = sharedShowMpPoints ?? localMpPoints;
+  const setShowMpPoints = sharedSetShowMpPoints ?? setLocalMpPoints;
+  const showMpLive = sharedShowMpLive ?? localMpLive;
+  const setShowMpLive = sharedSetShowMpLive ?? setLocalMpLive;
+  const hiddenMpLabels = sharedHiddenMpLabels ?? localHiddenMpLabels;
+  const setHiddenMpLabels = sharedSetHiddenMpLabels ?? setLocalHiddenMpLabels;
 
-  // Keep selected floor in sync with activeFloor when provided
+  const toggleMpLabel = (label) =>
+    setHiddenMpLabels((prev) =>
+      prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]
+    );
+
+  const labelInfo = useMemo(() => {
+    const names = {};
+    (mpInventory || []).forEach((r) => { names[r.label] = r.cz || r.en || r.label; });
+    const counts = {};
+    (mpInstances || []).forEach((inst) => {
+      if (!inst?.s2f_position) return;
+      if (inst.floor_idx == null || Number(inst.floor_idx) !== Number(selectedFloor)) return;
+      counts[inst.label] = (counts[inst.label] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([label, count]) => ({ label, count, name: names[label] || label }))
+      .sort((a, b) => b.count - a.count);
+  }, [mpInstances, mpInventory, selectedFloor]);
+
+  const totalEquipCount = labelInfo.reduce((acc, item) => acc + item.count, 0);
+  const visibleEquipCount = labelInfo.reduce(
+    (acc, item) => (hiddenMpLabels.includes(item.label) ? acc : acc + item.count),
+    0
+  );
+
+  // Keep selected floor synced with top-bar activeFloor
   useEffect(() => {
-    if (activeFloor !== "all" && activeFloor != null) {
-      const fNum = Number(activeFloor);
-      if (!isNaN(fNum) && fNum !== selectedFloor) {
-        setSelectedFloor(fNum);
-      }
+    const fNum = activeFloor === "all" || activeFloor == null ? 0 : Number(activeFloor);
+    if (!Number.isNaN(fNum) && fNum !== selectedFloor) {
+      addStepRef.current = null; setAddStep(null); snapRef.current = null;
+      setEditMode("select"); editModeRef.current = "select";
+      setSelectedFloor(fNum);
     }
-  }, [activeFloor]);
+  }, [activeFloor]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep selected floor in bounds if number of floors changes
   useEffect(() => {
@@ -1756,15 +1661,22 @@ export default function FloorPlanViewer({
       const cam = camRef.current;
       const TC = getTheme(); // read current theme each frame
       ctx.fillStyle = TC.bg; ctx.fillRect(0, 0, w, h);
-      drawGrid(ctx, cam, w, h, TC, gridStepRef.current);
-      drawRooms(ctx, roomsData?.rooms, cam, highlightedRoomIdRef.current, TC);
-      drawEditedWalls(
-        ctx, editedLinesRef.current, cam,
-        hoveredLineRef.current, addStepRef.current, snapRef.current,
-        editModeRef.current, TC,
-      );
+      if (showGrid) drawGrid(ctx, cam, w, h, TC, gridStepRef.current);
+      if (showRooms || showRoomLabels) {
+        drawRooms(ctx, roomsData?.rooms, cam, highlightedRoomIdRef.current, TC, {
+          showFills: showRooms,
+          showLabels: showRoomLabels,
+        });
+      }
+      if (showWalls) {
+        drawEditedWalls(
+          ctx, editedLinesRef.current, cam,
+          hoveredLineRef.current, addStepRef.current, snapRef.current,
+          editModeRef.current, TC,
+        );
+      }
       // Corner mode overlay (drawn on top of walls, below openings)
-      if (editModeRef.current === "corner") {
+      if (showWalls && editModeRef.current === "corner") {
         const cs = cornerStateRef.current;
         drawCornerMode(ctx, editedLinesRef.current, cam, {
           firstIdx: cs ? cs.firstIdx : -1,
@@ -1773,11 +1685,12 @@ export default function FloorPlanViewer({
         }, TC);
       }
       // Draw auto-detected openings
-      drawOpenings(ctx, openingsData?.openings, cam);
+      drawOpenings(ctx, openingsData?.openings, cam, TC, { showDoors, showWindows });
 
       // Draw manual user-placed openings
       for (let i = 0; i < userOpeningsRef.current.length; i++) {
         const op = userOpeningsRef.current[i];
+        if (op.type === "door" ? !showDoors : !showWindows) continue;
         const isSel = i === selectedOpIdxRef.current;
         const isHov = i === hoverManualOpRef.current;
         drawManualOpening(ctx, op, editedLinesRef.current, cam, TC, isSel, isHov);
@@ -1812,15 +1725,19 @@ export default function FloorPlanViewer({
         showEquip: showMpEquip,
         showSweeps: showMpSweeps,
         showAiHints: showMpAiHints,
+        showPoints: showMpPoints,
+        showLive: showMpLive,
         hiddenMpLabels,
         selectedMpItem,
       });
 
       drawBoxSelect(ctx, boxSelectRef.current, editModeRef.current);
-      drawScale(ctx, cam, w, h, TC);
-      drawCompass(ctx, w);
+      if (showScale) {
+        drawScale(ctx, cam, w, h, TC);
+        drawCompass(ctx, w, TC);
+      }
     });
-  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, mpInstances, mpSweeps, mpPoints, livePose, showMpEquip, showMpSweeps, showMpAiHints, hiddenMpLabels, selectedMpItem, selectedFloor]);
+  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, mpInstances, mpSweeps, mpPoints, livePose, showMpEquip, showMpSweeps, showMpAiHints, showMpPoints, showMpLive, hiddenMpLabels, selectedMpItem, selectedFloor, showWalls, showRooms, showRoomLabels, showDoors, showWindows, showGrid, showScale]);
 
   const isDirtyRef = useRef(false);
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
@@ -2413,11 +2330,13 @@ export default function FloorPlanViewer({
           item.floor_idx != null &&
           Number(item.floor_idx) === Number(selectedFloor);
 
-        for (const pt of mpPoints || []) {
-          if (!onFloor(pt)) continue;
-          if (Math.hypot(pt.s2f_position.x - mwx, pt.s2f_position.z - mwz) <= hitR) {
-            onSelectMpItem({ kind: "point", data: pt });
-            return;
+        if (showMpPoints) {
+          for (const pt of mpPoints || []) {
+            if (!onFloor(pt)) continue;
+            if (Math.hypot(pt.s2f_position.x - mwx, pt.s2f_position.z - mwz) <= hitR) {
+              onSelectMpItem({ kind: "point", data: pt });
+              return;
+            }
           }
         }
         if (showMpEquip || showMpAiHints) {
@@ -2599,7 +2518,7 @@ export default function FloorPlanViewer({
       }
       return;
     }
-  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, hiddenMpLabels, onSelectMpItem]);
+  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, showMpPoints, hiddenMpLabels, onSelectMpItem]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -2640,14 +2559,6 @@ export default function FloorPlanViewer({
   };
   const onTouchEnd = () => { lastTouchRef.current = null; };
 
-  // Switch floor → cancel any pending add
-  const switchFloor = (i) => {
-    addStepRef.current = null; setAddStep(null); snapRef.current = null;
-    setEditMode("select"); editModeRef.current = "select";
-    setSelectedFloor(i);
-    onSelectFloor?.(i);
-  };
-
   // Discard all edits
   const handleReset = useCallback(() => {
     fetch(`${apiBase}/walls/${selectedFloor}`).then(r => r.json()).then(w => {
@@ -2675,8 +2586,6 @@ export default function FloorPlanViewer({
   const doorCount = openings.filter(o => o.type === "door").length;
   const windowCount = openings.filter(o => o.type === "window").length;
   const lowConfCount = openings.filter(o => (o.confidence ?? 1) < LOW_CONF_THRESHOLD).length;
-  const nWallsAnalysed = openingsData?.n_walls_analysed ?? null;
-  const nWallsWithOpenings = openingsData?.n_walls_with_openings ?? null;
 
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
@@ -2697,14 +2606,6 @@ export default function FloorPlanViewer({
           ? "crosshair"
           : hoveredLine >= 0 ? "pointer" : "crosshair");
 
-  const floorLabel = (i) => {
-    if (!floors.length) return `Floor ${i}`;
-    const lvl = floors[i];
-    if (lvl == null) return `Floor ${i}`;
-    if (lvl < -0.5) return `Floor ${i} (B${Math.abs(Math.round(lvl))})`;
-    return `Floor ${i}  (${lvl >= 0 ? "+" : ""}${lvl.toFixed(1)} m)`;
-  };
-
   const dxfUrl = saveName
     ? `${apiBase}/download/${selectedFloor}`
     : `${apiBase}/walls/${selectedFloor}/download`;
@@ -2720,101 +2621,6 @@ export default function FloorPlanViewer({
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="floorplan-viewer" style={{ display: "flex", flexDirection: "column", height: "100%" }}>
-
-      {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <div className="fpv-header">
-        <div className="fpv-title">
-          <span className="fpv-icon">{saveName ? "💾" : "📐"}</span>
-          <span>{saveName ? `Saved: ${saveName}` : "Vector Floor Plan"}</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          {loadState === "loading" && <Badge colour="orange">⏳ Loading…</Badge>}
-          {loadState === "ready" && <Badge colour="cyan">{wallCount}W · {doorCount}D · {windowCount}W · {roomCount}R</Badge>}
-          {isDirty && <Badge colour="amber">✎ Unsaved edits</Badge>}
-          {loadState === "error" && <Badge colour="grey">⚠ API error</Badge>}
-          {onClose && <button className="fpv-close" onClick={onClose} title="Close">✕</button>}
-        </div>
-      </div>
-
-      {/* ── Floor tabs + quality bar ─────────────────────────────────────────── */}
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "space-between",
-        gap: 8, padding: "8px 12px", borderBottom: "1px solid rgba(255,255,255,0.06)",
-        flexShrink: 0,
-      }}>
-        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {floors.length > 0
-            ? floors.map((_, i) => <FloorTab key={i} active={selectedFloor === i} label={floorLabel(i)} onClick={() => { setSelectedFloor(i); onSelectFloor?.(i); }} />)
-            : <span style={{ fontSize: 11, color: "var(--text-3)" }}>No floors detected</span>
-          }
-        </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0, flexWrap: "wrap" }}>
-          {[
-            { active: showMpEquip, toggle: () => setShowMpEquip(v => !v), label: "⚙ Equip", title: "Toggle Matterport Equipment" },
-            { active: showMpAiHints, toggle: () => setShowMpAiHints(v => !v), label: "🚪 AI Hints", title: "Toggle AI Door/Window Hints" },
-            { active: showMpSweeps, toggle: () => setShowMpSweeps(v => !v), label: "📷 Sweeps", title: "Toggle 360° Panorama Sweeps" },
-          ].map((btn) => (
-            <button
-              key={btn.label}
-              onClick={btn.toggle}
-              title={btn.title}
-              style={{
-                background: btn.active ? "rgba(56,189,248,0.16)" : "rgba(255,255,255,0.04)",
-                border: `1px solid ${btn.active ? "rgba(56,189,248,0.4)" : "rgba(255,255,255,0.1)"}`,
-                borderRadius: 5,
-                color: btn.active ? "#38bdf8" : "rgba(200,220,255,0.55)",
-                fontSize: 11,
-                fontWeight: 600,
-                padding: "4px 7px",
-                cursor: "pointer",
-                fontFamily: "Inter,sans-serif",
-              }}
-            >
-              {btn.label}
-            </button>
-          ))}
-          <button
-            onClick={() => { const cvs = canvasRef.current; if (!cvs || !editedLinesRef.current.length) return; camRef.current = fitCamera(wallsBoundsFromEdited(editedLinesRef.current), cvs.width, cvs.height); scheduleDraw(); }}
-            style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 5, color: "rgba(200,220,255,0.7)", fontSize: 12, padding: "4px 8px", cursor: "pointer", fontFamily: "Inter,sans-serif" }}
-          >⊞ Fit</button>
-          <a href={dxfUrl} download={`floor_${selectedFloor}.dxf`}
-            style={{ background: "rgba(0,200,224,0.12)", border: "1px solid rgba(0,200,224,0.3)", borderRadius: 5, color: C.wall, fontSize: 12, fontWeight: 600, padding: "4px 10px", textDecoration: "none", fontFamily: "Inter,sans-serif" }}
-          >↓ DXF</a>
-          <a href={ifcUrl} download={`floor_${selectedFloor}.ifc`}
-            title={`Download IFC 2x3 for Floor ${selectedFloor}`}
-            style={{ background: "rgba(99,102,241,0.14)", border: "1px solid rgba(99,102,241,0.35)", borderRadius: 5, color: "#a5b4fc", fontSize: 12, fontWeight: 600, padding: "4px 10px", textDecoration: "none", fontFamily: "Inter,sans-serif" }}
-          >↓ IFC</a>
-          <a href={ifcAllUrl} download={saveName ? `${saveName}_building.ifc` : "building.ifc"}
-            title="Download full-building IFC 2x3 (all floors)"
-            style={{ background: "rgba(168,85,247,0.12)", border: "1px solid rgba(168,85,247,0.3)", borderRadius: 5, color: "#c084fc", fontSize: 12, fontWeight: 600, padding: "4px 10px", textDecoration: "none", fontFamily: "Inter,sans-serif", whiteSpace: "nowrap" }}
-          >↓ IFC All</a>
-        </div>
-      </div>
-
-      {/* ── Opening quality summary bar ──────────────────────────────────────── */}
-      {loadState === "ready" && openingsData && (
-        <div style={{
-          display: "flex", alignItems: "center", gap: 10,
-          padding: "4px 14px", flexShrink: 0,
-          background: lowConfCount > 0 ? "rgba(251,191,36,0.06)" : "rgba(0,200,80,0.04)",
-          borderBottom: `1px solid ${lowConfCount > 0 ? "rgba(251,191,36,0.18)" : "rgba(0,200,80,0.12)"}`,
-          fontSize: 10.5, fontFamily: "JetBrains Mono, monospace",
-        }}>
-          <span style={{ color: "rgba(200,220,255,0.45)" }}>
-            {nWallsAnalysed != null ? `${nWallsAnalysed} walls analysed` : ""}
-            {nWallsWithOpenings != null ? ` · ${nWallsWithOpenings} with openings` : ""}
-          </span>
-          <span style={{
-            marginLeft: "auto",
-            color: lowConfCount > 0 ? "#fbbf24" : "#00c850",
-            fontWeight: 600,
-          }}>
-            {lowConfCount > 0
-              ? `⚠ ${lowConfCount} low-confidence opening${lowConfCount > 1 ? "s" : ""} (shown in amber)`
-              : openings.length > 0 ? "✓ All openings verified" : "ℹ No openings detected"}
-          </span>
-        </div>
-      )}
 
       {/* ── Edit Toolbar ─────────────────────────────────────────────────────── */}
       <EditToolbar
@@ -2835,11 +2641,23 @@ export default function FloorPlanViewer({
         wallCount={wallCount}
         userCount={userCount}
         hiddenCount={hiddenCount}
+        roomCount={roomCount}
         cornerStep={cornerStep}
         gridStep={gridStep}
         onGridStep={setGridStep}
         snapToVertices={snapToVertices}
         onToggleSnapToVertices={() => setSnapToVertices(v => !v)}
+        onFit={() => {
+          const cvs = canvasRef.current;
+          if (!cvs || !editedLinesRef.current.length) return;
+          camRef.current = fitCamera(wallsBoundsFromEdited(editedLinesRef.current), cvs.width, cvs.height);
+          scheduleDraw();
+        }}
+        dxfUrl={dxfUrl}
+        ifcUrl={ifcUrl}
+        ifcAllUrl={ifcAllUrl}
+        selectedFloor={selectedFloor}
+        saveName={saveName}
       />
 
       {/* ── Door / Window Parameter Subbar ───────────────────────────────────── */}
@@ -2849,17 +2667,17 @@ export default function FloorPlanViewer({
           alignItems: "center",
           gap: 12,
           padding: "6px 14px",
-          background: "rgba(0,0,0,0.40)",
-          borderBottom: "1px solid rgba(255,255,255,0.08)",
+          background: "var(--surface-2)",
+          borderBottom: "1px solid var(--border)",
+          color: "var(--text-1)",
           flexWrap: "wrap",
           fontSize: 11,
-          fontFamily: "Inter, sans-serif",
           zIndex: 5,
         }}>
           {editMode === "add-door" ? (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Door Width:</span>
+                <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Door Width:</span>
                 {[0.75, 0.8, 0.9, 1.0, 1.2].map(w => (
                   <button
                     key={w}
@@ -2873,13 +2691,13 @@ export default function FloorPlanViewer({
                   value={toolDoorWidth}
                   onChange={(e) => setToolDoorWidth(Math.max(0.4, Math.min(3.0, parseFloat(e.target.value) || 0.9)))}
                 />
-                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+                <span style={{ color: "var(--text-3)" }}>m</span>
               </div>
 
               <span className="rep-sep" />
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Hinge:</span>
+                <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Hinge:</span>
                 <button
                   className={`rep-pill-btn${toolDoorHingeSide === 1 ? " active" : ""}`}
                   onClick={() => setToolDoorHingeSide(1)}
@@ -2893,7 +2711,7 @@ export default function FloorPlanViewer({
               <span className="rep-sep" />
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Swing:</span>
+                <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Swing:</span>
                 <button
                   className={`rep-pill-btn${toolDoorSwingDir === 1 ? " active" : ""}`}
                   onClick={() => setToolDoorSwingDir(1)}
@@ -2907,7 +2725,7 @@ export default function FloorPlanViewer({
               <span className="rep-sep" />
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Top Margin:</span>
+                <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Top Margin:</span>
                 {[0.5, 0.6, 0.7, 0.8].map(m => (
                   <button
                     key={m}
@@ -2921,13 +2739,13 @@ export default function FloorPlanViewer({
                   value={toolDoorTopMargin}
                   onChange={(e) => setToolDoorTopMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.7)))}
                 />
-                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+                <span style={{ color: "var(--text-3)" }}>m</span>
               </div>
             </>
           ) : (
             <>
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Window Width:</span>
+                <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Window Width:</span>
                 {[0.9, 1.2, 1.5, 1.8, 2.4].map(w => (
                   <button
                     key={w}
@@ -2941,13 +2759,13 @@ export default function FloorPlanViewer({
                   value={toolWindowWidth}
                   onChange={(e) => setToolWindowWidth(Math.max(0.3, Math.min(5.0, parseFloat(e.target.value) || 1.2)))}
                 />
-                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+                <span style={{ color: "var(--text-3)" }}>m</span>
               </div>
 
               <span className="rep-sep" />
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Sill (Bottom):</span>
+                <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Sill (Bottom):</span>
                 {[0.7, 0.8, 0.9, 1.0, 1.1].map(m => (
                   <button
                     key={m}
@@ -2961,13 +2779,13 @@ export default function FloorPlanViewer({
                   value={toolWindowBottomMargin}
                   onChange={(e) => setToolWindowBottomMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.9)))}
                 />
-                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+                <span style={{ color: "var(--text-3)" }}>m</span>
               </div>
 
               <span className="rep-sep" />
 
               <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ color: "rgba(200,220,255,0.6)", fontWeight: 600 }}>Top Margin:</span>
+                <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Top Margin:</span>
                 {[0.5, 0.6, 0.7, 0.8].map(m => (
                   <button
                     key={m}
@@ -2981,7 +2799,7 @@ export default function FloorPlanViewer({
                   value={toolWindowTopMargin}
                   onChange={(e) => setToolWindowTopMargin(Math.max(0.1, Math.min(2.0, parseFloat(e.target.value) || 0.7)))}
                 />
-                <span style={{ color: "rgba(200,220,255,0.4)" }}>m</span>
+                <span style={{ color: "var(--text-3)" }}>m</span>
               </div>
             </>
           )}
@@ -2989,7 +2807,7 @@ export default function FloorPlanViewer({
       )}
 
       {/* ── Canvas area ──────────────────────────────────────────────────────── */}
-      <div style={{ flex: 1, position: "relative", overflow: "hidden", background: C.bg }}>
+      <div style={{ flex: 1, position: "relative", overflow: "hidden", background: "var(--bg)" }}>
         <canvas
           ref={canvasRef}
           style={{ width: "100%", height: "100%", display: "block", cursor: cursorStyle }}
@@ -3039,6 +2857,153 @@ export default function FloorPlanViewer({
           onTouchMove={onTouchMove}
           onTouchEnd={onTouchEnd}
         />
+
+        {/* ── Floating Layers & Equipment filter panel (matches 3D & MiniPlan) ── */}
+        <div
+          className={`s2f-layers${layersOpen ? "" : " collapsed"}`}
+          onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          onDoubleClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            className="s2f-layers-head"
+            onClick={() => setLayersOpen((v) => !v)}
+          >
+            <span>Layers</span>
+            <span>{layersOpen ? "−" : "+"}</span>
+          </button>
+          {layersOpen && (
+            <div className="s2f-layers-body">
+              <div className="s2f-layer">
+                <div className="s2f-layer-extra s2f-bim-grid" style={{ marginTop: 4 }}>
+                  {[
+                    ["walls", "Walls", showWalls, (v) => setPlanLayer("walls", v)],
+                    ["rooms", "Room fills", showRooms, (v) => setPlanLayer("rooms", v)],
+                    ["roomLabels", "Room labels", showRoomLabels, (v) => setPlanLayer("roomLabels", v)],
+                    ["doors", "Doors", showDoors, (v) => setPlanLayer("doors", v)],
+                    ["windows", "Windows", showWindows, (v) => setPlanLayer("windows", v)],
+                    ["grid", "Grid", showGrid, (v) => setPlanLayer("grid", v)],
+                    ["scale", "Scale bar", showScale, (v) => setPlanLayer("scale", v)],
+                    ["aiHints", "AI hints", showMpAiHints, (v) => setShowMpAiHints(v)],
+                  ].map(([k, label, checked, onToggle]) => (
+                    <label key={k} className="s2f-mini-check">
+                      <input
+                        type="checkbox"
+                        checked={!!checked}
+                        onChange={(e) => onToggle(e.target.checked)}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="s2f-layer">
+                <label className="s2f-layer-main">
+                  <span className="s2f-layer-text">
+                    <span className="s2f-layer-name">Equipment &amp; MEP</span>
+                    <span className="s2f-layer-sub">
+                      {totalEquipCount > 0
+                        ? `${visibleEquipCount} / ${totalEquipCount} visible`
+                        : "None on floor"}
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={!!showMpEquip}
+                    onChange={(e) => setShowMpEquip(e.target.checked)}
+                  />
+                  <span className="s2f-switch" />
+                </label>
+                {showMpEquip && labelInfo.length > 0 && (
+                  <div className="s2f-layer-extra">
+                    <div className="s2f-mini-section" style={{ marginTop: 2 }}>
+                      <span>Equipment types</span>
+                      <span>
+                        <button
+                          type="button"
+                          className="s2f-link"
+                          onClick={() => setHiddenMpLabels([])}
+                        >
+                          all
+                        </button>
+                        {" · "}
+                        <button
+                          type="button"
+                          className="s2f-link"
+                          onClick={() => setHiddenMpLabels(labelInfo.map((x) => x.label))}
+                        >
+                          none
+                        </button>
+                      </span>
+                    </div>
+                    <div className="s2f-equip-list">
+                      {labelInfo.map(({ label, count, name }) => {
+                        const visible = !hiddenMpLabels.includes(label);
+                        return (
+                          <label key={label} className="s2f-mini-check" title={label}>
+                            <input
+                              type="checkbox"
+                              checked={visible}
+                              onChange={() => toggleMpLabel(label)}
+                            />
+                            <i style={{ background: colorForMpLabel(label) }} />
+                            <span className="s2f-mini-name">{name}</span>
+                            <em>{count}</em>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="s2f-layer">
+                <label className="s2f-layer-main">
+                  <span className="s2f-layer-text">
+                    <span className="s2f-layer-name">Viewpoints</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={!!showMpPoints}
+                    onChange={(e) => setShowMpPoints(e.target.checked)}
+                  />
+                  <span className="s2f-switch" />
+                </label>
+              </div>
+
+              <div className="s2f-layer">
+                <label className="s2f-layer-main">
+                  <span className="s2f-layer-text">
+                    <span className="s2f-layer-name">Live 360° camera</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={!!showMpLive}
+                    onChange={(e) => setShowMpLive(e.target.checked)}
+                  />
+                  <span className="s2f-switch" />
+                </label>
+              </div>
+
+              <div className="s2f-layer">
+                <label className="s2f-layer-main">
+                  <span className="s2f-layer-text">
+                    <span className="s2f-layer-name">360° sweep nodes</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={!!showMpSweeps}
+                    onChange={(e) => setShowMpSweeps(e.target.checked)}
+                  />
+                  <span className="s2f-switch" />
+                </label>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* ── Selected Opening Inspector ────────────────────────────────────────── */}
         {selectedOpIdx !== null && selectedOpIdx >= 0 && selectedOpIdx < userOpenings.length && (() => {
@@ -3197,22 +3162,22 @@ export default function FloorPlanViewer({
 
         {/* Empty state */}
         {loadState === "idle" && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "rgba(200,220,255,0.35)", fontSize: 13, gap: 8, fontFamily: "Inter,sans-serif" }}>
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--text-3)", fontSize: 13, gap: 8 }}>
             <span style={{ fontSize: 36 }}>📐</span><span>Select a floor to preview</span>
           </div>
         )}
 
         {/* Loading spinner */}
         {loadState === "loading" && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "var(--surface-1)", opacity: 0.9, color: "var(--text-1)", gap: 12, fontFamily: "Inter,sans-serif" }}>
-            <div style={{ width: 36, height: 36, borderRadius: "50%", border: `3px solid var(--border)`, borderTopColor: "var(--accent)", animation: "spin 0.8s linear infinite" }} />
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", background: "rgba(var(--panel-rgb), 0.9)", color: "var(--text-1)", gap: 12 }}>
+            <div style={{ width: 36, height: 36, borderRadius: "50%", border: "3px solid var(--border)", borderTopColor: "var(--accent)", animation: "spin 0.8s linear infinite" }} />
             <span style={{ fontSize: 12, color: "var(--text-2)" }}>Loading floor {selectedFloor}…</span>
           </div>
         )}
 
         {/* Error state */}
         {loadState === "error" && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "#ef4444", gap: 8, fontFamily: "Inter,sans-serif" }}>
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--red)", gap: 8 }}>
             <span style={{ fontSize: 28 }}>⚠</span>
             <span style={{ fontSize: 12 }}>Could not load floor data. Run <strong>Detect Walls</strong> in the sidebar first.</span>
           </div>
@@ -3220,7 +3185,7 @@ export default function FloorPlanViewer({
 
         {/* No walls */}
         {loadState === "ready" && wallCount === 0 && (
-          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "rgba(200,220,255,0.4)", gap: 8, fontFamily: "Inter,sans-serif" }}>
+          <div style={{ position: "absolute", inset: 0, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", color: "var(--text-2)", gap: 8 }}>
             <span style={{ fontSize: 28 }}>🧱</span>
             <span style={{ fontSize: 12 }}>No walls for floor {selectedFloor}.<br />Run <strong>🧱 Detect Walls + Rooms</strong> in the Cloud2BIM panel.</span>
           </div>
@@ -3228,12 +3193,12 @@ export default function FloorPlanViewer({
 
         {/* Save status toast */}
         {saveState === "saved" && (
-          <div style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", background: "rgba(0,200,80,0.15)", border: "1px solid rgba(0,200,80,0.4)", borderRadius: 8, padding: "8px 16px", color: "#00c850", fontSize: 12, fontWeight: 700, fontFamily: "Inter,sans-serif", animation: "fadeIn 0.2s ease" }}>
+          <div style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 25, background: "var(--surface-2)", border: "1px solid var(--green)", borderRadius: 8, padding: "8px 16px", color: "var(--green)", fontSize: 12, fontWeight: 700, animation: "fadeIn 0.2s ease" }}>
             ✓ Saved — rooms recalculated
           </div>
         )}
         {saveState === "error" && (
-          <div style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.4)", borderRadius: 8, padding: "8px 16px", color: "#ef4444", fontSize: 12, fontWeight: 700, fontFamily: "Inter,sans-serif" }}>
+          <div style={{ position: "absolute", top: 12, left: "50%", transform: "translateX(-50%)", zIndex: 25, background: "var(--surface-2)", border: "1px solid var(--red)", borderRadius: 8, padding: "8px 16px", color: "var(--red)", fontSize: 12, fontWeight: 700 }}>
             ✗ Save failed — check the backend
           </div>
         )}
