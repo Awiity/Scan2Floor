@@ -180,8 +180,8 @@ export default function LayersPanel({
           )}
           {setShowMpLive && (
             <Row
-              label="Live 360° camera"
-              sub="Current showcase pose"
+              label="Live / FPV camera"
+              sub="Current showcase or FPV pose"
               checked={showMpLive}
               onChange={setShowMpLive}
             />

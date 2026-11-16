@@ -18,6 +18,35 @@ const FPV_ORBIT_OFFSET = 0.12; // meters in front of camera so drag = 360° look
 const ORBIT_RESET_DIST = 4.0;
 const WALK_SPEED_MPS = 3.2;
 const WALK_FAST_MPS = 6.0;
+const _fpvDir = new THREE.Vector3();
+
+function resolveFloorIdx(y, modelInfo, activeFloor) {
+  if (activeFloor !== "all" && activeFloor != null) {
+    const n = Number(activeFloor);
+    if (Number.isFinite(n)) return n;
+  }
+  const levels = modelInfo?.floor_levels ?? [];
+  for (let i = levels.length - 1; i >= 0; i--) {
+    if (levels[i] != null && y >= Number(levels[i]) - 0.3) return i;
+  }
+  return 0;
+}
+
+function getFloorEyeInfo(modelInfo, activeFloor) {
+  const floorIdx = activeFloor === "all" || activeFloor == null ? 0 : Number(activeFloor);
+  const levels = modelInfo?.floor_levels ?? [];
+  const floorY =
+    levels.length > floorIdx && levels[floorIdx] != null
+      ? levels[floorIdx]
+      : floorIdx * 2.8;
+  const nextFloorY =
+    levels.length > floorIdx + 1 && levels[floorIdx + 1] != null
+      ? levels[floorIdx + 1]
+      : floorY + 2.8;
+  const storeyH = Math.max(2.2, nextFloorY - floorY);
+  const eyeY = floorY + Math.min(1.58, storeyH * 0.58);
+  return { floorIdx, floorY, storeyH, eyeY };
+}
 
 export default function CameraFocuser({
   highlightedRoom,
@@ -26,12 +55,24 @@ export default function CameraFocuser({
   activeFloor,
   fpvRequest = null,
   fpvMode = false,
+  fpvPoseStore = null,
 }) {
   const animRef = useRef(null);
   const lastRoomIdRef = useRef(null);
   const lastFpvReqIdRef = useRef(null);
   const prevFpvModeRef = useRef(fpvMode);
+  const prevActiveFloorRef = useRef(activeFloor);
   const keysRef = useRef(new Set());
+  const lastPoseEmitRef = useRef({
+    x: NaN,
+    y: NaN,
+    z: NaN,
+    dirX: NaN,
+    dirZ: NaN,
+    floorIdx: -1,
+    active: false,
+    t: 0,
+  });
   const { camera, gl } = useThree();
 
   // ── 1. Room selection focus (preserves existing one-shot behavior) ───────
@@ -176,18 +217,99 @@ export default function CameraFocuser({
     if (fpvMode) {
       camera.near = 0.03;
       camera.updateProjectionMatrix();
-      controls.target.copy(camera.position).addScaledVector(dir, FPV_ORBIT_OFFSET);
-      controls.update();
+
+      const { floorY, storeyH, eyeY } = getFloorEyeInfo(modelInfo, activeFloor);
+      const b = modelInfo?.bounds;
+      const outsideHeight = camera.position.y < floorY + 0.3 || camera.position.y > floorY + storeyH - 0.1;
+      const outsideXZ = Boolean(
+        b && (
+          camera.position.x < b.x_min - 2 ||
+          camera.position.x > b.x_max + 2 ||
+          camera.position.z < b.z_min - 2 ||
+          camera.position.z > b.z_max + 2
+        )
+      );
+
+      if (outsideHeight || outsideXZ) {
+        let tx = controls.target.x;
+        let tz = controls.target.z;
+        if (highlightedRoom) {
+          const rb = highlightedRoom.bbox;
+          tx = typeof highlightedRoom.centroid_x === "number" && !Number.isNaN(highlightedRoom.centroid_x)
+            ? highlightedRoom.centroid_x
+            : rb ? (rb.x_min + rb.x_max) / 2 : tx;
+          tz = typeof highlightedRoom.centroid_z === "number" && !Number.isNaN(highlightedRoom.centroid_z)
+            ? highlightedRoom.centroid_z
+            : rb ? (rb.z_min + rb.z_max) / 2 : tz;
+        } else if (b) {
+          const padX = Math.min(1.0, (b.x_max - b.x_min) * 0.15);
+          const padZ = Math.min(1.0, (b.z_max - b.z_min) * 0.15);
+          tx = Math.max(b.x_min + padX, Math.min(b.x_max - padX, tx));
+          tz = Math.max(b.z_min + padZ, Math.min(b.z_max - padZ, tz));
+        }
+
+        const horizDir = new THREE.Vector3(dir.x, 0, dir.z);
+        if (horizDir.lengthSq() < 1e-4) horizDir.set(0, 0, -1);
+        else horizDir.normalize();
+
+        const endPos = new THREE.Vector3(tx, eyeY, tz);
+        const endTarget = endPos.clone().addScaledVector(horizDir, FPV_ORBIT_OFFSET);
+        animRef.current = {
+          startTarget: controls.target.clone(),
+          endTarget,
+          startPos: camera.position.clone(),
+          endPos,
+          t: 0,
+          duration: 0.45,
+        };
+      } else {
+        controls.target.copy(camera.position).addScaledVector(dir, FPV_ORBIT_OFFSET);
+        controls.update();
+      }
     } else {
       controls.target.copy(camera.position).addScaledVector(dir, ORBIT_RESET_DIST);
       controls.update();
     }
-  }, [fpvMode, camera, controlsRef]);
+  }, [fpvMode, camera, controlsRef, modelInfo, activeFloor, highlightedRoom]);
+
+  // ── 3b. Keep FPV eye height synced when switching floors ───────────────────
+  useEffect(() => {
+    if (prevActiveFloorRef.current === activeFloor) return;
+    prevActiveFloorRef.current = activeFloor;
+
+    if (!fpvMode || typeof activeFloor !== "number" || animRef.current) return;
+    const controls = controlsRef?.current;
+    if (!controls) return;
+
+    const { eyeY } = getFloorEyeInfo(modelInfo, activeFloor);
+    const dir = new THREE.Vector3();
+    camera.getWorldDirection(dir);
+    dir.y = 0;
+    if (dir.lengthSq() < 1e-6) dir.set(0, 0, -1);
+    else dir.normalize();
+
+    const endPos = new THREE.Vector3(camera.position.x, eyeY, camera.position.z);
+    const endTarget = endPos.clone().addScaledVector(dir, FPV_ORBIT_OFFSET);
+    animRef.current = {
+      startTarget: controls.target.clone(),
+      endTarget,
+      startPos: camera.position.clone(),
+      endPos,
+      t: 0,
+      duration: 0.35,
+    };
+  }, [activeFloor, fpvMode, modelInfo, camera, controlsRef]);
 
   // ── 4. Keyboard & Scroll-Wheel step walking in First-Person Mode ───────────
   useEffect(() => {
     if (!fpvMode) {
       keysRef.current.clear();
+      if (lastPoseEmitRef.current.active) {
+        lastPoseEmitRef.current.active = false;
+      }
+      if (fpvPoseStore?.current?.active) {
+        fpvPoseStore.set({ ...fpvPoseStore.current, active: false });
+      }
       return;
     }
 
@@ -231,12 +353,68 @@ export default function CameraFocuser({
       window.removeEventListener("blur", onBlur);
       dom?.removeEventListener("wheel", onWheel, { capture: true });
     };
-  }, [fpvMode, camera, controlsRef, gl]);
+  }, [fpvMode, camera, controlsRef, gl, fpvPoseStore]);
 
   // ── 5. Per-frame animation & WASD walking ──────────────────────────────────
   useFrame((_, delta) => {
     const controls = controlsRef?.current;
     if (!controls) return;
+
+    const syncFpvPose = (force = false) => {
+      if (!fpvMode || !fpvPoseStore) return;
+      camera.getWorldDirection(_fpvDir);
+      let dirX = _fpvDir.x;
+      let dirZ = _fpvDir.z;
+      const hLen = Math.hypot(dirX, dirZ);
+      if (hLen < 1e-5) {
+        dirX = 0;
+        dirZ = -1;
+      } else {
+        dirX /= hLen;
+        dirZ /= hLen;
+      }
+
+      const x = camera.position.x;
+      const y = camera.position.y;
+      const z = camera.position.z;
+      const floorIdx = resolveFloorIdx(y, modelInfo, activeFloor);
+      const last = lastPoseEmitRef.current;
+
+      const moved =
+        force ||
+        !last.active ||
+        floorIdx !== last.floorIdx ||
+        Math.abs(x - last.x) > 0.015 ||
+        Math.abs(z - last.z) > 0.015 ||
+        Math.abs(y - last.y) > 0.04 ||
+        Math.abs(dirX - last.dirX) > 0.02 ||
+        Math.abs(dirZ - last.dirZ) > 0.02;
+
+      if (!moved) return;
+
+      const now = performance.now();
+      if (!force && last.active && now - last.t < 40) return;
+
+      last.x = x;
+      last.y = y;
+      last.z = z;
+      last.dirX = dirX;
+      last.dirZ = dirZ;
+      last.floorIdx = floorIdx;
+      last.active = true;
+      last.t = now;
+
+      fpvPoseStore.set({
+        x,
+        y,
+        z,
+        dirX,
+        dirZ,
+        headingRad: Math.atan2(dirZ, dirX),
+        floor_idx: floorIdx,
+        active: true,
+      });
+    };
 
     const anim = animRef.current;
     if (anim) {
@@ -248,16 +426,33 @@ export default function CameraFocuser({
       camera.position.lerpVectors(anim.startPos, anim.endPos, e);
       controls.update();
 
-      if (anim.t >= 1) {
+      const finished = anim.t >= 1;
+      if (finished) {
         animRef.current = null;
         controls.target.copy(anim.endTarget);
         camera.position.copy(anim.endPos);
         controls.update();
       }
+      if (fpvMode) syncFpvPose(finished);
       return;
     }
 
-    if (!fpvMode || keysRef.current.size === 0) return;
+    if (!fpvMode) return;
+
+    // Guard: keep OrbitControls pivot tightly anchored 0.12 m ahead of eye in FPV mode
+    const pivotDist = camera.position.distanceTo(controls.target);
+    if (Math.abs(pivotDist - FPV_ORBIT_OFFSET) > 0.05) {
+      const guardDir = new THREE.Vector3();
+      camera.getWorldDirection(guardDir);
+      if (guardDir.lengthSq() < 1e-6) guardDir.set(0, 0, -1);
+      else guardDir.normalize();
+      controls.target.copy(camera.position).addScaledVector(guardDir, FPV_ORBIT_OFFSET);
+      controls.update();
+    }
+
+    syncFpvPose(false);
+
+    if (keysRef.current.size === 0) return;
 
     const keys = keysRef.current;
     const speed =
@@ -286,6 +481,7 @@ export default function CameraFocuser({
       camera.position.add(move);
       controls.target.add(move);
       controls.update();
+      syncFpvPose(false);
     }
   });
 

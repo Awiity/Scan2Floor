@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import struct
 import subprocess
@@ -6,13 +7,14 @@ import sys
 import threading
 import time
 
+import cv2
 import numpy as np
 
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -598,6 +600,176 @@ def get_walls(floor_idx: int):
         return JSONResponse({"status": "not_processed", "lines": []})
     with open(wall_path) as f:
         return json.load(f)
+
+
+def _load_ortho_floor_points(proc_dir: str, floor_idx: int):
+    """Load Y-up floor slice points and per-point relative height above local floor."""
+    info = {}
+    for cand in (os.path.join(proc_dir, "info.json"), os.path.join(PROCESSED_DIR, "info.json")):
+        if os.path.isfile(cand):
+            try:
+                with open(cand) as fh:
+                    info = json.load(fh)
+                break
+            except Exception:
+                pass
+
+    levels = info.get("floor_levels") or []
+    floor_y = float(levels[floor_idx]) if 0 <= floor_idx < len(levels) else floor_idx * 2.8
+    storey_h = (float(levels[floor_idx + 1]) - floor_y) if floor_idx + 1 < len(levels) else 3.0
+    storey_h = max(storey_h, 2.4)
+
+    pts = None
+    used_dir = proc_dir
+    slice_cand = os.path.join(proc_dir, f"wall_slice_floor_{floor_idx}.npy")
+    if not os.path.isfile(slice_cand):
+        slice_cand = os.path.join(PROCESSED_DIR, f"wall_slice_floor_{floor_idx}.npy")
+        used_dir = PROCESSED_DIR
+    if os.path.isfile(slice_cand):
+        pts = np.load(slice_cand)
+    else:
+        bin_cand = os.path.join(proc_dir, "pointcloud.bin")
+        if not os.path.isfile(bin_cand):
+            bin_cand = os.path.join(PROCESSED_DIR, "pointcloud.bin")
+        if os.path.isfile(bin_cand):
+            with open(bin_cand, "rb") as fh:
+                (n_pts,) = struct.unpack_from("<I", fh.read(4))
+                pos_bytes = fh.read(n_pts * 3 * 4)
+            all_pts = np.frombuffer(pos_bytes, dtype=np.float32).reshape(n_pts, 3)
+            band = (all_pts[:, 1] >= floor_y - 0.5) & (all_pts[:, 1] <= floor_y + storey_h + 0.3)
+            pts = all_pts[band]
+
+    if pts is None or len(pts) == 0:
+        return None, None, storey_h
+
+    hm_path = os.path.join(used_dir, f"floor_heightmap_{floor_idx}.npy")
+    hm_meta = (info.get("wall_slices") or {}).get(f"floor_heightmap_{floor_idx}")
+    if os.path.isfile(hm_path) and hm_meta:
+        hm = np.load(hm_path)
+        cell = float(hm_meta["cell_size"])
+        rows, cols = int(hm_meta["rows"]), int(hm_meta["cols"])
+        cx = np.clip(np.floor((pts[:, 0] - float(hm_meta["x_min"])) / cell).astype(np.int32), 0, cols - 1)
+        cz = np.clip(np.floor((pts[:, 2] - float(hm_meta["z_min"])) / cell).astype(np.int32), 0, rows - 1)
+        rel_h = pts[:, 1] - hm[cz, cx].astype(np.float32)
+    else:
+        rel_h = pts[:, 1] - floor_y
+
+    return pts, rel_h, storey_h
+
+
+def _render_pointcloud_ortho_png(
+    proc_dir: str,
+    floor_idx: int,
+    mode: str = "walls",
+    bottom_cut: float = 0.30,
+    top_cut: float = 0.35,
+    grid_size: float = 0.02,
+) -> Response:
+    """Render a geo-referenced top-down RGBA PNG of the point cloud omitting floor/ceiling."""
+    pts, rel_h, storey_h = _load_ortho_floor_points(proc_dir, floor_idx)
+    if pts is None:
+        raise HTTPException(status_code=404, detail=f"No point cloud data available for floor {floor_idx}")
+
+    mode = "slice" if mode == "slice" else "walls"
+    bottom_cut = max(0.02, min(2.2, float(bottom_cut)))
+    top_cut = max(0.02, min(2.2, float(top_cut)))
+    max_h = max(bottom_cut + 0.40, storey_h - top_cut)
+
+    keep = (rel_h >= bottom_cut) & (rel_h <= max_h)
+    pts_f = pts[keep]
+    rh_f = rel_h[keep]
+    if len(pts_f) < 10:
+        raise HTTPException(status_code=404, detail=f"No points inside height band for floor {floor_idx}")
+
+    pad = 0.25
+    x_min = float(pts_f[:, 0].min()) - pad
+    z_min = float(pts_f[:, 2].min()) - pad
+    x_raw_max = float(pts_f[:, 0].max()) + pad
+    z_raw_max = float(pts_f[:, 2].max()) + pad
+
+    gs = max(float(grid_size), (x_raw_max - x_min) / 2600.0, (z_raw_max - z_min) / 2600.0)
+    width = max(16, int(math.ceil((x_raw_max - x_min) / gs)))
+    height = max(16, int(math.ceil((z_raw_max - z_min) / gs)))
+    # Align upper bounds to exact pixel edge for 1:1 toCanvas alignment
+    x_max = x_min + width * gs
+    z_max = z_min + height * gs
+
+    px = np.clip(np.floor((pts_f[:, 0] - x_min) / gs).astype(np.int32), 0, width - 1)
+    pz = np.clip(np.floor((pts_f[:, 2] - z_min) / gs).astype(np.int32), 0, height - 1)
+    flat_idx = pz.astype(np.int64) * width + px.astype(np.int64)
+    n_pix = height * width
+
+    cnt = np.bincount(flat_idx, minlength=n_pix).reshape(height, width).astype(np.float32)
+    norm = np.clip(np.log1p(cnt) / math.log1p(10.0), 0.0, 1.0)
+    bgra = np.zeros((height, width, 4), dtype=np.uint8)
+
+    if mode == "walls":
+        low_end = min(max_h - 0.50, max(bottom_cut + 0.35, 1.00))
+        high_start = min(max_h - 0.25, max(low_end + 0.35, max_h - 0.90))
+
+        c_low = np.bincount(flat_idx[rh_f < low_end], minlength=n_pix).reshape(height, width)
+        c_mid = np.bincount(flat_idx[(rh_f >= low_end) & (rh_f < high_start)], minlength=n_pix).reshape(height, width)
+        c_high = np.bincount(flat_idx[rh_f >= high_start], minlength=n_pix).reshape(height, width)
+
+        k3 = np.ones((3, 3), np.uint8)
+        high_dil = cv2.dilate((c_high > 0).astype(np.uint8), k3) > 0
+        low_mid_dil = cv2.dilate(((c_low + c_mid) > 0).astype(np.uint8), k3) > 0
+
+        wall_cells = ((c_high > 0) & low_mid_dil) | (high_dil & ((c_low + c_mid) > 0))
+        clutter_cells = (cnt > 0) & (~wall_cells)
+
+        # True vertical walls -> bright cyan to white (BGRA)
+        bgra[wall_cells, 0] = 255
+        bgra[wall_cells, 1] = (210.0 + 42.0 * norm[wall_cells]).astype(np.uint8)
+        bgra[wall_cells, 2] = (55.0 + 185.0 * norm[wall_cells]).astype(np.uint8)
+        bgra[wall_cells, 3] = (120.0 + 130.0 * norm[wall_cells]).astype(np.uint8)
+
+        # Mid-room furniture/clutter -> very faint context
+        bgra[clutter_cells, 0] = 175
+        bgra[clutter_cells, 1] = 160
+        bgra[clutter_cells, 2] = 145
+        bgra[clutter_cells, 3] = np.clip(10.0 + 22.0 * norm[clutter_cells], 0, 32).astype(np.uint8)
+    else:
+        sum_h = np.bincount(flat_idx, weights=rh_f, minlength=n_pix).reshape(height, width)
+        mean_h = sum_h / np.maximum(cnt, 1.0)
+        h_frac = np.clip((mean_h - bottom_cut) / max(0.2, max_h - bottom_cut), 0.0, 1.0)
+        occ = cnt > 0
+        # Height gradient: warm gold (low) -> bright cyan (upper wall)
+        bgra[occ, 0] = (55.0 + 200.0 * h_frac[occ]).astype(np.uint8)
+        bgra[occ, 1] = (175.0 + 60.0 * h_frac[occ]).astype(np.uint8)
+        bgra[occ, 2] = (240.0 - 140.0 * h_frac[occ]).astype(np.uint8)
+        bgra[occ, 3] = (90.0 + 155.0 * norm[occ]).astype(np.uint8)
+
+    # Connect 5cm voxel spacing into continuous strokes symmetrically when pixel size < 3cm
+    if gs <= 0.025:
+        k_sym = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
+        bgra = cv2.dilate(bgra, k_sym)
+
+    ok, png_buf = cv2.imencode(".png", bgra)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode orthographic PNG")
+
+    bounds_hdrs = {
+        "X-Bounds-XMin": f"{x_min:.6f}",
+        "X-Bounds-XMax": f"{x_max:.6f}",
+        "X-Bounds-ZMin": f"{z_min:.6f}",
+        "X-Bounds-ZMax": f"{z_max:.6f}",
+        "Access-Control-Expose-Headers": "X-Bounds-XMin, X-Bounds-XMax, X-Bounds-ZMin, X-Bounds-ZMax",
+        "Cache-Control": "no-cache",
+    }
+    return Response(content=png_buf.tobytes(), media_type="image/png", headers=bounds_hdrs)
+
+
+@app.get("/api/walls/{floor_idx}/pointcloud-ortho")
+def get_pointcloud_ortho(
+    floor_idx: int,
+    mode: str = "walls",
+    bottom_cut: float = 0.30,
+    top_cut: float = 0.35,
+    grid_size: float = 0.02,
+):
+    """Top-down orthographic RGBA PNG of point cloud with floor and ceiling omitted."""
+    return _render_pointcloud_ortho_png(PROCESSED_DIR, floor_idx, mode, bottom_cut, top_cut, grid_size)
 
 
 def _apply_thicknesses(existing: dict, payload) -> None:
@@ -1355,6 +1527,22 @@ def save_get_walls(name: str, floor_idx: int):
         return JSONResponse({"status": "not_processed", "lines": []})
     with open(wall_path) as f:
         return json.load(f)
+
+
+@app.get("/api/saves/{name}/walls/{floor_idx}/pointcloud-ortho")
+def save_get_pointcloud_ortho(
+    name: str,
+    floor_idx: int,
+    mode: str = "walls",
+    bottom_cut: float = 0.30,
+    top_cut: float = 0.35,
+    grid_size: float = 0.02,
+):
+    """Top-down orthographic point cloud PNG for a saved output."""
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    return _render_pointcloud_ortho_png(save_path, floor_idx, mode, bottom_cut, top_cut, grid_size)
 
 
 @app.put("/api/saves/{name}/walls/{floor_idx}")

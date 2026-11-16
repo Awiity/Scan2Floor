@@ -38,7 +38,7 @@ const OPT_LABELS = [
   ["equipment", "Equipment"],
   ["sweeps", "360° sweeps"],
   ["points", "Viewpoints"],
-  ["live", "Live 360° position"],
+  ["live", "Live / FPV position"],
   ["scale", "Scale bar"],
 ];
 
@@ -81,6 +81,7 @@ export default function MiniPlan({
   points = [],
   inventory = [],
   livePose = null,
+  fpvPoseStore = null,
   selectedRoomId = null,
   onSelectRoom,
   selectedMpItem = null,
@@ -220,6 +221,18 @@ export default function MiniPlan({
       ctx.fillStyle = T.bg;
       ctx.fillRect(0, 0, cw, ch);
       const P = (x, z) => [x * cam.s + cam.ox, z * cam.s + cam.oy];
+      const fpvPose = fpvPoseStore?.current ?? null;
+      const showFpv = Boolean(
+        opts.live &&
+        fpvPose &&
+        (fpvPose.floor_idx == null || Number(fpvPose.floor_idx) === Number(floor))
+      );
+      const fpvRoom = showFpv
+        ? data.rooms.find((r) => {
+            const poly = roomPoly(r);
+            return poly && pointInPoly(fpvPose.x, fpvPose.z, poly);
+          }) ?? null
+        : null;
 
       // rooms
       if (opts.rooms || opts.roomLabels) {
@@ -227,15 +240,24 @@ export default function MiniPlan({
           const poly = roomPoly(room);
           if (!poly) return;
           const sel = room.id === selectedRoomId;
+          const isFpvRoom = fpvRoom != null && room.id === fpvRoom.id;
           ctx.beginPath();
           poly.forEach(([x, z], i) => { const [px, pz] = P(x, z); if (i) ctx.lineTo(px, pz); else ctx.moveTo(px, pz); });
           ctx.closePath();
           if (opts.rooms) {
-            ctx.fillStyle = withAlpha(getRoomAccent(room.id), sel ? 0.32 : 0.14);
+            ctx.fillStyle = withAlpha(getRoomAccent(room.id), sel ? 0.32 : isFpvRoom ? 0.24 : 0.14);
             ctx.fill();
-            ctx.strokeStyle = sel ? T.sel : T.roomBorder;
-            ctx.lineWidth = sel ? 2 : 1;
+            ctx.save();
+            if (isFpvRoom && !sel) {
+              ctx.setLineDash([4, 3]);
+              ctx.strokeStyle = "#22d3ee";
+              ctx.lineWidth = 1.8;
+            } else {
+              ctx.strokeStyle = sel ? T.sel : T.roomBorder;
+              ctx.lineWidth = sel ? 2 : 1;
+            }
             ctx.stroke();
+            ctx.restore();
           }
         });
         if (opts.roomLabels && cam.s > 4) {
@@ -331,7 +353,7 @@ export default function MiniPlan({
         ctx.stroke();
       });
 
-      // live 360° position
+      // live 360° & FPV position
       if (opts.live && livePose?.s2f_position && onFloor(livePose)) {
         const [px, pz] = P(livePose.s2f_position.x, livePose.s2f_position.z);
         ctx.strokeStyle = T.sel;
@@ -339,6 +361,59 @@ export default function MiniPlan({
         ctx.beginPath(); ctx.arc(px, pz, 8, 0, Math.PI * 2); ctx.stroke();
         ctx.fillStyle = T.sel;
         ctx.beginPath(); ctx.arc(px, pz, 3, 0, Math.PI * 2); ctx.fill();
+      }
+      if (showFpv) {
+        const [px, pz] = P(fpvPose.x, fpvPose.z);
+        const heading = fpvPose.headingRad ?? Math.atan2(fpvPose.dirZ ?? -1, fpvPose.dirX ?? 0);
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(px, pz);
+        ctx.arc(px, pz, 20, heading - 0.52, heading + 0.52);
+        ctx.closePath();
+        ctx.fillStyle = fpvPose.active ? "rgba(34, 211, 238, 0.26)" : "rgba(34, 211, 238, 0.14)";
+        ctx.fill();
+        ctx.strokeStyle = fpvPose.active ? "rgba(34, 211, 238, 0.72)" : "rgba(34, 211, 238, 0.42)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.strokeStyle = "#22d3ee";
+        ctx.lineWidth = 1.8;
+        ctx.beginPath();
+        ctx.arc(px, pz, 7, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = "#22d3ee";
+        ctx.strokeStyle = T.bg;
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.arc(px, pz, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+
+        if (fpvRoom) {
+          const roomText = `FPV · ${fpvRoom.name ?? fpvRoom.label ?? `R${fpvRoom.id}`}`;
+          ctx.save();
+          ctx.font = "600 10px Inter, sans-serif";
+          const tw = ctx.measureText(roomText).width;
+          const bx = 8;
+          const by = 8;
+          const bw = tw + 12;
+          const bh = 18;
+          ctx.fillStyle = theme === "dark" ? "rgba(11, 17, 32, 0.88)" : "rgba(255, 255, 255, 0.92)";
+          ctx.strokeStyle = "#22d3ee";
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(bx, by, bw, bh, 4);
+          else ctx.rect(bx, by, bw, bh);
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = theme === "dark" ? "#22d3ee" : "#0891b2";
+          ctx.textAlign = "left";
+          ctx.textBaseline = "middle";
+          ctx.fillText(roomText, bx + 6, by + bh / 2);
+          ctx.restore();
+        }
       }
 
       // scale bar
@@ -363,7 +438,14 @@ export default function MiniPlan({
 
     drawRef.current = draw;
     draw();
-  }, [open, cw, ch, data, opts, selectedRoomId, selectedMpItem, livePose, visibleInstances, floorSweeps, floorPoints, onFloor, theme, tick]);
+  }, [open, cw, ch, data, opts, selectedRoomId, selectedMpItem, livePose, fpvPoseStore, visibleInstances, floorSweeps, floorPoints, onFloor, floor, theme, tick]);
+
+  useEffect(() => {
+    if (!fpvPoseStore || !open) return undefined;
+    return fpvPoseStore.subscribe(() => {
+      drawRef.current?.();
+    });
+  }, [fpvPoseStore, open]);
 
   /* ---------------- canvas interaction ---------------- */
   useEffect(() => {

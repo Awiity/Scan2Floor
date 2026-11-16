@@ -15,6 +15,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { colorForMpLabel } from "./MpObjects3D";
 import { getCanvasTheme, getRoomAccent, withAlpha } from "../theme";
+import { fetchPointCloudOrtho, renderPhotoOrtho } from "../utils/orthoReference";
 
 // ── Colour constants — theme-aware (mirrors src/theme.js) ─────────────────────
 const getTheme = getCanvasTheme;
@@ -30,6 +31,24 @@ function toWorld(cx, cy, cam) {
   return [(cx - cam.ox) / cam.scale, (cy - cam.oy) / cam.scale];
 }
 
+function isPointInRoom(wx, wz, room) {
+  if (!room) return false;
+  const poly = room.polygon;
+  if (poly && poly.length >= 3) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, zi] = poly[i];
+      const [xj, zj] = poly[j];
+      if (zi > wz !== zj > wz && wx < ((xj - xi) * (wz - zi)) / (zj - zi) + xi) {
+        inside = !inside;
+      }
+    }
+    return inside;
+  }
+  const b = room.bbox;
+  return Boolean(b && wx >= b.x_min && wx <= b.x_max && wz >= b.z_min && wz <= b.z_max);
+}
+
 function drawMpOverlays2D(
   ctx,
   cam,
@@ -39,6 +58,8 @@ function drawMpOverlays2D(
     mpSweeps = {},
     mpPoints = [],
     livePose = null,
+    fpvPose = null,
+    rooms = [],
     showEquip = true,
     showSweeps = false,
     showAiHints = true,
@@ -143,6 +164,85 @@ function drawMpOverlays2D(
     ctx.lineWidth = 1.5;
     ctx.fill();
     ctx.stroke();
+    ctx.restore();
+  }
+
+  // 5. Live / last FPV Free walk camera marker & current room highlight
+  if (
+    showLive &&
+    fpvPose &&
+    (fpvPose.floor_idx == null || Number(fpvPose.floor_idx) === Number(selectedFloor))
+  ) {
+    const fpvRoom = (rooms || []).find((r) => isPointInRoom(fpvPose.x, fpvPose.z, r)) ?? null;
+    if (fpvRoom) {
+      ctx.save();
+      ctx.beginPath();
+      if (fpvRoom.polygon && fpvRoom.polygon.length >= 3) {
+        const [sx, sy] = toCanvas(fpvRoom.polygon[0][0], fpvRoom.polygon[0][1], cam);
+        ctx.moveTo(sx, sy);
+        for (let i = 1; i < fpvRoom.polygon.length; i++) {
+          const [px, py] = toCanvas(fpvRoom.polygon[i][0], fpvRoom.polygon[i][1], cam);
+          ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+      } else if (fpvRoom.bbox) {
+        const [x1, y1] = toCanvas(fpvRoom.bbox.x_min, fpvRoom.bbox.z_min, cam);
+        const [x2, y2] = toCanvas(fpvRoom.bbox.x_max, fpvRoom.bbox.z_max, cam);
+        ctx.rect(x1, y1, x2 - x1, y2 - y1);
+      }
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = "#22d3ee";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    const [kx, ky] = toCanvas(fpvPose.x, fpvPose.z, cam);
+    const heading = fpvPose.headingRad ?? Math.atan2(fpvPose.dirZ ?? -1, fpvPose.dirX ?? 0);
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(kx, ky);
+    ctx.arc(kx, ky, 28, heading - 0.52, heading + 0.52);
+    ctx.closePath();
+    ctx.fillStyle = fpvPose.active ? "rgba(34, 211, 238, 0.28)" : "rgba(34, 211, 238, 0.16)";
+    ctx.fill();
+    ctx.strokeStyle = fpvPose.active ? "rgba(34, 211, 238, 0.75)" : "rgba(34, 211, 238, 0.45)";
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    ctx.strokeStyle = "#22d3ee";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(kx, ky, 8.5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.arc(kx, ky, 4.5, 0, Math.PI * 2);
+    ctx.fillStyle = "#22d3ee";
+    ctx.strokeStyle = "#0b1120";
+    ctx.lineWidth = 1.5;
+    ctx.fill();
+    ctx.stroke();
+
+    const labelText = fpvRoom ? `FPV · R${fpvRoom.id}` : "FPV";
+    ctx.font = "bold 10px Inter, sans-serif";
+    const tw = ctx.measureText(labelText).width;
+    const lx = kx + 12;
+    const ly = ky - 9;
+    const lw = tw + 10;
+    const lh = 18;
+    ctx.fillStyle = "rgba(11, 17, 32, 0.88)";
+    ctx.strokeStyle = "#22d3ee";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(lx, ly, lw, lh, 4);
+    else ctx.rect(lx, ly, lw, lh);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "#22d3ee";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(labelText, lx + 5, ky);
     ctx.restore();
   }
 }
@@ -508,6 +608,165 @@ function lineIntersect(x1, z1, x2, z2, x3, z3, x4, z4) {
  */
 function nearestEndpointIdx([[x1, z1], [x2, z2]], [ix, iz]) {
   return Math.hypot(x1 - ix, z1 - iz) <= Math.hypot(x2 - ix, z2 - iz) ? 0 : 1;
+}
+
+/**
+ * Find the nearest genuine 2-wall corner intersection near (wx, wz).
+ * Orders (idxA, idxB) so idxB is the more horizontal wall (|ux| >= |uz|),
+ * mapping W cleanly to horizontal width and D to vertical depth on orthogonal rooms.
+ */
+function findNearestWallCorner(wx, wz, editedLines, cam, pixThresh = 32) {
+  const worldThresh = Math.max(pixThresh / cam.scale, 0.45);
+  let bestDist = worldThresh;
+  let best = null;
+
+  for (let i = 0; i < editedLines.length; i++) {
+    if (editedLines[i].hidden) continue;
+    const [[ax1, az1], [ax2, az2]] = editedLines[i].pts;
+    const lenA = Math.hypot(ax2 - ax1, az2 - az1);
+    if (lenA < 0.08) continue;
+    const uAx = (ax2 - ax1) / lenA, uAz = (az2 - az1) / lenA;
+
+    for (let j = i + 1; j < editedLines.length; j++) {
+      if (editedLines[j].hidden) continue;
+      const [[bx1, bz1], [bx2, bz2]] = editedLines[j].pts;
+      const lenB = Math.hypot(bx2 - bx1, bz2 - bz1);
+      if (lenB < 0.08) continue;
+      const uBx = (bx2 - bx1) / lenB, uBz = (bz2 - bz1) / lenB;
+
+      // Require walls to meet at a meaningful angle (~>= 20 deg)
+      if (Math.abs(uAx * uBz - uAz * uBx) < 0.35) continue;
+
+      const hit = lineIntersect(ax1, az1, ax2, az2, bx1, bz1, bx2, bz2);
+      if (!hit) continue;
+      const [ix, iz] = hit.pt;
+
+      const epA = nearestEndpointIdx([[ax1, az1], [ax2, az2]], [ix, iz]);
+      const epB = nearestEndpointIdx([[bx1, bz1], [bx2, bz2]], [ix, iz]);
+      const endDistA = Math.hypot(editedLines[i].pts[epA][0] - ix, editedLines[i].pts[epA][1] - iz);
+      const endDistB = Math.hypot(editedLines[j].pts[epB][0] - ix, editedLines[j].pts[epB][1] - iz);
+
+      // Require both walls to end at/near this corner so T-junction through-walls are never trimmed
+      if (endDistA > 0.65 || endDistB > 0.65) continue;
+
+      const dCursor = Math.hypot(wx - ix, wz - iz);
+      if (dCursor < bestDist) {
+        bestDist = dCursor;
+        const bMoreHoriz = Math.abs(uBx) >= Math.abs(uAx);
+        best = bMoreHoriz
+          ? { idxA: i, idxB: j, cornerPt: [ix, iz], epA, epB }
+          : { idxA: j, idxB: i, cornerPt: [ix, iz], epA: epB, epB: epA };
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * Compute inner corner notch segments for two intersecting walls at cornerPt.
+ * Returns ptA on wall idxA, ptB on wall idxB, and inner corner ptInner = corner + dA*uA + dB*uB.
+ */
+function computeCornerNotchGeometry(
+  editedLines, idxA, idxB, cornerPt, targetWx, targetWz,
+  fixedW = null, fixedD = null, dimStep = 0,
+) {
+  const lineA = editedLines[idxA], lineB = editedLines[idxB];
+  if (!lineA || !lineB) return null;
+  const [cx, cz] = cornerPt;
+  const epA = nearestEndpointIdx(lineA.pts, cornerPt);
+  const epB = nearestEndpointIdx(lineB.pts, cornerPt);
+  const farA = lineA.pts[1 - epA];
+  const farB = lineB.pts[1 - epB];
+  const lenA = Math.hypot(farA[0] - cx, farA[1] - cz);
+  const lenB = Math.hypot(farB[0] - cx, farB[1] - cz);
+  if (lenA < 0.08 || lenB < 0.08) return null;
+
+  const uxA = (farA[0] - cx) / lenA, uzA = (farA[1] - cz) / lenA;
+  const uxB = (farB[0] - cx) / lenB, uzB = (farB[1] - cz) / lenB;
+  const det = uxA * uzB - uzA * uxB;
+  if (Math.abs(det) < 1e-4) return null;
+
+  const vx = targetWx - cx, vz = targetWz - cz;
+  let dA = (vx * uzB - vz * uxB) / det;
+  let dB = (uxA * vz - uzA * vx) / det;
+
+  if (dimStep > 0) {
+    dA = Math.round(dA / dimStep) * dimStep;
+    dB = Math.round(dB / dimStep) * dimStep;
+  }
+  if (Number.isFinite(fixedD) && fixedD > 0) dA = fixedD;
+  if (Number.isFinite(fixedW) && fixedW > 0) dB = fixedW;
+
+  dA = Math.max(0.04, Math.min(Math.max(0.05, lenA - 0.04), dA));
+  dB = Math.max(0.04, Math.min(Math.max(0.05, lenB - 0.04), dB));
+
+  const ptA = [cx + uxA * dA, cz + uzA * dA];
+  const ptB = [cx + uxB * dB, cz + uzB * dB];
+  const ptInner = [cx + uxA * dA + uxB * dB, cz + uzA * dA + uzB * dB];
+
+  return { cornerPt, ptA, ptB, ptInner, dA, dB, epA, epB, idxA, idxB };
+}
+
+/**
+ * Compute single-wall rectangular pillar bump-out (p1 -> p1In -> p2In -> p2).
+ */
+function computeWallPillarGeometry(
+  editedLines, wallIdx, startPt, targetWx, targetWz,
+  fixedW = null, fixedD = null, dimStep = 0,
+) {
+  const line = editedLines[wallIdx];
+  if (!line) return null;
+  const m = getWallMetrics(line);
+  if (m.len < 0.08) return null;
+
+  const t1 = Math.max(0.01, Math.min(0.99, ((startPt[0] - m.x1) * m.ux + (startPt[1] - m.z1) * m.uz) / m.len));
+  const rawAlong2 = (targetWx - m.x1) * m.ux + (targetWz - m.z1) * m.uz;
+  let along1 = t1 * m.len;
+  let along2 = Math.max(0.01 * m.len, Math.min(0.99 * m.len, rawAlong2));
+  let dPerp = (targetWx - m.x1) * m.nx + (targetWz - m.z1) * m.nz;
+
+  if (dimStep > 0) {
+    const wSnapped = Math.round((along2 - along1) / dimStep) * dimStep;
+    along2 = Math.max(0.01 * m.len, Math.min(0.99 * m.len, along1 + wSnapped));
+    dPerp = Math.round(dPerp / dimStep) * dimStep;
+  }
+
+  if (Number.isFinite(fixedW) && fixedW > 0) {
+    const dir = along2 >= along1 ? 1 : -1;
+    along2 = Math.max(0.01 * m.len, Math.min(0.99 * m.len, along1 + dir * fixedW));
+  }
+  if (Math.abs(along2 - along1) < 0.04) {
+    const dir = along2 >= along1 ? 1 : -1;
+    along2 = Math.max(0.01 * m.len, Math.min(0.99 * m.len, along1 + dir * 0.04));
+  }
+
+  const signPerp = dPerp >= 0 ? 1 : -1;
+  if (Number.isFinite(fixedD) && fixedD > 0) {
+    dPerp = signPerp * fixedD;
+  } else if (Math.abs(dPerp) < 0.04) {
+    dPerp = signPerp * 0.04;
+  }
+
+  const aMin = Math.min(along1, along2);
+  const aMax = Math.max(along1, along2);
+  const tMin = aMin / m.len;
+  const tMax = aMax / m.len;
+  const p1 = [m.x1 + m.ux * aMin, m.z1 + m.uz * aMin];
+  const p2 = [m.x1 + m.ux * aMax, m.z1 + m.uz * aMax];
+  const p1In = [p1[0] + m.nx * dPerp, p1[1] + m.nz * dPerp];
+  const p2In = [p2[0] + m.nx * dPerp, p2[1] + m.nz * dPerp];
+
+  return {
+    wallIdx,
+    p1,
+    p2,
+    p1In,
+    p2In,
+    width: aMax - aMin,
+    depth: Math.abs(dPerp),
+    tMin,
+    tMax,
+  };
 }
 
 /**
@@ -1217,6 +1476,161 @@ function drawCornerMode(ctx, editedLines, cam, cornerState, TC) {
   }
 }
 
+/**
+ * Draw the "notch" mode preview: corner highlight, green L-notch or U-pillar segments,
+ * trim indicators, and cm / m dimension readout.
+ */
+function drawNotchMode(ctx, editedLines, cam, notchPreview, TC, thickness = 0.12, trimCorner = true) {
+  if (!notchPreview) return;
+  const GREEN = "#22c55e";
+  const GREEN_GLOW = "rgba(34,197,94,0.28)";
+  const wPx = Math.max(2.0, normalizeWallThickness(thickness) * cam.scale);
+
+  const hiliteWall = (idx, alpha = 0.75) => {
+    if (idx == null || idx < 0 || idx >= editedLines.length) return;
+    const [[x1, z1], [x2, z2]] = editedLines[idx].pts;
+    const [cx1, cy1] = toCanvas(x1, z1, cam);
+    const [cx2, cy2] = toCanvas(x2, z2, cam);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = GREEN_GLOW;
+    ctx.lineWidth = Math.max(6, wPx + 6);
+    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    ctx.strokeStyle = GREEN;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    ctx.restore();
+  };
+
+  const drawSegment = (pA, pB) => {
+    const [cx1, cy1] = toCanvas(pA[0], pA[1], cam);
+    const [cx2, cy2] = toCanvas(pB[0], pB[1], cam);
+    ctx.save();
+    if (wPx >= 4.5 && traceWallRect(ctx, cx1, cy1, cx2, cy2, wPx)) {
+      ctx.globalAlpha = 0.35;
+      ctx.fillStyle = GREEN;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = GREEN;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = GREEN; ctx.shadowBlur = 8;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = GREEN;
+      ctx.lineWidth = Math.max(2.2, wPx);
+      ctx.shadowColor = GREEN; ctx.shadowBlur = 8;
+      ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    }
+    ctx.restore();
+  };
+
+  const drawBadge = (cx, cy, text) => {
+    ctx.save();
+    ctx.font = 'bold 10px "JetBrains Mono", monospace';
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    const tw = ctx.measureText(text).width;
+    ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(15,15,15,0.92)" : "rgba(255,255,255,0.94)";
+    ctx.fillRect(cx - tw / 2 - 6, cy - 9, tw + 12, 18);
+    ctx.strokeStyle = GREEN;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(cx - tw / 2 - 6, cy - 9, tw + 12, 18);
+    ctx.fillStyle = GREEN;
+    ctx.fillText(text, cx, cy);
+    ctx.restore();
+  };
+
+  const stage = notchPreview.stage;
+  if (stage === "hover-corner") {
+    hiliteWall(notchPreview.idxA, 0.7);
+    hiliteWall(notchPreview.idxB, 0.7);
+    const [cix, ciy] = toCanvas(notchPreview.cornerPt[0], notchPreview.cornerPt[1], cam);
+    ctx.save();
+    ctx.strokeStyle = GREEN;
+    ctx.fillStyle = GREEN_GLOW;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cix, ciy, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = GREEN;
+    ctx.beginPath(); ctx.arc(cix, ciy, 3.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    drawBadge(cix, ciy - 22, "┐ Click corner");
+  } else if (stage === "hover-wall1") {
+    hiliteWall(notchPreview.wallIdx, 0.85);
+    if (notchPreview.pt) {
+      const [cx, cy] = toCanvas(notchPreview.pt[0], notchPreview.pt[1], cam);
+      drawBadge(cx, cy - 18, "┐ Pick 1st corner wall");
+    }
+  } else if (stage === "active-wall1") {
+    hiliteWall(notchPreview.idxA, 0.95);
+    if (notchPreview.hoverIdx >= 0 && notchPreview.hoverIdx !== notchPreview.idxA) {
+      hiliteWall(notchPreview.hoverIdx, 0.65);
+    }
+  } else if (stage === "hover-pillar") {
+    hiliteWall(notchPreview.wallIdx, 0.75);
+    const [cx, cy] = toCanvas(notchPreview.startPt[0], notchPreview.startPt[1], cam);
+    ctx.save();
+    ctx.fillStyle = GREEN;
+    ctx.beginPath(); ctx.arc(cx, cy, 5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+    drawBadge(cx, cy - 18, "┌─┐ Click start");
+  } else if (stage === "active-corner") {
+    const { cornerPt, ptA, ptB, ptInner, dA, dB } = notchPreview;
+    if (trimCorner) {
+      const [ccx, ccy] = toCanvas(cornerPt[0], cornerPt[1], cam);
+      const [cax, cay] = toCanvas(ptA[0], ptA[1], cam);
+      const [cbx, cby] = toCanvas(ptB[0], ptB[1], cam);
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = TC.wallHover || "#ef4444";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ccx, ccy); ctx.lineTo(cax, cay);
+      ctx.moveTo(ccx, ccy); ctx.lineTo(cbx, cby);
+      ctx.stroke();
+      ctx.restore();
+    }
+    drawSegment(ptA, ptInner);
+    drawSegment(ptInner, ptB);
+    for (const pt of [ptA, ptInner, ptB]) {
+      const [vx, vy] = toCanvas(pt[0], pt[1], cam);
+      ctx.save();
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = GREEN;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(vx, vy, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.restore();
+    }
+    const [ix, iy] = toCanvas(ptInner[0], ptInner[1], cam);
+    drawBadge(ix, iy - 22, `${Math.round(dB * 100)} × ${Math.round(dA * 100)} cm (${dB.toFixed(2)} × ${dA.toFixed(2)} m)`);
+  } else if (stage === "active-pillar") {
+    const { p1, p2, p1In, p2In, width, depth } = notchPreview;
+    if (trimCorner) {
+      const [c1x, c1y] = toCanvas(p1[0], p1[1], cam);
+      const [c2x, c2y] = toCanvas(p2[0], p2[1], cam);
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = TC.wallHover || "#ef4444";
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(c1x, c1y); ctx.lineTo(c2x, c2y); ctx.stroke();
+      ctx.restore();
+    }
+    drawSegment(p1, p1In);
+    drawSegment(p1In, p2In);
+    drawSegment(p2In, p2);
+    for (const pt of [p1, p1In, p2In, p2]) {
+      const [vx, vy] = toCanvas(pt[0], pt[1], cam);
+      ctx.save();
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = GREEN;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(vx, vy, 4.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.restore();
+    }
+    const [mx, my] = toCanvas((p1In[0] + p2In[0]) * 0.5, (p1In[1] + p2In[1]) * 0.5, cam);
+    drawBadge(mx, my - 20, `${Math.round(width * 100)} × ${Math.round(depth * 100)} cm (${width.toFixed(2)} × ${depth.toFixed(2)} m)`);
+  }
+}
+
 // Low-confidence threshold must match backend LOW_CONFIDENCE_THRESHOLD
 const LOW_CONF_THRESHOLD = 0.45;
 
@@ -1488,6 +1902,7 @@ const TOOLS = [
   { id: "delete", icon: "✂️", label: "Delete", key: "D", title: "Delete Wall / Opening (D)" },
   { id: "hide", icon: "👁", label: "Hide", key: "H", title: "Hide/Show Wall (H) — hides from room recalc" },
   { id: "corner", icon: "⌐", label: "Corner", key: "C", title: "Extend to Corner (C) — extend two walls to their intersection" },
+  { id: "notch", icon: "┐", label: "Notch", key: "N", title: "Box Corner / Pillar Notch (N) — add stepped room corners in 2 clicks" },
 ];
 
 const SNAP_PRESETS = [
@@ -1498,10 +1913,19 @@ const SNAP_PRESETS = [
   { label: "50cm", value: 0.50, title: "50 cm grid snap (0.50 m) — coarse" },
 ];
 
+const ORTHO_MODES = [
+  { id: "off", label: "Off", shortLabel: "Off", title: "Hide orthographic scan reference" },
+  { id: "cloud-walls", label: "Cloud · Walls", shortLabel: "☁ Walls", title: "Full-density point cloud filtered to walls (floor & ceiling omitted)" },
+  { id: "cloud-slice", label: "Cloud · Slice", shortLabel: "☁ Slice", title: "Point cloud horizontal slice with floor & ceiling omitted" },
+  { id: "photo-walls", label: "Photo · Walls", shortLabel: "📷 Walls", title: "Photo-textured wall ribbons only (floor & ceiling omitted)" },
+  { id: "photo-cutaway", label: "Photo · Omit Ceiling", shortLabel: "📷 Photo", title: "Photo-textured interior with ceiling omitted" },
+];
+
 function EditToolbar({
   mode, onMode, canUndo, canRedo, onUndo, onRedo,
   isDirty, onSave, onReset, saveState, wallCount, roomCount, userCount, hiddenCount, cornerStep,
   gridStep, onGridStep, snapToVertices, onToggleSnapToVertices,
+  orthoMode, onOrthoMode, orthoLoading,
   onFit, dxfUrl, ifcUrl, ifcAllUrl, selectedFloor, saveName,
 }) {
   const toolBtn = (id, icon, label, title) => {
@@ -1579,6 +2003,27 @@ function EditToolbar({
         </button>
       </div>
 
+      <div style={{ width: 1, height: 18, background: "var(--border-hi)", margin: "0 2px" }} />
+
+      {/* Orthographic scan reference selector */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 11, color: "var(--text-3)", fontWeight: 600 }}>Scan</span>
+        <div className="s2f-seg">
+          {ORTHO_MODES.map(om => (
+            <button
+              key={om.id}
+              type="button"
+              className={orthoMode === om.id ? "active" : ""}
+              onClick={() => onOrthoMode(om.id)}
+              title={om.title}
+              style={{ padding: "3px 7px", fontSize: 11 }}
+            >
+              {om.shortLabel}{orthoLoading && orthoMode === om.id ? " ⏳" : ""}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div style={{ flex: 1 }} />
 
       <span className="s2f-mono" style={{ fontSize: 11, color: "var(--text-3)", display: "flex", gap: 6, alignItems: "center" }}>
@@ -1643,6 +2088,7 @@ const MODE_HINTS = {
   delete: "Click a wall to delete · Hold & drag to box-delete all walls in area · Esc to exit",
   hide: "Click a wall to hide/unhide · Hold & drag to box-hide all walls in area · Esc to exit",
   corner: "Click first wall → click second wall → both extend to their intersection  ·  Esc to cancel",
+  notch: "Hover & click a corner (or 2 walls) to notch/box it in  ·  Esc to exit",
 };
 const ADD_HINT_FREE = "Click to start wall  ·  T-snap / midpoint / vertex snap ON  ·  Alt: free snap";
 const ADD_HINT_PLACED = "🔒 Angle lock  ·  Type length (m) + Enter  ·  Shift: free angle  ·  Alt: free snap  ·  Esc: end chain";
@@ -1651,7 +2097,7 @@ const CORNER_HINT_STEP1 = "⌐ Select first wall to extend  ·  Esc to cancel";
 const CORNER_HINT_STEP2 = "⌐ Select second wall — both will extend to intersection  ·  Esc to cancel";
 const CORNER_HINT_NONE = "⌐ No valid intersection found for these walls";
 
-function ModeHint({ mode, addStep, freeDrawMode, cornerStep, cornerHasIntersection }) {
+function ModeHint({ mode, addStep, freeDrawMode, cornerStep, cornerHasIntersection, notchStep, notchSubMode }) {
   let text;
   if (mode === "add") {
     if (!addStep) text = ADD_HINT_FREE;
@@ -1662,11 +2108,22 @@ function ModeHint({ mode, addStep, freeDrawMode, cornerStep, cornerHasIntersecti
     else if (cornerStep === 1 && cornerHasIntersection) text = CORNER_HINT_STEP2;
     else if (cornerStep === 1) text = CORNER_HINT_NONE;
     else text = MODE_HINTS.corner;
+  } else if (mode === "notch") {
+    if (notchSubMode === "pillar") {
+      text = notchStep === 0
+        ? "┌─┐ Click wall where the pillar/bump-out starts  ·  Esc to exit"
+        : "┌─┐ Move cursor to size width × depth (or enter W/D) → click to place  ·  Esc to cancel";
+    } else {
+      text = notchStep === 0
+        ? "┐ Hover & click a corner (or 2 walls) to notch/box it in  ·  Esc to exit"
+        : "┐ Move cursor inside room to size L-corner (or enter W/D) → click to place  ·  Esc to cancel";
+    }
   } else {
     text = MODE_HINTS[mode] ?? "";
   }
   const isLocked = mode === "add" && addStep && !freeDrawMode;
   const isCorner = mode === "corner";
+  const isNotch = mode === "notch";
   const isNoInter = mode === "corner" && cornerStep === 1 && !cornerHasIntersection;
   return (
     <div style={{
@@ -1674,13 +2131,15 @@ function ModeHint({ mode, addStep, freeDrawMode, cornerStep, cornerHasIntersecti
       background: "rgba(var(--panel-rgb), 0.92)",
       border: isLocked ? "1px solid var(--sel)"
         : isCorner ? "1px solid var(--layer-window)"
-          : "1px solid var(--border-hi)",
+          : isNotch ? "1px solid var(--green)"
+            : "1px solid var(--border-hi)",
       borderRadius: "var(--radius-sm)", padding: "4px 12px",
       fontSize: 10.5,
       color: isNoInter ? "var(--red)"
         : isCorner ? "var(--layer-window)"
-          : isLocked ? "var(--sel)"
-            : mode === "select" ? "var(--text-3)" : "var(--amber)",
+          : isNotch ? "var(--green)"
+            : isLocked ? "var(--sel)"
+              : mode === "select" ? "var(--text-3)" : "var(--amber)",
       fontFamily: "Inter, sans-serif", whiteSpace: "nowrap", pointerEvents: "none",
       boxShadow: "0 4px 14px rgba(var(--shadow-rgb), 0.25)",
       transition: "all 0.15s",
@@ -1896,6 +2355,8 @@ export default function FloorPlanViewer({
   mpPoints = [],
   mpInventory = [],
   livePose = null,
+  fpvPoseStore = null,
+  visible = true,
   selectedMpItem = null,
   onSelectMpItem,
   hiddenMpLabels: sharedHiddenMpLabels,
@@ -2032,6 +2493,8 @@ export default function FloorPlanViewer({
     if (!Number.isNaN(fNum) && fNum !== selectedFloor) {
       addStepRef.current = null; setAddStep(null); snapRef.current = null;
       wallDragRef.current = null;
+      notchStateRef.current = null; setNotchStep(0);
+      notchPreviewRef.current = null; setNotchPreview(null);
       setSelectedWallIdx(null); selectedWallIdxRef.current = null;
       setHoveredHandle(null); hoveredHandleRef.current = null;
       setTypedWallLength(""); typedWallLengthRef.current = "";
@@ -2069,6 +2532,18 @@ export default function FloorPlanViewer({
   const [wallAngleLockMode, setWallAngleLockMode] = useState("45"); // '45' | '90' | 'free'
   const [typedWallLength, setTypedWallLength] = useState("");
 
+  // Orthographic scan reference underlay (point cloud / photo texture, floor & ceiling omitted)
+  const [orthoMode, setOrthoMode] = useState("off"); // 'off' | 'cloud-walls' | 'cloud-slice' | 'photo-walls' | 'photo-cutaway'
+  const [orthoOpacity, setOrthoOpacity] = useState(0.68);
+  const [orthoBottomCut, setOrthoBottomCut] = useState(0.30);
+  const [orthoTopCut, setOrthoTopCut] = useState(0.35);
+  const [orthoLoading, setOrthoLoading] = useState(false);
+  const [orthoError, setOrthoError] = useState(null);
+  const orthoDataRef = useRef(null);
+  const orthoModeRef = useRef("off");
+  const orthoOpacityRef = useRef(0.68);
+  const prevOrthoFloorRef = useRef(selectedFloor);
+
   // Refs for event handlers (avoid stale closures)
   const editModeRef = useRef("select");
   const editedLinesRef = useRef([]);
@@ -2091,6 +2566,23 @@ export default function FloorPlanViewer({
   const shiftRef = useRef(false);
   // freeDrawMode: true when Shift is held to override angle-lock
   const [freeDrawMode, setFreeDrawMode] = useState(false);
+
+  // Corner notch / wall pillar tool state
+  const [notchSubMode, setNotchSubMode] = useState("corner"); // 'corner' | 'pillar'
+  const [toolNotchThickness, setToolNotchThickness] = useState(0.12);
+  const [trimNotchCorner, setTrimNotchCorner] = useState(true);
+  const [notchFixedW, setNotchFixedW] = useState("");
+  const [notchFixedD, setNotchFixedD] = useState("");
+  const [notchStep, setNotchStep] = useState(0);
+  const [notchPreview, setNotchPreview] = useState(null);
+  const notchSubModeRef = useRef("corner");
+  const toolNotchThicknessRef = useRef(0.12);
+  const trimNotchCornerRef = useRef(true);
+  const notchFixedWRef = useRef("");
+  const notchFixedDRef = useRef("");
+  const notchStateRef = useRef(null);
+  const notchPreviewRef = useRef(null);
+  const lastNotchTargetRef = useRef(null);
 
   // Corner tool state: { firstIdx } when first wall is selected, null otherwise
   // cornerState ref for event handlers; cornerStateUi for React re-renders
@@ -2139,6 +2631,14 @@ export default function FloorPlanViewer({
   useEffect(() => { wallChainModeRef.current = wallChainMode; }, [wallChainMode]);
   useEffect(() => { wallAngleLockModeRef.current = wallAngleLockMode; }, [wallAngleLockMode]);
   useEffect(() => { typedWallLengthRef.current = typedWallLength; }, [typedWallLength]);
+  useEffect(() => { orthoModeRef.current = orthoMode; }, [orthoMode]);
+  useEffect(() => { orthoOpacityRef.current = orthoOpacity; }, [orthoOpacity]);
+  useEffect(() => { notchSubModeRef.current = notchSubMode; }, [notchSubMode]);
+  useEffect(() => { toolNotchThicknessRef.current = toolNotchThickness; }, [toolNotchThickness]);
+  useEffect(() => { trimNotchCornerRef.current = trimNotchCorner; }, [trimNotchCorner]);
+  useEffect(() => { notchFixedWRef.current = notchFixedW; }, [notchFixedW]);
+  useEffect(() => { notchFixedDRef.current = notchFixedD; }, [notchFixedD]);
+  useEffect(() => { notchPreviewRef.current = notchPreview; }, [notchPreview]);
   useEffect(() => { userOpeningsRef.current = userOpenings; }, [userOpenings]);
   useEffect(() => { hoverManualOpRef.current = hoverManualOp; }, [hoverManualOp]);
   useEffect(() => { hoverOpeningRef.current = hoverOp; }, [hoverOp]);
@@ -2168,6 +2668,16 @@ export default function FloorPlanViewer({
           showLabels: showRoomLabels,
         });
       }
+      const refImg = orthoDataRef.current;
+      if (refImg?.image && orthoModeRef.current !== "off") {
+        const { image, bounds } = refImg;
+        const [cx1, cy1] = toCanvas(bounds.x_min, bounds.z_min, cam);
+        const [cx2, cy2] = toCanvas(bounds.x_max, bounds.z_max, cam);
+        ctx.save();
+        ctx.globalAlpha = orthoOpacityRef.current;
+        ctx.drawImage(image, cx1, cy1, cx2 - cx1, cy2 - cy1);
+        ctx.restore();
+      }
       if (showWalls) {
         drawEditedWalls(
           ctx, editedLinesRef.current, cam,
@@ -2190,6 +2700,14 @@ export default function FloorPlanViewer({
           hoverIdx: hoveredLineRef.current,
           intersection: cornerStateRef.current ? cornerIntersection : null,
         }, TC);
+      }
+      // Corner notch / pillar preview
+      if (showWalls && editModeRef.current === "notch") {
+        drawNotchMode(
+          ctx, editedLinesRef.current, cam,
+          notchPreviewRef.current, TC,
+          toolNotchThicknessRef.current, trimNotchCornerRef.current,
+        );
       }
       // Draw auto-detected openings
       drawOpenings(ctx, openingsData?.openings, cam, TC, { showDoors, showWindows });
@@ -2229,6 +2747,8 @@ export default function FloorPlanViewer({
         mpSweeps,
         mpPoints,
         livePose,
+        fpvPose: fpvPoseStore?.current ?? null,
+        rooms: roomsData?.rooms ?? [],
         showEquip: showMpEquip,
         showSweeps: showMpSweeps,
         showAiHints: showMpAiHints,
@@ -2244,7 +2764,70 @@ export default function FloorPlanViewer({
         drawCompass(ctx, w, TC);
       }
     });
-  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, toolWallThickness, typedWallLength, selectedWallIdx, hoveredHandle, mpInstances, mpSweeps, mpPoints, livePose, showMpEquip, showMpSweeps, showMpAiHints, showMpPoints, showMpLive, hiddenMpLabels, selectedMpItem, selectedFloor, showWalls, showRooms, showRoomLabels, showDoors, showWindows, showGrid, showScale]);
+  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, toolWallThickness, typedWallLength, selectedWallIdx, hoveredHandle, notchPreview, toolNotchThickness, trimNotchCorner, orthoMode, orthoOpacity, mpInstances, mpSweeps, mpPoints, livePose, fpvPoseStore, showMpEquip, showMpSweeps, showMpAiHints, showMpPoints, showMpLive, hiddenMpLabels, selectedMpItem, selectedFloor, showWalls, showRooms, showRoomLabels, showDoors, showWindows, showGrid, showScale]);
+
+  // Load or render geo-referenced top-down ortho reference when settings change
+  useEffect(() => {
+    if (prevOrthoFloorRef.current !== selectedFloor) {
+      prevOrthoFloorRef.current = selectedFloor;
+      orthoDataRef.current = null;
+    }
+    if (orthoMode === "off") {
+      orthoDataRef.current = null;
+      setOrthoLoading(false);
+      setOrthoError(null);
+      scheduleDraw();
+      return;
+    }
+
+    let cancelled = false;
+    const ctrl = new AbortController();
+    setOrthoLoading(true);
+    setOrthoError(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        let res;
+        if (orthoMode === "cloud-walls" || orthoMode === "cloud-slice") {
+          res = await fetchPointCloudOrtho(apiBase, selectedFloor, {
+            mode: orthoMode === "cloud-walls" ? "walls" : "slice",
+            bottomCut: orthoBottomCut,
+            topCut: orthoTopCut,
+            signal: ctrl.signal,
+          });
+        } else {
+          res = await renderPhotoOrtho({
+            modelInfo: activeModelInfo,
+            floorIdx: selectedFloor,
+            mode: orthoMode,
+            bottomCut: orthoBottomCut,
+            topCut: orthoTopCut,
+          });
+        }
+        if (cancelled) return;
+        orthoDataRef.current = res;
+        setOrthoLoading(false);
+        setOrthoError(null);
+        scheduleDraw();
+      } catch (err) {
+        if (cancelled || err?.name === "AbortError") return;
+        orthoDataRef.current = null;
+        setOrthoLoading(false);
+        setOrthoError(err?.message || "Failed to load scan overlay");
+        scheduleDraw();
+      }
+    }, 120);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      ctrl.abort();
+    };
+  }, [orthoMode, selectedFloor, orthoBottomCut, orthoTopCut, apiBase, activeModelInfo, scheduleDraw]);
+
+  useEffect(() => {
+    scheduleDraw();
+  }, [orthoOpacity, scheduleDraw]);
 
   const isDirtyRef = useRef(false);
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
@@ -2274,6 +2857,8 @@ export default function FloorPlanViewer({
       setSelectedWallIdx(null); selectedWallIdxRef.current = null;
       setHoveredHandle(null); hoveredHandleRef.current = null;
       wallDragRef.current = null;
+      notchStateRef.current = null; setNotchStep(0);
+      notchPreviewRef.current = null; setNotchPreview(null);
       setTypedWallLength(""); typedWallLengthRef.current = "";
       setSelectedOpIdx(null); setHoverManualOp(-1); setHoverOp(null);
     }
@@ -2638,6 +3223,156 @@ export default function FloorPlanViewer({
     return null;
   }, []);
 
+  const commitNotchPreview = useCallback((preview) => {
+    if (!preview) return;
+    const lines = editedLinesRef.current;
+    const th = normalizeWallThickness(toolNotchThicknessRef.current);
+    const shouldTrim = trimNotchCornerRef.current;
+
+    if (preview.stage === "active-corner") {
+      const { idxA, idxB, ptA, ptB, ptInner, epA, epB } = preview;
+      pushHistory(lines);
+      const updated = shouldTrim
+        ? lines.map((line, i) => {
+          if (i === idxA) {
+            const newPts = [line.pts[0].slice(), line.pts[1].slice()];
+            newPts[epA] = ptA;
+            return { ...line, pts: newPts, source: line.source === "algo" ? "user" : line.source };
+          }
+          if (i === idxB) {
+            const newPts = [line.pts[0].slice(), line.pts[1].slice()];
+            newPts[epB] = ptB;
+            return { ...line, pts: newPts, source: line.source === "algo" ? "user" : line.source };
+          }
+          return line;
+        })
+        : [...lines];
+
+      const newLines = [
+        ...updated,
+        { pts: [ptA, ptInner], source: "user", thickness: th, thicknessSource: "edited" },
+        { pts: [ptInner, ptB], source: "user", thickness: th, thicknessSource: "edited" },
+      ];
+      setEditedLines(newLines);
+      editedLinesRef.current = newLines;
+      const synced = syncOpeningsWithWalls(newLines, userOpeningsRef.current);
+      if (synced.changed) {
+        userOpeningsRef.current = synced.openings;
+        setUserOpenings(synced.openings);
+        setOpeningsDirty(true);
+      }
+      setIsDirty(true);
+    } else if (preview.stage === "active-pillar") {
+      const { wallIdx, p1, p2, p1In, p2In, tMin, tMax } = preview;
+      const origLine = lines[wallIdx];
+      if (!origLine) return;
+      const m = getWallMetrics(origLine);
+      pushHistory(lines);
+
+      let newLines;
+      if (shouldTrim) {
+        const hasLeft = tMin * m.len >= 0.04;
+        const hasRight = (1 - tMax) * m.len >= 0.04;
+        const pieces = [];
+        if (hasLeft) {
+          pieces.push({
+            ...origLine,
+            pts: [[m.x1, m.z1], p1],
+            source: origLine.source === "algo" ? "user" : origLine.source,
+          });
+        }
+        if (hasRight) {
+          pieces.push({
+            ...origLine,
+            pts: [p2, [m.x2, m.z2]],
+            source: origLine.source === "algo" ? "user" : origLine.source,
+          });
+        }
+        newLines = [
+          ...lines.slice(0, wallIdx),
+          ...pieces,
+          ...lines.slice(wallIdx + 1),
+          { pts: [p1, p1In], source: "user", thickness: th, thicknessSource: "edited" },
+          { pts: [p1In, p2In], source: "user", thickness: th, thicknessSource: "edited" },
+          { pts: [p2In, p2], source: "user", thickness: th, thicknessSource: "edited" },
+        ];
+        if (userOpeningsRef.current.length > 0) {
+          const delta = pieces.length - 1;
+          const remapped = [];
+          for (const op of userOpeningsRef.current) {
+            if (op.wall_idx > wallIdx) {
+              remapped.push({ ...op, wall_idx: op.wall_idx + delta });
+            } else if (op.wall_idx < wallIdx) {
+              remapped.push(op);
+            } else {
+              const t = Math.max(0.02, Math.min(0.98, op.position_t ?? 0.5));
+              if (t <= tMin && hasLeft) {
+                remapped.push({ ...op, wall_idx: wallIdx, position_t: Math.max(0.02, Math.min(0.98, t / tMin)) });
+              } else if (t >= tMax && hasRight) {
+                remapped.push({
+                  ...op,
+                  wall_idx: wallIdx + (hasLeft ? 1 : 0),
+                  position_t: Math.max(0.02, Math.min(0.98, (t - tMax) / (1 - tMax))),
+                });
+              }
+            }
+          }
+          const synced = syncOpeningsWithWalls(newLines, remapped);
+          userOpeningsRef.current = synced.openings;
+          setUserOpenings(synced.openings);
+          setOpeningsDirty(true);
+        }
+      } else {
+        newLines = [
+          ...lines,
+          { pts: [p1, p1In], source: "user", thickness: th, thicknessSource: "edited" },
+          { pts: [p1In, p2In], source: "user", thickness: th, thicknessSource: "edited" },
+          { pts: [p2In, p2], source: "user", thickness: th, thicknessSource: "edited" },
+        ];
+      }
+      setEditedLines(newLines);
+      editedLinesRef.current = newLines;
+      setIsDirty(true);
+    }
+
+    notchStateRef.current = null;
+    setNotchStep(0);
+    notchPreviewRef.current = null;
+    setNotchPreview(null);
+    lastNotchTargetRef.current = null;
+    scheduleDraw();
+  }, [pushHistory, scheduleDraw]);
+
+  useEffect(() => {
+    if (editModeRef.current !== "notch" || !notchStateRef.current) return;
+    const st = notchStateRef.current;
+    const target = lastNotchTargetRef.current;
+    if (!target) return;
+    const fw = parseFloat(notchFixedW);
+    const fd = parseFloat(notchFixedD);
+    if (st.kind === "corner") {
+      const geom = computeCornerNotchGeometry(
+        editedLinesRef.current, st.idxA, st.idxB, st.cornerPt,
+        target[0], target[1], fw, fd, 0,
+      );
+      if (geom) {
+        const nextPrev = { stage: "active-corner", ...geom };
+        notchPreviewRef.current = nextPrev;
+        setNotchPreview(nextPrev);
+      }
+    } else if (st.kind === "pillar") {
+      const geom = computeWallPillarGeometry(
+        editedLinesRef.current, st.wallIdx, st.startPt,
+        target[0], target[1], fw, fd, 0,
+      );
+      if (geom) {
+        const nextPrev = { stage: "active-pillar", ...geom };
+        notchPreviewRef.current = nextPrev;
+        setNotchPreview(nextPrev);
+      }
+    }
+  }, [notchFixedW, notchFixedD]);
+
   // ── Openings helpers ────────────────────────────────────────────────────────
   const updateSelectedOp = useCallback((changes) => {
     if (selectedOpIdxRef.current === null) return;
@@ -2718,6 +3453,19 @@ export default function FloorPlanViewer({
 
   // redraw when data changes
   useEffect(() => { scheduleDraw(); }, [editedLines, roomsData, openingsData, userOpenings, selectedOpIdx, hoverManualOp, hoverOp, highlightedRoomId, selectedWallIdx, hoveredHandle, toolWallThickness, typedWallLength, gridStep, snapToVertices, scheduleDraw]);
+
+  useEffect(() => {
+    if (!fpvPoseStore) return undefined;
+    return fpvPoseStore.subscribe(() => {
+      if (canvasRef.current && canvasRef.current.offsetParent !== null) {
+        scheduleDraw();
+      }
+    });
+  }, [fpvPoseStore, scheduleDraw]);
+
+  useEffect(() => {
+    if (visible) scheduleDraw();
+  }, [visible, scheduleDraw]);
 
   // ── Center camera on selected room ──────────────────────────────────────────
   useEffect(() => {
@@ -2800,6 +3548,15 @@ export default function FloorPlanViewer({
         }
       }
 
+      if (editModeRef.current === "notch" && notchStateRef.current && e.key === "Enter") {
+        const prev = notchPreviewRef.current;
+        if (prev?.stage === "active-corner" || prev?.stage === "active-pillar") {
+          e.preventDefault();
+          commitNotchPreview(prev);
+          return;
+        }
+      }
+
       if (e.key === "Escape") {
         if (selectedOpIdxRef.current !== null) {
           setSelectedOpIdx(null); selectedOpIdxRef.current = null; scheduleDraw();
@@ -2810,6 +3567,11 @@ export default function FloorPlanViewer({
         } else if (editModeRef.current === "corner" && cornerStateRef.current) {
           cornerStateRef.current = null;
           setCornerStep(0); setCornerHoverIdx(-1); setCornerIntersection(null);
+          scheduleDraw();
+        } else if (editModeRef.current === "notch" && notchStateRef.current) {
+          notchStateRef.current = null; setNotchStep(0);
+          notchPreviewRef.current = null; setNotchPreview(null);
+          lastNotchTargetRef.current = null;
           scheduleDraw();
         } else if (selectedWallIdxRef.current !== null) {
           setSelectedWallIdx(null); selectedWallIdxRef.current = null;
@@ -2850,11 +3612,16 @@ export default function FloorPlanViewer({
         if (e.key === "d" || e.key === "D") { setEditMode("delete"); editModeRef.current = "delete"; scheduleDraw(); }
         if (e.key === "h" || e.key === "H") { setEditMode("hide"); editModeRef.current = "hide"; scheduleDraw(); }
         if (e.key === "c" || e.key === "C") { setEditMode("corner"); editModeRef.current = "corner"; scheduleDraw(); }
+        if (e.key === "n" || e.key === "N") {
+          setEditMode("notch"); editModeRef.current = "notch";
+          setSelectedOpIdx(null); setSelectedWallIdx(null);
+          scheduleDraw();
+        }
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [undo, redo, handleSave, deleteSelectedOp, deleteSelectedWall, nudgeSelectedWall, commitAddWallWithLength, scheduleDraw]);
+  }, [undo, redo, handleSave, deleteSelectedOp, deleteSelectedWall, nudgeSelectedWall, commitAddWallWithLength, commitNotchPreview, scheduleDraw]);
 
   // ── Helper: get world pos from mouse event ──────────────────────────────────
   const getWorldFromEvent = useCallback((e) => {
@@ -3124,6 +3891,64 @@ export default function FloorPlanViewer({
         } else {
           setCornerIntersection(null);
         }
+      } else if (mode === "notch") {
+        const snap = computeSnap(wx, wz, editedLinesRef.current, camRef.current, 14, effectiveGridStep, effectiveSnapEp);
+        snapRef.current = snap;
+        if (freeDrawMode) setFreeDrawMode(false);
+        const [sx, sz] = snap.pt;
+        const fw = parseFloat(notchFixedWRef.current);
+        const fd = parseFloat(notchFixedDRef.current);
+        const dimStep = effectiveGridStep > 0 && snap.kind !== "endpoint" && snap.kind !== "midpoint" && snap.kind !== "edge"
+          ? effectiveGridStep
+          : 0;
+
+        let nextPrev = null;
+        const st = notchStateRef.current;
+        if (notchSubModeRef.current === "corner") {
+          if (!st) {
+            const corner = findNearestWallCorner(wx, wz, editedLinesRef.current, camRef.current, 32);
+            if (corner) {
+              nextPrev = { stage: "hover-corner", ...corner };
+            } else {
+              const wIdx = findNearestLine(wx, wz, editedLinesRef.current, camRef.current, 12);
+              if (wIdx >= 0 && !editedLinesRef.current[wIdx].hidden) {
+                nextPrev = { stage: "hover-wall1", wallIdx: wIdx, pt: [wx, wz] };
+              }
+            }
+          } else if (st.kind === "wall1") {
+            const wIdx = findNearestLine(wx, wz, editedLinesRef.current, camRef.current, 12);
+            nextPrev = {
+              stage: "active-wall1",
+              idxA: st.idxA,
+              hoverIdx: wIdx >= 0 && wIdx !== st.idxA && !editedLinesRef.current[wIdx]?.hidden ? wIdx : -1,
+            };
+          } else if (st.kind === "corner") {
+            lastNotchTargetRef.current = [sx, sz];
+            const geom = computeCornerNotchGeometry(
+              editedLinesRef.current, st.idxA, st.idxB, st.cornerPt,
+              sx, sz, fw, fd, dimStep,
+            );
+            if (geom) nextPrev = { stage: "active-corner", ...geom };
+          }
+        } else {
+          if (!st) {
+            const wIdx = findNearestLine(wx, wz, editedLinesRef.current, camRef.current, 14);
+            if (wIdx >= 0 && !editedLinesRef.current[wIdx].hidden) {
+              const [[x1, z1], [x2, z2]] = editedLinesRef.current[wIdx].pts;
+              const proj = projectPointToSeg(wx, wz, x1, z1, x2, z2);
+              nextPrev = { stage: "hover-pillar", wallIdx: wIdx, startPt: [proj.x, proj.z] };
+            }
+          } else if (st.kind === "pillar") {
+            lastNotchTargetRef.current = [sx, sz];
+            const geom = computeWallPillarGeometry(
+              editedLinesRef.current, st.wallIdx, st.startPt,
+              sx, sz, fw, fd, dimStep,
+            );
+            if (geom) nextPrev = { stage: "active-pillar", ...geom };
+          }
+        }
+        notchPreviewRef.current = nextPrev;
+        setNotchPreview(nextPrev);
       } else {
         snapRef.current = computeSnap(wx, wz, editedLinesRef.current, camRef.current, 14, effectiveGridStep, effectiveSnapEp);
         if (freeDrawMode) setFreeDrawMode(false);
@@ -3622,7 +4447,75 @@ export default function FloorPlanViewer({
       }
       return;
     }
-  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, showMpPoints, hiddenMpLabels, onSelectMpItem, showWalls]);
+
+    if (mode === "notch") {
+      const prev = notchPreviewRef.current;
+      const st = notchStateRef.current;
+      const lines = editedLinesRef.current;
+      const fw = parseFloat(notchFixedWRef.current);
+      const fd = parseFloat(notchFixedDRef.current);
+
+      const seedCornerSizing = (idxA, idxB, cornerPt) => {
+        const lineA = lines[idxA], lineB = lines[idxB];
+        const farA = lineA.pts[1 - nearestEndpointIdx(lineA.pts, cornerPt)];
+        const farB = lineB.pts[1 - nearestEndpointIdx(lineB.pts, cornerPt)];
+        const lA = Math.max(0.1, Math.hypot(farA[0] - cornerPt[0], farA[1] - cornerPt[1]));
+        const lB = Math.max(0.1, Math.hypot(farB[0] - cornerPt[0], farB[1] - cornerPt[1]));
+        const defTarget = [
+          cornerPt[0] + ((farA[0] - cornerPt[0]) / lA) * 0.25 + ((farB[0] - cornerPt[0]) / lB) * 0.25,
+          cornerPt[1] + ((farA[1] - cornerPt[1]) / lA) * 0.25 + ((farB[1] - cornerPt[1]) / lB) * 0.25,
+        ];
+        lastNotchTargetRef.current = defTarget;
+        notchStateRef.current = { kind: "corner", idxA, idxB, cornerPt };
+        setNotchStep(1);
+        const geom = computeCornerNotchGeometry(lines, idxA, idxB, cornerPt, defTarget[0], defTarget[1], fw, fd, 0);
+        const nextPrev = geom ? { stage: "active-corner", ...geom } : null;
+        notchPreviewRef.current = nextPrev;
+        setNotchPreview(nextPrev);
+        scheduleDraw();
+      };
+
+      if (!st) {
+        if (prev?.stage === "hover-corner") {
+          seedCornerSizing(prev.idxA, prev.idxB, prev.cornerPt);
+        } else if (prev?.stage === "hover-wall1") {
+          notchStateRef.current = { kind: "wall1", idxA: prev.wallIdx };
+          setNotchStep(1);
+          const nextPrev = { stage: "active-wall1", idxA: prev.wallIdx, hoverIdx: -1 };
+          notchPreviewRef.current = nextPrev;
+          setNotchPreview(nextPrev);
+          scheduleDraw();
+        } else if (prev?.stage === "hover-pillar") {
+          notchStateRef.current = { kind: "pillar", wallIdx: prev.wallIdx, startPt: prev.startPt };
+          setNotchStep(1);
+          const [wx, wz] = getWorldFromEvent(e);
+          lastNotchTargetRef.current = [wx, wz];
+          scheduleDraw();
+        }
+        return;
+      }
+
+      if (st.kind === "wall1") {
+        if (prev?.hoverIdx >= 0 && prev.hoverIdx !== st.idxA) {
+          const [[ax1, az1], [ax2, az2]] = lines[st.idxA].pts;
+          const [[bx1, bz1], [bx2, bz2]] = lines[prev.hoverIdx].pts;
+          const hit = lineIntersect(ax1, az1, ax2, az2, bx1, bz1, bx2, bz2);
+          if (hit) {
+            const uAx = Math.abs(ax2 - ax1) / Math.max(0.01, Math.hypot(ax2 - ax1, az2 - az1));
+            const uBx = Math.abs(bx2 - bx1) / Math.max(0.01, Math.hypot(bx2 - bx1, bz2 - bz1));
+            if (uBx >= uAx) seedCornerSizing(st.idxA, prev.hoverIdx, hit.pt);
+            else seedCornerSizing(prev.hoverIdx, st.idxA, hit.pt);
+          }
+        }
+        return;
+      }
+
+      if (prev?.stage === "active-corner" || prev?.stage === "active-pillar") {
+        commitNotchPreview(prev);
+      }
+      return;
+    }
+  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, showMpPoints, hiddenMpLabels, onSelectMpItem, showWalls, commitNotchPreview]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -3673,6 +4566,9 @@ export default function FloorPlanViewer({
       setSelectedWallIdx(null); selectedWallIdxRef.current = null;
       setHoveredHandle(null); hoveredHandleRef.current = null;
       wallDragRef.current = null;
+      notchStateRef.current = null; setNotchStep(0);
+      notchPreviewRef.current = null; setNotchPreview(null);
+      lastNotchTargetRef.current = null;
       setTypedWallLength(""); typedWallLengthRef.current = "";
       scheduleDraw();
     }).catch(() => { });
@@ -3718,11 +4614,13 @@ export default function FloorPlanViewer({
               : "grab")
     : editMode === "add"
       ? "crosshair"
-      : editMode === "corner"
-        ? (cornerHoverIdx >= 0 ? "pointer" : "crosshair")
-        : (boxSelectRef.current?.moved
-          ? "crosshair"
-          : hoveredLine >= 0 ? "pointer" : "crosshair");
+      : editMode === "notch"
+        ? (notchPreview ? "crosshair" : "pointer")
+        : editMode === "corner"
+          ? (cornerHoverIdx >= 0 ? "pointer" : "crosshair")
+          : (boxSelectRef.current?.moved
+            ? "crosshair"
+            : hoveredLine >= 0 ? "pointer" : "crosshair");
 
   const dxfUrl = saveName
     ? `${apiBase}/download/${selectedFloor}`
@@ -3755,8 +4653,13 @@ export default function FloorPlanViewer({
           if (m !== "select" && m !== "add") {
             setSelectedWallIdx(null); selectedWallIdxRef.current = null;
           }
-          if (m === "add") {
+          if (m === "add" || m === "notch") {
             setSelectedOpIdx(null); selectedOpIdxRef.current = null;
+          }
+          if (m !== "notch") {
+            notchStateRef.current = null; setNotchStep(0);
+            notchPreviewRef.current = null; setNotchPreview(null);
+            lastNotchTargetRef.current = null;
           }
           if (m !== "corner") { cornerStateRef.current = null; setCornerStep(0); setCornerHoverIdx(-1); setCornerIntersection(null); }
           if (m !== "delete" && m !== "hide" && m !== "select") { hoveredLineRef.current = -1; setHoveredLine(-1); scheduleDraw(); }
@@ -3777,6 +4680,9 @@ export default function FloorPlanViewer({
         onGridStep={setGridStep}
         snapToVertices={snapToVertices}
         onToggleSnapToVertices={() => setSnapToVertices(v => !v)}
+        orthoMode={orthoMode}
+        onOrthoMode={setOrthoMode}
+        orthoLoading={orthoLoading}
         onFit={() => {
           const cvs = canvasRef.current;
           if (!cvs || !editedLinesRef.current.length) return;
@@ -3901,6 +4807,130 @@ export default function FloorPlanViewer({
               disabled={!addStep || !(parseFloat(typedWallLength) >= 0.05)}
               onClick={() => commitAddWallWithLength(parseFloat(typedWallLength))}
               title="Place wall segment along active direction with exact length"
+            >Place ↵</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Corner Notch / Wall Pillar Parameter Subbar ───────────────────────── */}
+      {editMode === "notch" && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "6px 14px",
+          background: "var(--surface-2)",
+          borderBottom: "1px solid var(--border)",
+          color: "var(--text-1)",
+          flexWrap: "wrap",
+          fontSize: 11,
+          zIndex: 5,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Shape:</span>
+            {[
+              ["corner", "┐ Corner Notch (2 Walls)"],
+              ["pillar", "┌─┐ Wall Pillar (1 Wall)"],
+            ].map(([val, lbl]) => (
+              <button
+                key={val}
+                type="button"
+                className={`rep-pill-btn${notchSubMode === val ? " active" : ""}`}
+                onClick={() => {
+                  setNotchSubMode(val);
+                  notchStateRef.current = null; setNotchStep(0);
+                  notchPreviewRef.current = null; setNotchPreview(null);
+                  lastNotchTargetRef.current = null;
+                  scheduleDraw();
+                }}
+              >{lbl}</button>
+            ))}
+          </div>
+
+          <span className="rep-sep" />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: "var(--text-2)", fontWeight: 600 }}>Thickness:</span>
+            {[0.08, 0.10, 0.12, 0.15, 0.20].map(t => (
+              <button
+                key={t}
+                type="button"
+                className={`rep-pill-btn${Math.abs(toolNotchThickness - t) < 0.004 ? " active" : ""}`}
+                onClick={() => setToolNotchThickness(t)}
+              >{Math.round(t * 100)}cm</button>
+            ))}
+            <DraftNumberInput
+              min={0.05}
+              max={0.60}
+              step={0.01}
+              decimals={2}
+              value={toolNotchThickness}
+              onCommit={(v) => setToolNotchThickness(v)}
+              style={{ width: 54 }}
+              title="Custom notch wall thickness (meters)"
+            />
+            <span style={{ color: "var(--text-3)" }}>m</span>
+          </div>
+
+          <span className="rep-sep" />
+
+          <button
+            type="button"
+            className={`rep-pill-btn${trimNotchCorner ? " active" : ""}`}
+            onClick={() => setTrimNotchCorner(v => !v)}
+            title="Trim the outer square corner walls so rooms form a clean stepped corner"
+          >✂ Trim outer corner: {trimNotchCorner ? "ON" : "OFF"}</button>
+
+          <span className="rep-sep" />
+
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <span style={{ color: "var(--text-2)", fontWeight: 600 }}>W:</span>
+            <input
+              type="number" min="0.04" max="10" step="0.01" placeholder="Auto"
+              className="rep-subbar-input" style={{ width: 58 }}
+              value={notchFixedW}
+              onChange={(e) => {
+                notchFixedWRef.current = e.target.value;
+                setNotchFixedW(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && notchPreviewRef.current && (notchPreviewRef.current.stage === "active-corner" || notchPreviewRef.current.stage === "active-pillar")) {
+                  commitNotchPreview(notchPreviewRef.current);
+                }
+              }}
+            />
+            <span style={{ color: "var(--text-2)", fontWeight: 600 }}>D:</span>
+            <input
+              type="number" min="0.04" max="10" step="0.01" placeholder="Auto"
+              className="rep-subbar-input" style={{ width: 58 }}
+              value={notchFixedD}
+              onChange={(e) => {
+                notchFixedDRef.current = e.target.value;
+                setNotchFixedD(e.target.value);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && notchPreviewRef.current && (notchPreviewRef.current.stage === "active-corner" || notchPreviewRef.current.stage === "active-pillar")) {
+                  commitNotchPreview(notchPreviewRef.current);
+                }
+              }}
+            />
+            <span style={{ color: "var(--text-3)" }}>m</span>
+            {(notchFixedW || notchFixedD) && (
+              <button
+                type="button"
+                className="rep-pill-btn"
+                onClick={() => {
+                  notchFixedWRef.current = ""; notchFixedDRef.current = "";
+                  setNotchFixedW(""); setNotchFixedD("");
+                }}
+              >Auto</button>
+            )}
+            <button
+              type="button"
+              className={`rep-pill-btn${notchStep === 1 && (notchPreview?.stage === "active-corner" || notchPreview?.stage === "active-pillar") ? " active" : ""}`}
+              disabled={!(notchStep === 1 && (notchPreview?.stage === "active-corner" || notchPreview?.stage === "active-pillar"))}
+              onClick={() => commitNotchPreview(notchPreviewRef.current)}
+              title="Commit corner notch / pillar (Enter)"
             >Place ↵</button>
           </div>
         </div>
@@ -4147,6 +5177,73 @@ export default function FloorPlanViewer({
               </div>
 
               <div className="s2f-layer">
+                <div className="s2f-mini-section" style={{ marginTop: 2 }}>
+                  <span>Scan Reference (Ortho)</span>
+                  {orthoLoading && (
+                    <span style={{ color: "var(--sel)", textTransform: "none", letterSpacing: 0 }}>
+                      Loading…
+                    </span>
+                  )}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, marginTop: 4 }}>
+                  {ORTHO_MODES.map((om) => (
+                    <button
+                      key={om.id}
+                      type="button"
+                      title={om.title}
+                      className={`rep-pill-btn${orthoMode === om.id ? " active" : ""}`}
+                      style={om.id === "off" ? { gridColumn: "1 / -1", textAlign: "center" } : { textAlign: "center" }}
+                      onClick={() => setOrthoMode(om.id)}
+                    >
+                      {om.label}
+                    </button>
+                  ))}
+                </div>
+                {orthoMode !== "off" && (
+                  <div className="s2f-layer-extra">
+                    <label className="s2f-color">
+                      <span>Opacity {Math.round(orthoOpacity * 100)}%</span>
+                      <input
+                        type="range"
+                        min="0.1"
+                        max="1.0"
+                        step="0.05"
+                        value={orthoOpacity}
+                        onChange={(e) => setOrthoOpacity(parseFloat(e.target.value))}
+                      />
+                    </label>
+                    <label className="s2f-color">
+                      <span>Floor cut {orthoBottomCut.toFixed(2)} m</span>
+                      <input
+                        type="range"
+                        min="0.05"
+                        max="1.20"
+                        step="0.05"
+                        value={orthoBottomCut}
+                        onChange={(e) => setOrthoBottomCut(parseFloat(e.target.value))}
+                      />
+                    </label>
+                    <label className="s2f-color">
+                      <span>Ceil cut {orthoTopCut.toFixed(2)} m</span>
+                      <input
+                        type="range"
+                        min="0.10"
+                        max="1.50"
+                        step="0.05"
+                        value={orthoTopCut}
+                        onChange={(e) => setOrthoTopCut(parseFloat(e.target.value))}
+                      />
+                    </label>
+                    {orthoError && (
+                      <div style={{ fontSize: 10.5, color: "var(--red)", lineHeight: 1.3 }}>
+                        {orthoError}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="s2f-layer">
                 <label className="s2f-layer-main">
                   <span className="s2f-layer-text">
                     <span className="s2f-layer-name">Equipment &amp; MEP</span>
@@ -4223,7 +5320,7 @@ export default function FloorPlanViewer({
               <div className="s2f-layer">
                 <label className="s2f-layer-main">
                   <span className="s2f-layer-text">
-                    <span className="s2f-layer-name">Live 360° camera</span>
+                    <span className="s2f-layer-name">Live / FPV camera</span>
                   </span>
                   <input
                     type="checkbox"
@@ -4768,6 +5865,8 @@ export default function FloorPlanViewer({
             freeDrawMode={freeDrawMode}
             cornerStep={cornerStep}
             cornerHasIntersection={cornerIntersection !== null}
+            notchStep={notchStep}
+            notchSubMode={notchSubMode}
           />
         )}
       </div>

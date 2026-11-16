@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PointCloud — fetches preprocessed binary from /api/pointcloud and renders
  * as a Three.js Points object (already Y-up and centred by preprocess.py).
  *
@@ -13,7 +13,6 @@
  */
 
 import { useEffect, useRef, useState, useMemo } from 'react'
-import { useThree } from '@react-three/fiber'
 import * as THREE   from 'three'
 
 /** Parse a CSS hex color string (#rrggbb or #rgb) to [r, g, b] in 0..1 range. */
@@ -92,17 +91,36 @@ function classifyAndColorPoints(posData, N, floorLevels, wallColor, floorColor) 
 const DEFAULT_WALL_COLOR  = '#f5f5f5'
 const DEFAULT_FLOOR_COLOR = '#2ed16b'
 
+let cachedCloud = null // { key, posData, N }
+
 export default function PointCloud({
   modelInfo, activeFloor, onLoadStart, onLoaded, reloadKey, highlightedRoom,
   wallColor = DEFAULT_WALL_COLOR, floorColor = DEFAULT_FLOOR_COLOR,
 }) {
   const [points, setPoints] = useState(null)
-  const { camera } = useThree()
   const mounted    = useRef(true)
+  const latestStyleRef = useRef({ floorLevels: modelInfo?.floor_levels, wallColor, floorColor })
+  latestStyleRef.current = { floorLevels: modelInfo?.floor_levels, wallColor, floorColor }
 
-  // Global 1% cloud
+  // Global cloud (cached across layer visibility toggles; never teleports the active camera)
   useEffect(() => {
     mounted.current = true
+    const cacheKey = reloadKey || 'live'
+    const buildGeo = (posData, N) => {
+      const { floorLevels, wallColor: wc, floorColor: fc } = latestStyleRef.current
+      const colData = classifyAndColorPoints(posData, N, floorLevels, wc, fc)
+      const geo = new THREE.BufferGeometry()
+      geo.setAttribute('position', new THREE.BufferAttribute(posData, 3))
+      geo.setAttribute('color',    new THREE.BufferAttribute(colData, 3))
+      return geo
+    }
+
+    if (cachedCloud && cachedCloud.key === cacheKey) {
+      setPoints(buildGeo(cachedCloud.posData, cachedCloud.N))
+      onLoaded?.(cachedCloud.N)
+      return () => { mounted.current = false }
+    }
+
     onLoadStart?.()
     const url = reloadKey ? `/api/pointcloud?v=${encodeURIComponent(reloadKey)}` : '/api/pointcloud'
     fetch(url)
@@ -112,21 +130,13 @@ export default function PointCloud({
         const view = new DataView(buf)
         const N    = view.getUint32(0, true)
         const posData = new Float32Array(buf, 4, N * 3)
-        const colData = classifyAndColorPoints(posData, N, modelInfo?.floor_levels, wallColor, floorColor)
-        const geo = new THREE.BufferGeometry()
-        geo.setAttribute('position', new THREE.BufferAttribute(posData, 3))
-        geo.setAttribute('color',    new THREE.BufferAttribute(colData, 3))
-        geo.computeBoundingBox()
-        const box = geo.boundingBox, centre = new THREE.Vector3(), size = new THREE.Vector3()
-        box.getCenter(centre); box.getSize(size)
-        const maxDim = Math.max(size.x, size.y, size.z)
-        camera.position.set(maxDim * 0.8, maxDim * 0.6, maxDim * 0.8)
-        camera.lookAt(centre); camera.updateProjectionMatrix()
-        setPoints(geo); onLoaded?.(N)
+        cachedCloud = { key: cacheKey, posData, N }
+        setPoints(buildGeo(posData, N))
+        onLoaded?.(N)
       })
       .catch(err => { console.warn('PointCloud load error:', err); onLoaded?.(0) })
     return () => { mounted.current = false }
-  }, [reloadKey, wallColor, floorColor]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!points) return

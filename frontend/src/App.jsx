@@ -1,4 +1,4 @@
-import { Suspense, useState, useEffect, useRef, useCallback } from "react";
+import { Suspense, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { Canvas } from "@react-three/fiber";
 import {
   OrbitControls,
@@ -64,6 +64,20 @@ export default function App() {
   const [pendingMpCommand, setPendingMpCommand] = useState(null);
   const [fpvMode, setFpvMode] = useState(false);
   const [fpvRequest, setFpvRequest] = useState(null);
+  const fpvPoseStore = useMemo(() => {
+    const listeners = new Set();
+    return {
+      current: null,
+      set(pose) {
+        this.current = pose;
+        listeners.forEach((fn) => fn(pose));
+      },
+      subscribe(fn) {
+        listeners.add(fn);
+        return () => listeners.delete(fn);
+      },
+    };
+  }, []);
   const [selectedWall, setSelectedWall] = useState(null);
   const [hoveredWall, setHoveredWall] = useState(null);
   const [hoveredRoom, setHoveredRoom] = useState(null);
@@ -591,6 +605,85 @@ export default function App() {
     }
   }, [activeFloor, computeFpvForMpItem, showBim3D, showTexture, showCloud, revealView]);
 
+  const handleDropToFloorEyeLevel = useCallback(() => {
+    const floorIdx = activeFloor === "all" || activeFloor == null ? 0 : Number(activeFloor);
+    const levels = modelInfo?.floor_levels ?? [];
+    const floorY = levels.length > floorIdx && levels[floorIdx] != null ? Number(levels[floorIdx]) : floorIdx * 2.8;
+    const nextFloorY = levels.length > floorIdx + 1 && levels[floorIdx + 1] != null ? Number(levels[floorIdx + 1]) : floorY + 2.8;
+    const storeyH = Math.max(2.2, nextFloorY - floorY);
+    const eyeY = floorY + Math.min(1.58, storeyH * 0.58);
+
+    const ctrl = controlsRef.current;
+    const cam = ctrl?.object;
+    const b = modelInfo?.bounds;
+
+    let eyeX = 0;
+    let eyeZ = 0;
+    let dirX = 0;
+    let dirZ = -1;
+
+    if (cam && ctrl) {
+      const dx = ctrl.target.x - cam.position.x;
+      const dz = ctrl.target.z - cam.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 1e-4) {
+        dirX = dx / d;
+        dirZ = dz / d;
+      }
+    }
+
+    const inHeightBand = cam && cam.position.y >= floorY + 0.3 && cam.position.y <= floorY + storeyH - 0.1;
+    const inBoundsXZ = cam && (!b || (
+      cam.position.x >= b.x_min - 2 && cam.position.x <= b.x_max + 2 &&
+      cam.position.z >= b.z_min - 2 && cam.position.z <= b.z_max + 2
+    ));
+
+    if (highlightedRoom) {
+      const rb = highlightedRoom.bbox;
+      eyeX = typeof highlightedRoom.centroid_x === "number" && !Number.isNaN(highlightedRoom.centroid_x)
+        ? highlightedRoom.centroid_x
+        : rb ? (rb.x_min + rb.x_max) / 2 : 0;
+      eyeZ = typeof highlightedRoom.centroid_z === "number" && !Number.isNaN(highlightedRoom.centroid_z)
+        ? highlightedRoom.centroid_z
+        : rb ? (rb.z_min + rb.z_max) / 2 : 0;
+    } else if (inHeightBand && inBoundsXZ) {
+      eyeX = cam.position.x;
+      eyeZ = cam.position.z;
+    } else {
+      const floorSweep = Object.values(mpSweeps || {}).find(
+        (sw) => sw?.s2f_position && (sw.floor_idx == null || Number(sw.floor_idx) === floorIdx)
+      );
+      const floorRoom = (roomsData?.rooms ?? []).find((rm) => rm?.centroid_x != null && rm?.centroid_z != null);
+      if (floorSweep) {
+        eyeX = floorSweep.s2f_position.x;
+        eyeZ = floorSweep.s2f_position.z;
+      } else if (floorRoom) {
+        eyeX = floorRoom.centroid_x;
+        eyeZ = floorRoom.centroid_z;
+      } else if (ctrl) {
+        eyeX = ctrl.target.x;
+        eyeZ = ctrl.target.z;
+        if (b) {
+          const padX = Math.min(1.0, (b.x_max - b.x_min) * 0.15);
+          const padZ = Math.min(1.0, (b.z_max - b.z_min) * 0.15);
+          eyeX = Math.max(b.x_min + padX, Math.min(b.x_max - padX, eyeX));
+          eyeZ = Math.max(b.z_min + padZ, Math.min(b.z_max - padZ, eyeZ));
+        }
+      }
+    }
+
+    if (!showBim3D && !showTexture && !showCloud) {
+      setShowBim3D(true);
+    }
+    setFpvMode(true);
+    setFpvRequest({
+      id: `eye-${Date.now()}`,
+      eyePos: { x: eyeX, y: eyeY, z: eyeZ },
+      lookAtPos: { x: eyeX + dirX * 2.5, y: eyeY, z: eyeZ + dirZ * 2.5 },
+      lockFpv: true,
+    });
+  }, [activeFloor, modelInfo, highlightedRoom, mpSweeps, roomsData, showBim3D, showTexture, showCloud]);
+
   const handleCycleFpvItem = useCallback((delta) => {
     const floorNum = activeFloor === "all" ? null : Number(activeFloor);
     const activeLabel =
@@ -750,6 +843,7 @@ export default function App() {
     setSelectedMpItem(null);
     setFpvMode(false);
     setFpvRequest(null);
+    fpvPoseStore.set(null);
     setMpLabelFilter(null);
     setHiddenMpLabels([]);
     setActiveFloor(0);
@@ -758,7 +852,7 @@ export default function App() {
     setSlots(["3d", "2d"]);
     setVisited(new Set(["3d"]));
     setSessionKey((k) => k + 1);
-  }, [handleSelectRoom]);
+  }, [handleSelectRoom, fpvPoseStore]);
 
   const openSave = (sv) => {
     resetSession();
@@ -942,11 +1036,12 @@ export default function App() {
 
         <CameraFocuser
           highlightedRoom={highlightedRoom}
-          modelInfo={modelInfo}
+          modelInfo={loadedSave ? (saveInfo || modelInfo) : modelInfo}
           controlsRef={controlsRef}
           activeFloor={activeFloor}
           fpvRequest={fpvRequest}
           fpvMode={fpvMode}
+          fpvPoseStore={fpvPoseStore}
         />
 
         <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
@@ -988,6 +1083,7 @@ export default function App() {
         points={mpPoints}
         inventory={mpInventory}
         livePose={liveMpPose}
+        fpvPoseStore={fpvPoseStore}
         selectedRoomId={selectedRoomId}
         onSelectRoom={handleSelectRoom}
         selectedMpItem={selectedMpItem}
@@ -1020,7 +1116,7 @@ export default function App() {
           <>
             <button
               className={hudBtn(false)}
-              onClick={() => (selectedMpItem ? handleEnterFpv(selectedMpItem) : setFpvMode(true))}
+              onClick={() => (selectedMpItem ? handleEnterFpv(selectedMpItem) : handleDropToFloorEyeLevel())}
               title="Walk / look around at eye level (WASD + mouse drag)"
             >
               First-person view
@@ -1047,6 +1143,13 @@ export default function App() {
             <button className={hudBtn(showTexture)} onClick={() => { setShowTexture((v) => { const n = !v; if (n && textureOpacity < 0.9) setTextureOpacity(1.0); return n; }); }}>Photo</button>
             <button className={hudBtn(showCloud)} onClick={() => setShowCloud((v) => !v)}>Cloud</button>
             <button className={hudBtn(showMpEquip)} onClick={() => setShowMpEquip((v) => !v)}>Markers</button>
+            <button
+              className={hudBtn(false)}
+              onClick={handleDropToFloorEyeLevel}
+              title="Snap camera to eye level on the current floor"
+            >
+              Eye level
+            </button>
             <span className="s2f-hud-hint">WASD · drag · scroll</span>
             <button className="s2f-hud-btn danger" onClick={() => setFpvMode(false)}>Exit</button>
           </>
@@ -1095,7 +1198,7 @@ export default function App() {
     />
   );
 
-  const render2D = () => (
+  const render2D = (visible) => (
     <FloorPlanViewer
       modelInfo={modelInfo}
       dataVersion={floorDataVersion}
@@ -1111,6 +1214,8 @@ export default function App() {
       mpPoints={mpPoints}
       mpInventory={mpInventory}
       livePose={liveMpPose}
+      fpvPoseStore={fpvPoseStore}
+      visible={visible}
       selectedMpItem={selectedMpItem}
       onSelectMpItem={onSelectMpItemShared}
       hiddenMpLabels={hiddenMpLabels}
@@ -1137,7 +1242,7 @@ export default function App() {
   );
 
   const renderView = (id, visible) =>
-    id === "3d" ? render3D(visible) : id === "360" ? render360() : id === "2d" ? render2D() : renderPlans();
+    id === "3d" ? render3D(visible) : id === "360" ? render360() : id === "2d" ? render2D(visible) : renderPlans();
 
   /* ---------- render ---------- */
   if (stage === "home") {
