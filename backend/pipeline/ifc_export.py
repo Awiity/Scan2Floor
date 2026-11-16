@@ -316,8 +316,13 @@ def _build_spaces(f, owner, body_sub, floor_idx: int, storey_placement,
 
 
 def _build_walls(f, owner, body_sub, floor_idx: int, storey_placement,
-                 lines: list, storey_height: float, wall_thickness: float):
-    """Returns list of dicts with wall metadata & IFC entities."""
+                 lines: list, storey_height: float, wall_thickness: float,
+                 thicknesses: Optional[list] = None):
+    """Returns list of dicts with wall metadata & IFC entities.
+
+    ``thicknesses`` (optional) gives a per-wall thickness in metres, same order
+    as ``lines``; walls without a valid entry use ``wall_thickness``.
+    """
     result = []
     for idx, seg in enumerate(lines):
         try:
@@ -331,6 +336,14 @@ def _build_walls(f, owner, body_sub, floor_idx: int, storey_placement,
         angle = math.atan2(y2 - y1, x2 - x1)
         cos_a, sin_a = math.cos(angle), math.sin(angle)
         mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        w_thick = wall_thickness
+        if thicknesses is not None and idx < len(thicknesses):
+            try:
+                tv = float(thicknesses[idx])
+                if 0.03 <= tv <= 1.5:
+                    w_thick = tv
+            except (TypeError, ValueError):
+                pass
 
         placement = _ifc_local_placement(
             f, storey_placement,
@@ -344,7 +357,7 @@ def _build_walls(f, owner, body_sub, floor_idx: int, storey_placement,
                 f.createIfcCartesianPoint([length / 2.0, 0.]),
                 f.createIfcDirection([1., 0.]),
             ),
-            length, wall_thickness,
+            length, w_thick,
         )
         solid = _ifc_extruded_area_solid(f, rect, storey_height)
         shape = f.createIfcShapeRepresentation(body_sub, "Body", "SweptSolid", [solid])
@@ -632,7 +645,8 @@ def _add_storey_elements(ifc_file, owner, body_sub,
                          floor_idx: int, storey, storey_placement,
                          lines: list, all_openings: list, rooms: list,
                          storey_height: float, wall_thickness: float,
-                         mp_instances: Optional[list[dict]] = None):
+                         mp_instances: Optional[list[dict]] = None,
+                         wall_thicknesses: Optional[list] = None):
     """
     Wires the exact tree hierarchy for FreeCAD & IFC viewers:
       IfcBuilding
@@ -658,7 +672,8 @@ def _add_storey_elements(ifc_file, owner, body_sub,
     spaces   = _build_spaces(f, owner, body_sub, floor_idx, storey_placement,
                              rooms, storey_height)
     walls    = _build_walls(f, owner, body_sub, floor_idx, storey_placement,
-                            lines, storey_height, wall_thickness)
+                            lines, storey_height, wall_thickness,
+                            thicknesses=wall_thicknesses)
     openings = _build_openings(f, owner, body_sub, floor_idx, storey_placement,
                                all_openings, walls, wall_thickness)
     mp_elems = _build_mp_equipment(
@@ -790,7 +805,9 @@ def export_floor_ifc(
         raise FileNotFoundError(f"Wall data not found: {wall_path}")
 
     with open(wall_path) as fh:
-        lines = json.load(fh).get("lines", [])
+        _wall_json = json.load(fh)
+    lines = _wall_json.get("lines", [])
+    wall_thicknesses = _wall_json.get("thicknesses")
 
     floor_levels: list = []
     if os.path.exists(info_path):
@@ -849,6 +866,7 @@ def export_floor_ifc(
         lines, all_openings, rooms,
         storey_height, wall_thickness,
         mp_instances=mp_instances,
+        wall_thicknesses=wall_thicknesses,
     )
 
     if output_path is None:
@@ -930,7 +948,9 @@ def export_all_floors_ifc(
         room_path    = os.path.join(processed_dir, f"rooms_floor_{floor_idx}.json")
 
         with open(wall_path) as fh:
-            lines = json.load(fh).get("lines", [])
+            _wall_json = json.load(fh)
+        lines = _wall_json.get("lines", [])
+        wall_thicknesses = _wall_json.get("thicknesses")
 
         all_openings: list = []
         if os.path.exists(opening_path):
@@ -950,6 +970,7 @@ def export_all_floors_ifc(
             lines, all_openings, rooms,
             storey_height, wall_thickness,
             mp_instances=mp_instances,
+            wall_thicknesses=wall_thicknesses,
         )
 
     ifc_file.createIfcRelAggregates(_guid(), owner, None, None, building, storeys)

@@ -579,6 +579,10 @@ class C2BWallParams(BaseModel):
     threshold_frac: float = 0.01
     wall_reach_frac: float = 0.70
     save_debug: bool = True
+    # Variable-thickness detector (v2)
+    default_thickness: float = 0.12   # thickness for walls scanned from one side only
+    min_support: float = 0.50         # min fraction of a wall backed by real scan points
+    min_isolated_m: float = 0.90      # drop short stubs that touch no other wall
     # Auto-run downstream phases
     detect_openings: bool = True
     detect_rooms: bool = True
@@ -596,8 +600,25 @@ def get_walls(floor_idx: int):
         return json.load(f)
 
 
+def _apply_thicknesses(existing: dict, payload) -> None:
+    """Store per-wall thicknesses when the editor sends them; otherwise drop stale ones."""
+    th = getattr(payload, "thicknesses", None)
+    n = len(payload.lines)
+    if isinstance(th, list) and len(th) == n:
+        existing["thicknesses"] = [round(float(x), 3) for x in th]
+        existing["thickness_source"] = ["edited"] * n
+    else:
+        # Line list changed without thickness info → old array no longer matches
+        old = existing.get("thicknesses")
+        if not (isinstance(old, list) and len(old) == n):
+            existing.pop("thicknesses", None)
+            existing.pop("thickness_source", None)
+
+
+
 class WallsEditPayload(BaseModel):
     lines: list          # list of [[x1, z1], [x2, z2]] pairs
+    thicknesses: Optional[list] = None   # optional per-wall thickness (m), same order as lines
     polygon_rooms: bool = True   # True = polygon mode; False = legacy rectangular
 
 
@@ -616,6 +637,7 @@ def save_walls_edit(floor_idx: int, payload: WallsEditPayload):
             existing = json.load(f)
 
     existing["lines"] = payload.lines
+    _apply_thicknesses(existing, payload)
     existing["source"] = f"user-edited ({len(payload.lines)} walls)"
 
     with open(wall_path, "w") as f:
@@ -1351,6 +1373,7 @@ def save_edit_walls(name: str, floor_idx: int, payload: WallsEditPayload):
         with open(wall_path) as f:
             existing = json.load(f)
     existing["lines"] = payload.lines
+    _apply_thicknesses(existing, payload)
     existing["source"] = f"user-edited ({len(payload.lines)} walls)"
     with open(wall_path, "w") as f:
         json.dump(existing, f)

@@ -1,31 +1,47 @@
 """
-wall_detection_c2b.py  —  Cloud2BIM-style wall detector for Scan2Floor
+wall_detection_c2b.py  —  variable-thickness wall detector for Scan2Floor (v2)
 
-Algorithm (ported from Cloud2BIM aux_functions.py / identify_walls())
-----------------------------------------------------------------------
-1. Load full-density wall-band points from wall_slice_floor_N.npy
-2. Extract a mid-height Z-slice (85–120 % of storey height, matching Cloud2BIM's
-   z_section_boundaries=[0.85, 1.2]).  This avoids floor/ceiling clutter.
-3. Project to the XZ horizontal plane and build a pixel-size 2-D density
-   histogram (grid_size metres per pixel).
-4. Threshold relative to local density → binary mask.
-5. Morphological closing (skimage/cv2) to bridge small scan gaps.
-6. cv2.findContours → cv2.approxPolyDP (Douglas-Peucker) → line segments.
-7. Convert pixel coordinates back to metres.
-8. Filter segments shorter than min_wall_m.
-9. Iterative collinear merge (reuses existing merge_collinear_segments).
-10. Group parallel segment pairs whose perpendicular distance ≤ max_wall_thickness.
-11. Compute wall axis (midline) and thickness from each pair group.
-12. Optional Manhattan snap (0° / 90°).
-13. Write walls_floor_N.json in the same format as wall_detection.py.
+Why a rewrite
+-------------
+The previous detector traced *contours* of a thresholded density image and then
+tried to pair the resulting segments.  A thin scanned wall face gives a contour
+that runs down one side and back up the other, so every wall appeared twice
+("walls inside walls"); any blob with a tall-enough point column became a wall
+(furniture, door leaves, noise); and thickness was never stored.
 
-Coordinate system reminder
---------------------------
-wall_slice_floor_N.npy is already in Y-up (Three.js) coords:
-    col 0 = x_yup   (east-west)
-    col 1 = y_yup   (height)
-    col 2 = z_yup   (north-south, negated)
-We work in the XZ horizontal plane (cols 0 and 2).
+Algorithm
+---------
+1. Load full-density wall slice (wall_slice_floor_N.npy) and make heights
+   relative to the *local* floor (floor heightmap), so ramps/uneven floors work.
+2. Height-zone evidence per XZ cell.  Three zones above the local floor:
+       LOW  0.15–0.90 m     MID  0.90–1.90 m     HIGH 2.00 m – ceiling-0.4 m
+   A cell is "wall" only if it has points in HIGH **and** in LOW or MID:
+       • wall            → points everywhere                      ✔
+       • window in wall  → LOW (sill wall) + HIGH (above window)  ✔
+       • open doorway    → only HIGH (lintel)                     ✘  (door ≠ wall)
+       • door leaf/arcs, furniture, cars, stairs, plants → no HIGH ✘
+3. Estimate dominant wall directions (gradient-orientation histogram) – not only
+   0°/90°, so rotated building wings are supported.
+4. Per direction: close scan holes along the direction, fuse the two faces of a
+   wall across its thickness, then open with a long line kernel so that only
+   elongated structures survive (this removes perpendicular stubs and blobs).
+5. Every surviving component is profiled along its length (perpendicular
+   extent + centre-line offset per cell) and split into pieces of constant
+   thickness / offset  →  walls with e.g. 10 cm on the first half and 25 cm on
+   the second.
+6. Pieces are checked for scan support and de-duplicated: pieces that lie inside
+   a better piece are removed, partial overlaps are trimmed.
+7. Collinear pieces separated by a door-sized gap are reported as
+   ``door_gaps`` (room detection uses them to keep rooms closed).
+
+Output (walls_floor_N.json) is backward compatible:
+    lines               [[ [x1,z1], [x2,z2] ], …]   centre-lines, metres
+    thicknesses         [t, …]                      same order as ``lines``
+    thickness_source    ["measured"|"default", …]   same order
+    door_gaps           [[ [x1,z1], [x2,z2] ], …]
+
+Coordinate system: wall_slice is Y-up (Three.js): col0 = x, col1 = height,
+col2 = z.  Everything here happens in the XZ plane.
 """
 
 from __future__ import annotations
@@ -44,6 +60,7 @@ try:
 except ImportError:
     _GPU = False
 
+
 def _json_default(obj):
     if isinstance(obj, (np.floating, np.integer)):
         return obj.item()
@@ -51,246 +68,479 @@ def _json_default(obj):
         return obj.tolist()
     raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
-# ── Geometry helpers (previously in wall_detection.py) ────────────────────
-
-def snap_lines_to_manhattan(lines, angle_tolerance: float = 10.0):
-    """Snap near-axis lines to exact 0° / 90°."""
-    import numpy as np
-    snapped = []
-    tol = np.radians(angle_tolerance)
-    for line in lines:
-        x1, y1, x2, y2 = line[0]
-        ang = abs(np.arctan2(y2 - y1, x2 - x1))
-        if ang < tol or abs(ang - np.pi) < tol:          # horizontal
-            avg_y = int(round((y1 + y2) / 2))
-            snapped.append([[x1, avg_y, x2, avg_y]])
-        elif abs(ang - np.pi / 2) < tol:                 # vertical
-            avg_x = int(round((x1 + x2) / 2))
-            snapped.append([[avg_x, y1, avg_x, y2]])
-        else:
-            snapped.append([[x1, y1, x2, y2]])
-    return np.array(snapped) if snapped else np.empty((0, 1, 4), dtype=np.int32)
-
-
-def merge_collinear_segments(
-    lines_px: list,
-    gap_px: int = 15,
-    angle_tol_deg: float = 4.0,
-    max_perp_px: float = 2.5,
-) -> list:
-    """Iteratively merge near-collinear segments that are close together."""
-    import numpy as np
-    if not lines_px:
-        return lines_px
-    tol_rad = np.radians(angle_tol_deg)
-    merged = list(lines_px)
-    changed = True
-    while changed:
-        changed = False
-        used = [False] * len(merged)
-        result = []
-        for i in range(len(merged)):
-            if used[i]:
-                continue
-            x1, y1, x2, y2 = merged[i][0]
-            ang_i = np.arctan2(y2 - y1, x2 - x1)
-            group = [(x1, y1), (x2, y2)]
-            for j in range(i + 1, len(merged)):
-                if used[j]:
-                    continue
-                x3, y3, x4, y4 = merged[j][0]
-                ang_j = np.arctan2(y4 - y3, x4 - x3)
-                da = abs(ang_i - ang_j) % np.pi
-                if da > tol_rad and abs(da - np.pi) > tol_rad:
-                    continue
-                seg_len = max(1e-9, ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5)
-                mx, mz = (x3 + x4) / 2.0, (y3 + y4) / 2.0
-                perp = abs((y2 - y1) * mx - (x2 - x1) * mz + x2 * y1 - y2 * x1) / seg_len
-                if perp > max_perp_px:
-                    continue
-                ux, uy = (x2 - x1) / seg_len, (y2 - y1) / seg_len
-                proj_i0, proj_i1 = x1 * ux + y1 * uy, x2 * ux + y2 * uy
-                proj_j0, proj_j1 = x3 * ux + y3 * uy, x4 * ux + y4 * uy
-                lo_i, hi_i = min(proj_i0, proj_i1), max(proj_i0, proj_i1)
-                lo_j, hi_j = min(proj_j0, proj_j1), max(proj_j0, proj_j1)
-                if max(lo_j - hi_i, lo_i - hi_j) > gap_px:
-                    continue
-                group.extend([(x3, y3), (x4, y4)])
-                used[j] = True
-                changed = True
-            if len(group) > 2:
-                pts_arr = np.array(group, dtype=float)
-                mean = pts_arr.mean(axis=0)
-                _, _, vt = np.linalg.svd(pts_arr - mean, full_matrices=False)
-                direction = vt[0]
-                projs = (pts_arr - mean) @ direction
-                p_lo = mean + projs.min() * direction
-                p_hi = mean + projs.max() * direction
-                result.append([[int(round(p_lo[0])), int(round(p_lo[1])),
-                                int(round(p_hi[0])), int(round(p_hi[1]))]])
-            else:
-                result.append([[x1, y1, x2, y2]])
-        merged = result
-    return merged
-
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Geometry helpers (matching Cloud2BIM aux_functions.py)
+# Small helpers
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _dist(p1, p2) -> float:
     return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
 
 
-def _dist_point_to_line(point, ls, le):
-    """Perpendicular distance from *point* to the infinite line through ls→le."""
-    lv = (le[0] - ls[0], le[1] - ls[1])
-    ll = math.hypot(*lv)
-    if ll < 1e-12:
-        return _dist(point, ls)
-    pv = (point[0] - ls[0], point[1] - ls[1])
-    cross = lv[0] * pv[1] - lv[1] * pv[0]
-    return abs(cross) / ll
+def _line_kernel(length_px: int, theta: float) -> np.ndarray:
+    """1-px wide line kernel of ~length_px at angle theta (radians, image coords)."""
+    n = max(3, int(length_px) | 1)
+    c = n // 2
+    k = np.zeros((n, n), np.uint8)
+    dx, dy = math.cos(theta) * c, math.sin(theta) * c
+    cv2.line(k, (int(round(c - dx)), int(round(c - dy))),
+             (int(round(c + dx)), int(round(c + dy))), 1, 1)
+    return k
 
 
-def _segments_angle_ok(s1, s2, tol_deg: float = 5.0) -> bool:
-    """True if the two segments are approximately parallel (within tol_deg)."""
-    dx1, dy1 = s1[1][0] - s1[0][0], s1[1][1] - s1[0][1]
-    dx2, dy2 = s2[1][0] - s2[0][0], s2[1][1] - s2[0][1]
-    m1 = math.hypot(dx1, dy1)
-    m2 = math.hypot(dx2, dy2)
-    if m1 < 1e-12 or m2 < 1e-12:
+def _grid_count(px, py, mask, width, height):
+    flat = py[mask].astype(np.int64) * width + px[mask].astype(np.int64)
+    return np.bincount(flat, minlength=height * width).reshape(height, width)
+
+
+def _local_floor(pts, floor_y, info, processed_dir, floor_idx):
+    """Per-point local floor elevation (falls back to the global floor level)."""
+    hm_path = os.path.join(processed_dir, f"floor_heightmap_{floor_idx}.npy")
+    hm_meta = info.get("wall_slices", {}).get(f"floor_heightmap_{floor_idx}")
+    if os.path.exists(hm_path) and hm_meta:
+        hm = np.load(hm_path)
+        cell = float(hm_meta["cell_size"])
+        rows, cols = int(hm_meta["rows"]), int(hm_meta["cols"])
+        cx = np.clip(np.floor((pts[:, 0] - float(hm_meta["x_min"])) / cell).astype(np.int32), 0, cols - 1)
+        cz = np.clip(np.floor((pts[:, 2] - float(hm_meta["z_min"])) / cell).astype(np.int32), 0, rows - 1)
+        return hm[cz, cx].astype(np.float32)
+    print(f"[c2b floor {floor_idx}] WARNING: no heightmap — using global floor level")
+    return np.full(len(pts), floor_y, np.float32)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Step 2 — wall evidence from height zones
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _wall_evidence(pts, rel_h, storey_h, gs, x_min, z_min, width, height, cfg):
+    low = (cfg["low_lo"], cfg["low_hi"])
+    mid = (cfg["low_hi"], cfg["mid_hi"])
+    hi_lo = cfg["high_lo"]
+    hi_hi = min(storey_h - cfg["ceiling_margin"], cfg["high_hi_max"])
+    hi_hi = max(hi_hi, hi_lo + 0.3)
+
+    px = np.clip(np.floor((pts[:, 0] - x_min) / gs).astype(np.int32), 0, width - 1)
+    py = np.clip(np.floor((pts[:, 2] - z_min) / gs).astype(np.int32), 0, height - 1)
+
+    def zone(lo, hi):
+        m = (rel_h >= lo) & (rel_h < hi)
+        return _grid_count(px, py, m, width, height).astype(np.float32)
+
+    c_low, c_mid, c_high = zone(*low), zone(*mid), zone(hi_lo, hi_hi)
+
+    k3 = np.ones((3, 3), np.uint8)
+    k5 = np.ones((5, 5), np.uint8)
+    p_low = cv2.dilate((c_low > 0).astype(np.uint8), k3)
+    p_mid = cv2.dilate((c_mid > 0).astype(np.uint8), k3)
+    p_high = cv2.dilate((c_high > 0).astype(np.uint8), k5)
+
+    wall = (p_high & (p_low | p_mid)).astype(np.uint8)
+
+    # Drop speckle
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(wall, connectivity=8)
+    small = np.where(stats[:, cv2.CC_STAT_AREA] < cfg["min_blob_px"])[0]
+    if len(small):
+        wall[np.isin(lab, small[small != 0])] = 0
+
+    density = (c_low + c_mid + c_high)
+    return wall, density, (c_low > 0), (c_mid > 0), (c_high > 0), (low, mid, (hi_lo, hi_hi))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Step 3 — dominant directions
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _dominant_directions(wall: np.ndarray, gs: float, snap_deg: float, max_dirs: int = 5) -> list[float]:
+    """
+    Dominant wall directions (radians in [0, pi)).
+
+    Long Hough segments vote for their angle (weighted by length) in a 1 deg
+    histogram.  Local maxima that carry enough wall length become directions, so
+    rotated building wings (or slightly drifted scans) get their own pass while
+    wobble around a main axis does not.  0 deg / 90 deg always come as a pair.
+    """
+    min_len = max(10, int(round(1.2 / gs)))
+    segs = cv2.HoughLinesP(wall * 255, 1, math.radians(0.5), threshold=int(min_len * 0.8),
+                           minLineLength=min_len, maxLineGap=max(2, int(round(0.15 / gs))))
+    if segs is None or len(segs) == 0:
+        return [0.0, math.pi / 2]
+    hist = np.zeros(180)
+    for x1, y1, x2, y2 in np.asarray(segs).reshape(-1, 4):   # OpenCV 4: (N,1,4), OpenCV 5: (N,4)
+        a = math.degrees(math.atan2(y2 - y1, x2 - x1)) % 180.0
+        hist[int(round(a)) % 180] += math.hypot(x2 - x1, y2 - y1) * gs      # metres
+    peaks = []
+    for i in range(180):
+        w = [(i + k) % 180 for k in (-2, -1, 1, 2)]
+        if hist[i] > 0 and all(hist[i] >= hist[j] for j in w):
+            peaks.append((hist[i], float(i)))
+    peaks.sort(reverse=True)
+    top = peaks[0][0] if peaks else 0.0
+    chosen: list[float] = []
+    for wgt, a in peaks:
+        if wgt < max(0.04 * top, 3.0) and chosen:
+            break
+        if all(min(abs(a - c), 180 - abs(a - c)) > 2.5 for c in chosen):
+            chosen.append(a)
+        if len(chosen) >= max_dirs:
+            break
+    if not chosen:
+        chosen = [0.0]
+
+    def near(a, b, tol=6.0):
+        return min(abs(a - b), 180 - abs(a - b)) <= tol
+
+    # snap near-axis directions
+    out: list[float] = []
+    for a in chosen:
+        for ax in (0.0, 90.0, 180.0):
+            if abs(a - ax) <= snap_deg:
+                a = ax % 180.0
+        out.append(a % 180.0)
+    # axis pair: if one of 0/90 is present, make sure the other is as well
+    has0 = any(near(a, 0.0, 6.0) for a in out)
+    has90 = any(near(a, 90.0, 6.0) for a in out)
+    if has0 and not has90:
+        out.append(90.0)
+    if has90 and not has0:
+        out.append(0.0)
+    return sorted(set(round(math.radians(a), 6) for a in out))
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Steps 4–5 — per-direction extraction + variable thickness split
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _split_profile(t, c, tol_t, tol_c, hold, min_len):
+    """
+    Split a per-cell (thickness, centre offset) profile into constant pieces.
+    t, c : 1-D float arrays (pixels).  Returns list of (i0, i1) index ranges (i1 exclusive).
+    """
+    n = len(t)
+    if n == 0:
+        return []
+    ref_n = max(3, hold)
+    starts = [0]
+    i = 0
+    while i < n:
+        s = starts[-1]
+        ref_t = np.median(t[s:min(n, s + ref_n)])
+        ref_c = np.median(c[s:min(n, s + ref_n)])
+        # advance while profile matches the current piece
+        j = max(i, s)
+        brk = None
+        while j < n:
+            dev = abs(t[j] - ref_t) > tol_t or abs(c[j] - ref_c) > tol_c
+            if dev and j + hold <= n:
+                seg_t = t[j:j + hold]
+                seg_c = c[j:j + hold]
+                med_t, med_c = np.median(seg_t), np.median(seg_c)
+                sustained = abs(med_t - ref_t) > tol_t or abs(med_c - ref_c) > tol_c
+                # the deviating run must itself be stable, otherwise it is noise
+                stable = (np.ptp(seg_t) <= 1.5 * tol_t + 1) and (np.ptp(seg_c) <= 1.5 * tol_c + 1)
+                if sustained and stable:
+                    brk = j
+                    break
+            j += 1
+        if brk is None:
+            break
+        starts.append(brk)
+        i = brk + 1
+    bounds = starts + [n]
+    pieces = [(bounds[k], bounds[k + 1]) for k in range(len(starts))]
+
+    # absorb pieces shorter than min_len into the longer neighbour
+    changed = True
+    while changed and len(pieces) > 1:
+        changed = False
+        for k, (a, b) in enumerate(pieces):
+            if b - a < min_len:
+                left = pieces[k - 1] if k > 0 else None
+                right = pieces[k + 1] if k + 1 < len(pieces) else None
+                if left is None:
+                    pieces[k + 1] = (a, right[1])
+                elif right is None or (left[1] - left[0]) >= (right[1] - right[0]):
+                    pieces[k - 1] = (left[0], b)
+                else:
+                    pieces[k + 1] = (a, right[1])
+                pieces.pop(k)
+                changed = True
+                break
+    return pieces
+
+
+def _extract_direction(wall, theta, gs, x_min, z_min, cfg):
+    """Extract (variable-thickness) wall pieces whose direction is *theta*."""
+    c_, s_ = math.cos(theta), math.sin(theta)
+
+    gap_px = max(3, int(round(cfg["scan_gap_m"] / gs)))
+    fuse_px = max(3, int(round(cfg["face_fuse_m"] / gs)))
+    run_px = max(5, int(round(cfg["min_run_m"] / gs)))
+
+    k_along = _line_kernel(gap_px, theta)
+    k_perp = _line_kernel(fuse_px, theta + math.pi / 2)
+    k_run = _line_kernel(run_px, theta)
+
+    m = cv2.morphologyEx(wall, cv2.MORPH_CLOSE, k_along)
+    m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k_perp)
+    m = cv2.morphologyEx(m, cv2.MORPH_OPEN, k_run)
+
+    n_lab, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+    pieces = []
+    tol_t = max(1.0, cfg["thickness_tol_m"] / gs)
+    tol_c = max(1.0, cfg["offset_tol_m"] / gs)
+    hold = max(3, int(round(cfg["min_piece_m"] * 0.5 / gs)))
+    min_piece_px = int(round(cfg["min_piece_m"] / gs))
+
+    for li in range(1, n_lab):
+        x0, y0, w, h, area = stats[li]
+        if max(w, h) < run_px:
+            continue
+        sub = (lab[y0:y0 + h, x0:x0 + w] == li)
+        ys, xs = np.nonzero(sub)
+        xs = xs + x0
+        ys = ys + y0
+        u = xs * c_ + ys * s_
+        v = -xs * s_ + ys * c_
+        ui = np.floor(u).astype(np.int64)
+        u_min, u_max = int(ui.min()), int(ui.max())
+        nb = u_max - u_min + 1
+        if nb * gs < cfg["min_wall_m"]:
+            continue
+        idx = ui - u_min
+        v_lo = np.full(nb, np.inf)
+        v_hi = np.full(nb, -np.inf)
+        np.minimum.at(v_lo, idx, v)
+        np.maximum.at(v_hi, idx, v)
+        # raw wall support per u-cell (before gap filling)
+        raw = wall[ys, xs] > 0
+        sup = np.zeros(nb, bool)
+        sup[idx[raw]] = True
+
+        have = np.isfinite(v_lo)
+        if have.sum() < 3:
+            continue
+        # interpolate cells with no pixel (diagonal stair-stepping)
+        xi = np.arange(nb)
+        v_lo = np.interp(xi, xi[have], v_lo[have])
+        v_hi = np.interp(xi, xi[have], v_hi[have])
+        t = v_hi - v_lo + 1.0
+        cen = 0.5 * (v_hi + v_lo)
+
+        # light median filtering against rasterisation jitter
+        k = 5
+        if nb > k:
+            pad = k // 2
+            tp = np.pad(t, pad, mode="edge")
+            cp_ = np.pad(cen, pad, mode="edge")
+            t = np.array([np.median(tp[i:i + k]) for i in range(nb)])
+            cen = np.array([np.median(cp_[i:i + k]) for i in range(nb)])
+
+        for a, b in _split_profile(t, cen, tol_t, tol_c, hold, min_piece_px):
+            length_m = (b - a) * gs
+            if length_m < cfg["min_wall_m"]:
+                continue
+            support = float(sup[a:b].mean())
+            t_px = float(np.median(t[a:b]))
+            c_px = float(np.median(cen[a:b]))
+            # piece end-points (pixel space → metres)
+            ua, ub = u_min + a, u_min + b
+            p0 = (ua * c_ - c_px * s_, ua * s_ + c_px * c_)
+            p1 = (ub * c_ - c_px * s_, ub * s_ + c_px * c_)
+            thick_raw = t_px * gs - cfg["thickness_bias_m"]
+            pieces.append({
+                "p0": [p0[0] * gs + x_min, p0[1] * gs + z_min],
+                "p1": [p1[0] * gs + x_min, p1[1] * gs + z_min],
+                "thick_raw": thick_raw,
+                "support": support,
+                "theta": theta,
+            })
+    return pieces
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Step 6 — de-duplication
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _piece_len(p):
+    return _dist(p["p0"], p["p1"])
+
+
+def _in_rect(pt, a, half_w, extra):
+    """Is point pt inside oriented rectangle of wall a (inflated by extra)?"""
+    ax, az = a["p0"]
+    dx, dz = a["p1"][0] - ax, a["p1"][1] - az
+    L = math.hypot(dx, dz)
+    if L < 1e-9:
         return False
-    cos_a = (dx1 * dx2 + dy1 * dy2) / (m1 * m2)
-    cos_a = max(-1.0, min(1.0, cos_a))
-    angle = math.degrees(math.acos(cos_a))
-    return angle < tol_deg or abs(angle - 180.0) < tol_deg
+    ux, uz = dx / L, dz / L
+    rx, rz = pt[0] - ax, pt[1] - az
+    u = rx * ux + rz * uz
+    v = -rx * uz + rz * ux
+    return (-extra <= u <= L + extra) and (abs(v) <= half_w + extra)
 
 
-def _x_overlap(s1, s2, rotate_angle: float) -> float:
-    """Return the 1-D overlap length after rotating both segments to the X-axis."""
-    def rot(p, a):
-        ca, sa = math.cos(a), math.sin(a)
-        return ca * p[0] + sa * p[1]
-
-    proj = [rot(s1[0], -rotate_angle), rot(s1[1], -rotate_angle),
-            rot(s2[0], -rotate_angle), rot(s2[1], -rotate_angle)]
-    lo1, hi1 = min(proj[0], proj[1]), max(proj[0], proj[1])
-    lo2, hi2 = min(proj[2], proj[3]), max(proj[2], proj[3])
-    return min(hi1, hi2) - max(lo1, lo2)
+def _ang_diff(a, b):
+    d = abs(a - b) % math.pi
+    return min(d, math.pi - d)
 
 
-def _group_parallel_segments(
-    segments: list,
-    max_wall_thickness: float,
-    angle_tol_deg: float = 5.0,
-) -> tuple[list, list]:
-    """
-    Group segment pairs that are parallel AND within max_wall_thickness of each other.
-
-    Returns
-    -------
-    groups : list of list-of-segments   (only groups with ≥ 2 segments)
-    singles: list of segments            (unpaired — outer-wall candidates)
-    """
-    segs = list(segments)  # work on a copy
-    groups: list = []
-    singles: list = []
-
-    while segs:
-        cur = segs.pop(0)
-        group = [cur]
-        i = 0
-        while i < len(segs):
-            other = segs[i]
-            if not _segments_angle_ok(cur, other, angle_tol_deg):
-                i += 1
+def _dedupe(pieces, cfg):
+    """Remove pieces lying inside better pieces, trim parallel overlaps."""
+    # priority: scan support × length (long, well supported walls win)
+    order = sorted(pieces, key=lambda p: _piece_len(p) * (0.5 + p["support"]) * (1.0 + p["thick"]), reverse=True)
+    kept: list[dict] = []
+    par_tol = math.radians(12.0)
+    step = 0.03
+    for p in order:
+        L = _piece_len(p)
+        ux, uz = (p["p1"][0] - p["p0"][0]) / L, (p["p1"][1] - p["p0"][1]) / L
+        n_s = max(2, int(L / step))
+        covered = np.zeros(n_s, bool)
+        for a in kept:
+            if _ang_diff(a["theta"], p["theta"]) > par_tol:
                 continue
-            # Check that endpoints are close enough
-            min_ep_dist = min(
-                _dist(p1, p2)
-                for p1 in cur
-                for p2 in other
-            )
-            if min_ep_dist > max_wall_thickness:
-                i += 1
-                continue
-            # Check there is some 1-D overlap along the shared axis
-            ang = math.atan2(cur[1][1] - cur[0][1], cur[1][0] - cur[0][0])
-            if _x_overlap(cur, other, ang) >= 0:
-                group.append(other)
-                segs.pop(i)
-            else:
-                i += 1
-
-        if len(group) >= 2:
-            groups.append(group)
+            hw = max(a["thick"], p["thick"]) / 2.0 + cfg["dedupe_dist_m"]
+            for i in range(n_s):
+                if covered[i]:
+                    continue
+                t = (i + 0.5) / n_s
+                pt = (p["p0"][0] + ux * L * t, p["p0"][1] + uz * L * t)
+                if _in_rect(pt, a, hw, 0.0):
+                    covered[i] = True
+        if covered.mean() >= 0.85:
+            continue
+        if covered.any():
+            # keep uncovered runs that are long enough
+            i = 0
+            while i < n_s:
+                if covered[i]:
+                    i += 1
+                    continue
+                j = i
+                while j < n_s and not covered[j]:
+                    j += 1
+                if (j - i) * L / n_s >= cfg["min_wall_m"]:
+                    t0, t1 = i / n_s, j / n_s
+                    q = dict(p)
+                    q["p0"] = [p["p0"][0] + ux * L * t0, p["p0"][1] + uz * L * t0]
+                    q["p1"] = [p["p0"][0] + ux * L * t1, p["p0"][1] + uz * L * t1]
+                    kept.append(q)
+                i = j
         else:
-            singles.append(cur)
+            kept.append(p)
+    return kept
 
-    return groups, singles
+
+def _merge_collinear(pieces, cfg, gap_m=0.25, perp_m=0.07, thick_m=0.05):
+    """Merge same-direction pieces on the same axis with (almost) equal thickness."""
+    pieces = [dict(p) for p in pieces]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(pieces)):
+            a = pieces[i]
+            L = _piece_len(a)
+            if L < 1e-9:
+                continue
+            ux, uz = (a["p1"][0] - a["p0"][0]) / L, (a["p1"][1] - a["p0"][1]) / L
+            nx, nz = -uz, ux
+            a0 = 0.0
+            a1 = L
+            for j in range(i + 1, len(pieces)):
+                b = pieces[j]
+                if _ang_diff(a["theta"], b["theta"]) > math.radians(4.0):
+                    continue
+                if abs(a["thick"] - b["thick"]) > thick_m:
+                    continue
+                bs = [((e[0] - a["p0"][0]) * ux + (e[1] - a["p0"][1]) * uz,
+                       (e[0] - a["p0"][0]) * nx + (e[1] - a["p0"][1]) * nz) for e in (b["p0"], b["p1"])]
+                if max(abs(bs[0][1]), abs(bs[1][1])) > perp_m:
+                    continue
+                b0, b1 = min(bs[0][0], bs[1][0]), max(bs[0][0], bs[1][0])
+                if max(b0 - a1, a0 - b1) > gap_m:
+                    continue
+                lb = _piece_len(b)
+                lo, hi = min(a0, b0), max(a1, b1)
+                voff = (bs[0][1] * lb + 0.0) / max(lb, 1e-9)   # offset of b relative to a's axis
+                voff = 0.5 * (bs[0][1] + bs[1][1])
+                w = L + lb
+                shift = voff * lb / w
+                a["thick"] = (a["thick"] * L + b["thick"] * lb) / w
+                if b["thick_src"] == "measured":
+                    a["thick_src"] = "measured"
+                a["support"] = (a["support"] * L + b["support"] * lb) / w
+                a["p0"] = [a["p0"][0] + ux * lo + nx * shift, a["p0"][1] + uz * lo + nz * shift]
+                a["p1"] = [a["p0"][0] + ux * (hi - lo), a["p0"][1] + uz * (hi - lo)]
+                pieces.pop(j)
+                changed = True
+                break
+            if changed:
+                break
+    return pieces
 
 
-def _calc_wall_axis(group: list) -> tuple[list, float]:
+def _near_other(p, others, dist):
+    for o in others:
+        if o is p:
+            continue
+        for e in (p["p0"], p["p1"]):
+            if _in_rect(e, o, o["thick"] / 2.0 + dist, dist):
+                return True
+    return False
+
+
+def _find_door_gaps(walls, cfg):
+    """Collinear wall pairs separated by a door-sized gap."""
+    gaps = []
+    lo, hi = cfg["door_gap_min_m"], cfg["door_gap_max_m"]
+    for i in range(len(walls)):
+        for j in range(i + 1, len(walls)):
+            a, b = walls[i], walls[j]
+            if _ang_diff(a["theta"], b["theta"]) > math.radians(6):
+                continue
+            best = None
+            for ea in (a["p0"], a["p1"]):
+                for eb in (b["p0"], b["p1"]):
+                    d = _dist(ea, eb)
+                    if lo <= d <= hi and (best is None or d < best[0]):
+                        best = (d, ea, eb)
+            if best is None:
+                continue
+            d, ea, eb = best
+            gx, gz = eb[0] - ea[0], eb[1] - ea[1]
+            gl = math.hypot(gx, gz)
+            # gap direction must follow the wall direction
+            wx, wz = math.cos(a["theta"]), math.sin(a["theta"])
+            if abs((gx * wx + gz * wz) / gl) < 0.96:
+                continue
+            # lateral offset between the two wall axes must be small (truly collinear)
+            nx, nz = -wz, wx
+            if abs(gx * nx + gz * nz) > 0.10 + 0.5 * abs(a["thick"] - b["thick"]):
+                continue
+            gaps.append([[ea[0], ea[1]], [eb[0], eb[1]]])
+    return gaps
+
+
+def _verify_gaps(gaps, p_high, p_body, x_min, z_min, gs):
     """
-    Compute the wall centre-line and thickness from a pair group.
-
-    Returns
-    -------
-    axis      : [[x1,z1], [x2,z2]]  — centre-line endpoints
-    thickness : float               — perpendicular distance between the two faces
+    Keep only gaps that really look like a doorway: a lintel (HIGH points) bridges
+    the gap while the body of the opening (LOW/MID) is empty.
     """
-    # Pick the longest segment as reference
-    lengths = [_dist(s[0], s[1]) for s in group]
-    idx_long = int(np.argmax(lengths))
-    long_seg = group[idx_long]
-    others = [group[j] for j in range(len(group)) if j != idx_long]
-
-    # Direction of the longest segment
-    dx = long_seg[1][0] - long_seg[0][0]
-    dy = long_seg[1][1] - long_seg[0][1]
-    norm = math.hypot(dx, dy)
-    if norm < 1e-12:
-        return list(long_seg), 0.0
-    dx /= norm
-    dy /= norm
-
-    # Perpendicular distance from other segments to the reference
-    perp_dists = []
-    for other in others:
-        for pt in other:
-            perp_dists.append(_dist_point_to_line(pt, long_seg[0], long_seg[1]))
-    thickness = float(np.mean(perp_dists)) if perp_dists else 0.0
-    half = thickness / 2.0
-
-    # Shift the long-segment endpoints perpendicular by half-thickness
-    # to land on the centre-line
-    ax_start = [long_seg[0][0] + half * (-dy), long_seg[0][1] + half * dx]
-    ax_end   = [long_seg[1][0] + half * (-dy), long_seg[1][1] + half * dx]
-
-    # Choose the side that is geometrically between the two faces
-    # (smaller total distance to all segment endpoints)
-    all_pts = [pt for s in group for pt in s]
-    d_initial = sum(_dist(pt, ax_start) + _dist(pt, ax_end) for pt in all_pts)
-    ax_start2 = [long_seg[0][0] - half * (-dy), long_seg[0][1] - half * dx]
-    ax_end2   = [long_seg[1][0] - half * (-dy), long_seg[1][1] - half * dx]
-    d_flip    = sum(_dist(pt, ax_start2) + _dist(pt, ax_end2) for pt in all_pts)
-
-    if d_flip < d_initial:
-        ax_start, ax_end = ax_start2, ax_end2
-
-    return [ax_start, ax_end], thickness
-
-
-def _furthest_pair(pts: list) -> tuple:
-    """Return the two most-distant points from a list."""
-    best_d, p1, p2 = -1.0, pts[0], pts[0]
-    for i in range(len(pts)):
-        for j in range(i + 1, len(pts)):
-            d = _dist(pts[i], pts[j])
-            if d > best_d:
-                best_d, p1, p2 = d, pts[i], pts[j]
-    return p1, p2
+    k5 = np.ones((5, 5), np.uint8)
+    high = cv2.dilate(p_high.astype(np.uint8), k5)
+    body = cv2.dilate(p_body.astype(np.uint8), k5)
+    h, w = high.shape
+    out = []
+    for g in gaps:
+        n = max(4, int(_dist(g[0], g[1]) / gs))
+        xs = np.linspace(g[0][0], g[1][0], n)
+        zs = np.linspace(g[0][1], g[1][1], n)
+        lo, hi = int(n * 0.15), max(int(n * 0.15) + 1, int(n * 0.85))
+        px = np.clip(((xs[lo:hi] - x_min) / gs).astype(int), 0, w - 1)
+        py = np.clip(((zs[lo:hi] - z_min) / gs).astype(int), 0, h - 1)
+        if body[py, px].mean() <= 0.25 and high[py, px].mean() >= 0.50:
+            out.append(g)
+    return out
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -302,23 +552,37 @@ def _save_png(arr: np.ndarray, path: str) -> None:
         a = arr.astype(np.float32)
         if a.max() > a.min():
             a = (a - a.min()) / (a.max() - a.min()) * 255.0
-        img = cv2.flip(a.astype(np.uint8), 0)
-        cv2.imwrite(path, img)
+        cv2.imwrite(path, cv2.flip(a.astype(np.uint8), 0))
     except Exception:
         pass
 
 
-def _save_segs_png(base: np.ndarray, segs_m, x_min, z_min, gs, path, colour=(0, 0, 255)):
+def _save_walls_png(base, walls, gaps, x_min, z_min, gs, path):
+    """Overlay walls as true-thickness rectangles (blue outline, red centre-line)."""
     try:
         h, w = base.shape[:2]
-        rgb = cv2.cvtColor(cv2.flip(base.copy(), 0), cv2.COLOR_GRAY2BGR)
-        for seg in segs_m:
-            x1p = int((seg[0][0] - x_min) / gs)
-            y1p = h - 1 - int((seg[0][1] - z_min) / gs)
-            x2p = int((seg[1][0] - x_min) / gs)
-            y2p = h - 1 - int((seg[1][1] - z_min) / gs)
-            cv2.line(rgb, (x1p, y1p), (x2p, y2p), colour, 1)
-        cv2.imwrite(path, rgb)
+        rgb = cv2.cvtColor((base > 0).astype(np.uint8) * 90, cv2.COLOR_GRAY2BGR)
+
+        def px(p):
+            return ((p[0] - x_min) / gs, (p[1] - z_min) / gs)
+
+        for wl in walls:
+            a, b = px(wl["p0"]), px(wl["p1"])
+            L = math.hypot(b[0] - a[0], b[1] - a[1])
+            if L < 1e-6:
+                continue
+            ux, uy = (b[0] - a[0]) / L, (b[1] - a[1]) / L
+            hw = wl["thick"] / gs / 2.0
+            nx, ny = -uy * hw, ux * hw
+            poly = np.array([[a[0] + nx, a[1] + ny], [b[0] + nx, b[1] + ny],
+                             [b[0] - nx, b[1] - ny], [a[0] - nx, a[1] - ny]], np.float32)
+            col = (255, 160, 0) if wl["thick_src"] == "measured" else (200, 200, 60)
+            cv2.polylines(rgb, [poly.astype(np.int32)], True, col, 1)
+            cv2.line(rgb, tuple(int(round(v)) for v in a), tuple(int(round(v)) for v in b), (0, 0, 255), 1)
+        for g in gaps:
+            a, b = px(g[0]), px(g[1])
+            cv2.line(rgb, tuple(int(round(v)) for v in a), tuple(int(round(v)) for v in b), (0, 255, 0), 1)
+        cv2.imwrite(path, cv2.flip(rgb, 0))
     except Exception:
         pass
 
@@ -329,441 +593,185 @@ def _save_segs_png(base: np.ndarray, segs_m, x_min, z_min, gs, path, colour=(0, 
 
 def detect_walls_c2b_for_floor(floor_idx: int, config: dict) -> list:
     """
-    Cloud2BIM-style wall detection for one floor.
+    Variable-thickness wall detection for one floor.
 
-    Parameters (same keys as wall_detection.detect_walls_for_floor)
-    ---------------------------------------------------------------
-    grid_size         float   cell size in metres        (default 0.02)
-    min_wall_m        float   min wall segment length m  (default 0.40)
-    max_wall_thickness float  max thickness for pairing  (default 0.75)
-    snap_to_axis      bool    Manhattan snap             (default True)
-    dp_tolerance      float   Douglas-Peucker parameter  (default 0.04 m)
-    save_debug        bool    write debug PNGs           (default True)
-    threshold_frac    float   relative density threshold (default 0.01)
-    wall_reach_frac   float   min height-reach fraction  (default 0.70)
+    Config keys (all optional)
+    --------------------------
+    grid_size            0.02   raster cell, metres
+    min_wall_m           0.40   shortest wall piece kept
+    max_wall_thickness   0.75   largest thickness considered a single wall (clamp)
+    snap_to_axis         True   snap directions within 6° of 0/90° to the axis
+    save_debug           True   write debug PNGs
+    default_thickness    0.12   thickness assigned to walls seen from one side only
+    min_support          0.50   min. fraction of a piece's length backed by real points
+    (dp_tolerance / threshold_frac / wall_reach_frac are accepted for API
+     compatibility but no longer used.)
 
-    Returns
-    -------
-    list[[[x1,z1],[x2,z2]]]   wall centre-line segments in metres.
+    Returns list[[[x1,z1],[x2,z2]]] – wall centre-lines in metres.
+    Also writes processed/walls_floor_N.json with per-wall ``thicknesses``.
     """
-    base_dir      = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     processed_dir = os.environ.get("PROCESSED_DIR", os.path.join(base_dir, "processed"))
-    info_path     = os.path.join(processed_dir, "info.json")
-
-    with open(info_path) as fh:
+    with open(os.path.join(processed_dir, "info.json")) as fh:
         info = json.load(fh)
 
     levels = info.get("floor_levels", [])
     if floor_idx >= len(levels):
-        raise ValueError(
-            f"Floor index {floor_idx} out of range "
-            f"(info.json has {len(levels)} floor(s))."
-        )
-
+        raise ValueError(f"Floor index {floor_idx} out of range (info.json has {len(levels)} floor(s)).")
     floor_y = float(levels[floor_idx])
 
-    # ── Unpack config ─────────────────────────────────────────────────────
-    grid_size         = float(config.get("grid_size",          0.02))
-    min_wall_m        = float(config.get("min_wall_m",         0.40))
-    max_wall_thick    = float(config.get("max_wall_thickness",  0.75))
-    snap_to_axis      = bool(config.get("snap_to_axis",        True))
-    dp_tol_m          = float(config.get("dp_tolerance",       0.04))
-    save_debug        = bool(config.get("save_debug",          True))
-    threshold_frac    = float(config.get("threshold_frac",     0.01))
-    wall_reach_frac   = float(config.get("wall_reach_frac",    0.35))
+    gs = float(config.get("grid_size", 0.02))
+    max_thick = float(config.get("max_wall_thickness", 0.75))
+    save_debug = bool(config.get("save_debug", True))
+    snap_to_axis = bool(config.get("snap_to_axis", True))
+    min_support = float(config.get("min_support", 0.50))
+    default_thick = float(config.get("default_thickness", 0.12))
 
-    # ── Load wall-slice points ────────────────────────────────────────────
+    cfg = {
+        # height zones above the local floor (metres)
+        "low_lo": 0.15, "low_hi": 0.90, "mid_hi": 1.90,
+        "high_lo": 2.00, "high_hi_max": 2.70, "ceiling_margin": 0.40,
+        "min_blob_px": 25,
+        # morphology (metres)
+        "scan_gap_m": 0.14,
+        "face_fuse_m": float(config.get("face_fuse_m", min(max_thick, 0.45))),
+        "min_run_m": 0.34,
+        # profile splitting
+        "thickness_tol_m": float(config.get("thickness_tol_m", 0.045)),
+        "offset_tol_m": float(config.get("offset_tol_m", 0.08)),
+        "min_piece_m": float(config.get("min_piece_m", 0.40)),
+        "min_wall_m": float(config.get("min_wall_m", 0.40)),
+        # thickness calibration: 3×3 dilation of 5 cm voxel faces inflates by ~this
+        "thickness_bias_m": float(config.get("thickness_bias_m", 0.06)),
+        "dedupe_dist_m": 0.04,
+        "door_gap_min_m": 0.55, "door_gap_max_m": 1.60,
+    }
+    min_wall_m = cfg["min_wall_m"]
+
     slice_path = os.path.join(processed_dir, f"wall_slice_floor_{floor_idx}.npy")
     if not os.path.exists(slice_path):
-        raise FileNotFoundError(
-            f"wall_slice_floor_{floor_idx}.npy not found."
-            " Run preprocess_walls.py first."
-        )
+        raise FileNotFoundError(f"wall_slice_floor_{floor_idx}.npy not found. Run preprocess_walls.py first.")
+    pts = np.load(slice_path)
+    print(f"\n[c2b floor {floor_idx}] loaded slice: {len(pts):,} pts, floor_y={floor_y:+.3f}")
 
-    pts = np.load(slice_path)   # (M, 3) float32  [x_yup, y_yup, z_yup]
-    print(f"\n[c2b floor {floor_idx}] loaded slice: {len(pts):,} pts")
-    print(f"[c2b floor {floor_idx}] floor_y = {floor_y:+.3f} m")
+    storey_h = (float(levels[floor_idx + 1]) - floor_y) if floor_idx + 1 < len(levels) else 3.0
+    storey_h = max(storey_h, 2.4)
 
-    # ── Estimate storey height ────────────────────────────────────────────
-    if floor_idx + 1 < len(levels):
-        storey_h = float(levels[floor_idx + 1]) - floor_y
-    else:
-        storey_h = 3.0
-    storey_h = max(storey_h, 2.0)   # guard
+    local_floor = _local_floor(pts, floor_y, info, processed_dir, floor_idx)
+    rel_h = pts[:, 1] - local_floor
 
-    # ── Adaptive height band using local floor heightmap ──────────────────
-    # Instead of a rigid global band, look up each point's local floor
-    # elevation and compute a per-point band relative to that.
-    z_pct_lo, z_pct_hi = 0.30, 0.90
-
-    hm_path = os.path.join(processed_dir, f"floor_heightmap_{floor_idx}.npy")
-    hm_meta = info.get("wall_slices", {}).get(f"floor_heightmap_{floor_idx}")
-
-    if os.path.exists(hm_path) and hm_meta:
-        # Load heightmap and compute per-point local floor elevation
-        heightmap = np.load(hm_path)  # (rows, cols) float32
-        hm_x_min = float(hm_meta["x_min"])
-        hm_z_min = float(hm_meta["z_min"])
-        hm_cell  = float(hm_meta["cell_size"])
-        hm_rows  = int(hm_meta["rows"])
-        hm_cols  = int(hm_meta["cols"])
-
-        # Map each point's XZ to a heightmap cell
-        cx_idx = np.clip(
-            np.floor((pts[:, 0] - hm_x_min) / hm_cell).astype(np.int32),
-            0, hm_cols - 1,
-        )
-        cz_idx = np.clip(
-            np.floor((pts[:, 2] - hm_z_min) / hm_cell).astype(np.int32),
-            0, hm_rows - 1,
-        )
-        local_floor = heightmap[cz_idx, cx_idx]  # per-point local floor elevation
-
-        # Per-point adaptive band
-        y_lo_per_pt = local_floor + z_pct_lo * storey_h
-        y_hi_per_pt = local_floor + z_pct_hi * storey_h
-        mask = (pts[:, 1] >= y_lo_per_pt) & (pts[:, 1] < y_hi_per_pt)
-        pts_band = pts[mask]
-
-        elev_min = float(np.nanmin(local_floor))
-        elev_max = float(np.nanmax(local_floor))
-        print(
-            f"[c2b floor {floor_idx}] adaptive band: "
-            f"local_floor=[{elev_min:+.3f}, {elev_max:+.3f}]  "
-            f"Δ={elev_max - elev_min:.3f} m  "
-            f"→ {len(pts_band):,} pts"
-        )
-
-        # Keep the per-point local_floor for band points (used by vertical span filter)
-        local_floor_band = local_floor[mask]
-    else:
-        # Fallback: rigid global band (no heightmap available)
-        print(f"[c2b floor {floor_idx}] WARNING: no heightmap found — using rigid band")
-        y_lo = floor_y + z_pct_lo * storey_h
-        y_hi = floor_y + z_pct_hi * storey_h
-        mask = (pts[:, 1] >= y_lo) & (pts[:, 1] < y_hi)
-        pts_band = pts[mask]
-        local_floor_band = None
-        print(f"[c2b floor {floor_idx}] band [{y_lo:.2f} … {y_hi:.2f}]: {len(pts_band):,} pts")
-
-    if len(pts_band) < 50:
+    # only points inside the evidence range matter
+    keep = (rel_h >= cfg["low_lo"]) & (rel_h < storey_h)
+    pts, rel_h = pts[keep], rel_h[keep]
+    if len(pts) < 50:
         print(f"[c2b floor {floor_idx}] too few points — skipping")
-        _write_empty(floor_idx, processed_dir, grid_size)
+        _write_empty(floor_idx, processed_dir, gs)
         return []
 
-    # ── 2-D density histogram on XZ plane ────────────────────────────────
-    xz     = pts_band[:, [0, 2]]
-    x_min, z_min = xz.min(axis=0)
-    x_max, z_max = xz.max(axis=0)
-
-    raw_w = max(10, int(np.ceil((x_max - x_min) / grid_size)))
-    raw_h = max(10, int(np.ceil((z_max - z_min) / grid_size)))
+    # ── grid ────────────────────────────────────────────────────────────
+    x_min, z_min = float(pts[:, 0].min()) - 0.2, float(pts[:, 2].min()) - 0.2
+    x_max, z_max = float(pts[:, 0].max()) + 0.2, float(pts[:, 2].max()) + 0.2
     MAX_DIM = 4096
-    width  = min(raw_w, MAX_DIM)
-    height = min(raw_h, MAX_DIM)
+    gs = max(gs, (x_max - x_min) / MAX_DIM, (z_max - z_min) / MAX_DIM)
+    width = int(math.ceil((x_max - x_min) / gs))
+    height = int(math.ceil((z_max - z_min) / gs))
+    print(f"[c2b floor {floor_idx}] grid {width}×{height} @ {gs * 100:.1f} cm")
 
-    px = np.clip(np.floor((xz[:, 0] - x_min) / grid_size).astype(np.int32), 0, width  - 1)
-    py = np.clip(np.floor((xz[:, 1] - z_min) / grid_size).astype(np.int32), 0, height - 1)
+    # Partially scanned storey (e.g. attic / cut-off cloud): squeeze the zones into
+    # the height range that actually contains data.
+    top = float(np.percentile(rel_h, 99.5))
+    if top < cfg["high_lo"] + 0.3:
+        top = max(top, 0.8)
+        print(f"[c2b floor {floor_idx}] low scan height ({top:.2f} m) - scaling height zones")
+        cfg["low_hi"] = 0.30 * top
+        cfg["mid_hi"] = 0.60 * top
+        cfg["high_lo"] = 0.65 * top
+        cfg["high_hi_max"] = top + 0.05
+        cfg["ceiling_margin"] = -10.0       # no ceiling cut-off
+        cfg["low_lo"] = min(cfg["low_lo"], 0.10 * top)
 
-    # ── Density grid — GPU bincount vs CPU scatter ───────────────────────────
-    # np.add.at is a serial scatter; cp.bincount is a single parallel GPU kernel.
-    if _GPU:
-        try:
-            flat = py.astype(np.int64) * width + px.astype(np.int64)
-            counts = cp.asnumpy(
-                cp.bincount(cp.asarray(flat), minlength=height * width)
-            )
-            grid = counts.reshape(height, width).astype(np.float32)
-        except Exception:
-            grid = np.zeros((height, width), dtype=np.float32)
-            np.add.at(grid, (py, px), 1.0)
-    else:
-        grid = np.zeros((height, width), dtype=np.float32)
-        np.add.at(grid, (py, px), 1.0)
+    wall, density, p_low, p_mid, p_high, zones = _wall_evidence(
+        pts, rel_h, storey_h, gs, x_min, z_min, width, height, cfg)
+    print(f"[c2b floor {floor_idx}] zones LOW{zones[0]} MID{zones[1]} HIGH{tuple(round(z, 2) for z in zones[2])}"
+          f" → wall pixels {int(wall.sum()):,}")
 
-    print(f"[c2b floor {floor_idx}] grid {width}×{height}  gs={grid_size*100:.0f} cm  gpu={_GPU}")
+    # ── directions ──────────────────────────────────────────────────────
+    thetas = _dominant_directions(wall, gs, 1.0 if snap_to_axis else 0.0)
+    print(f"[c2b floor {floor_idx}] directions: {[round(math.degrees(t), 1) for t in thetas]}")
 
-    # ── Vertical span filtering (remove stairs and furniture) ─────────────
-    # A true wall spans vertically across the entire height band.
-    # Stair steps and furniture have a small Y (height) range at any XZ position.
-    flat_cpu = py.astype(np.int64) * width + px.astype(np.int64)
-    y_vals = pts_band[:, 1]
+    pieces: list[dict] = []
+    for th in thetas:
+        got = _extract_direction(wall, th, gs, x_min, z_min, cfg)
+        print(f"[c2b floor {floor_idx}]   θ={math.degrees(th):6.1f}°: {len(got)} pieces")
+        pieces.extend(got)
 
-    min_y = np.full(height * width, 1e5, dtype=np.float32)
-    max_y = np.full(height * width, -1e5, dtype=np.float32)
-
-    np.minimum.at(min_y, flat_cpu, y_vals)
-    np.maximum.at(max_y, flat_cpu, y_vals)
-
-    min_y_2d = min_y.reshape(height, width)
-    max_y_2d = max_y.reshape(height, width)
-
-    # Use a 9x9 kernel (18cm x 18cm) to aggregate the vertical span locally.
-    # This ensures sparse LiDAR scans of true walls pass the span test,
-    # because nearby points at different heights will be combined.
-    k9 = np.ones((9, 9), dtype=np.uint8)
-    max_y_dilated = cv2.dilate(max_y_2d, k9)
-    min_y_eroded = -cv2.dilate(-min_y_2d, k9)
-
-    span = max_y_dilated - min_y_eroded
-    # Band height is the same regardless of adaptive vs rigid mode
-    band_height = (z_pct_hi - z_pct_lo) * storey_h
-    min_vertical_span = 0.35 * band_height  # Must span at least 35% of the band (raised to reject car-height clusters while retaining real walls)
-    
-    # Identify pixels where the local neighborhood's span is sufficient
-    valid_mask = span >= min_vertical_span
-    
-    # Zero out density for invalid pixels (stairs/furniture)
-    grid[~valid_mask] = 0.0
-
-    # ── Threshold → binary ────────────────────────────────────────────────
-    nonzero_grid = grid[grid > 0]
-    if len(nonzero_grid) == 0:
-        max_density = 0.0
-    else:
-        max_density = np.percentile(nonzero_grid, 95)
-    
-    # Cap upper threshold so sparse/corridor walls aren't wiped out by high corner density
-    raw_thresh = threshold_frac * max_density
-    threshold   = max(1.0, min(raw_thresh, 3.0))
-    binary = ((grid > threshold).astype(np.uint8) * 255)
-
-    # ── Morphological close (5×5) – Cloud2BIM uses closing((5,5)) ────────
-    k5 = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-    closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, k5)
-
-    # ── Find contours ─────────────────────────────────────────────────────
-    contours, hierarchy = cv2.findContours(closed, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
-    print(f"[c2b floor {floor_idx}] contours: {len(contours)}")
-
-    # ── Douglas-Peucker approximation → line segments (with smart vehicle pruning) ──
-    dp_tol_px = max(1.0, dp_tol_m / grid_size)
-    all_segs_px: list[tuple] = []   # list of (p1_px, p2_px) where each is (x,y) pixel
-
-    # Ceiling reach threshold: points from real walls reach well above car roofs.
-    # Cars top out at ~1.4-1.6 m; use 50% of storey height (~1.5 m for 3 m storey).
-    ceiling_reach_y = (floor_y + 0.50 * storey_h)
-
-    for idx, cnt in enumerate(contours):
-        area_px = cv2.contourArea(cnt)
-        if area_px < 4:
-            continue
-        
-        # ── Vehicle contour heuristic ──────────────────────────────────────
-        # Prune contours that match car dimensions and don't reach ceiling
-        # height, regardless of whether they're nested inside a larger
-        # contour.  This catches cars at the scan edge and in open parking.
-        bx, by, bw, bh = cv2.boundingRect(cnt)
-        bw_m, bh_m = bw * grid_size, bh * grid_size
-        dim_min, dim_max = min(bw_m, bh_m), max(bw_m, bh_m)
-        area_m2 = area_px * (grid_size ** 2)
-
-        # Check maximum height reached inside this contour
-        cnt_mask = np.zeros((height, width), dtype=np.uint8)
-        cv2.drawContours(cnt_mask, [cnt], -1, 255, -1)
-        cnt_max_y = float(max_y_dilated[cnt_mask > 0].max()) if (cnt_mask > 0).any() else 0.0
-
-        # Dimension check: contour bounding box fits a car footprint
-        dims_match_car = (1.2 <= dim_min <= 2.8) and (2.5 <= dim_max <= 6.5) and (3.0 <= area_m2 <= 16.0)
-
-        # Height check: contour points don't reach ceiling height
-        is_low = cnt_max_y < ceiling_reach_y
-
-        # Solidity check: cars are fairly solid blobs (area / convex hull area).
-        # Thin wall fragments or L-shaped corners have low solidity.
-        hull = cv2.convexHull(cnt)
-        hull_area = cv2.contourArea(hull)
-        solidity = (area_px / hull_area) if hull_area > 0 else 0.0
-
-        is_vehicle = is_low and dims_match_car and solidity > 0.45
-
-        if is_vehicle:
-            print(
-                f"[c2b floor {floor_idx}] pruned vehicle contour {idx}: "
-                f"{bw_m:.1f}×{bh_m:.1f}m ({area_m2:.1f} m², "
-                f"max_y={cnt_max_y:.2f}m, solidity={solidity:.2f})"
-            )
-            continue
-
-        approx = cv2.approxPolyDP(cnt, dp_tol_px, closed=True)
-        approx = np.squeeze(approx, axis=1)   # (K, 2)
-        if len(approx) < 2:
-            continue
-        for i in range(len(approx)):
-            p1 = tuple(approx[i])
-            p2 = tuple(approx[(i + 1) % len(approx)])
-            all_segs_px.append((p1, p2))
-
-    print(f"[c2b floor {floor_idx}] D-P segments: {len(all_segs_px)}")
-
-    # ── Convert pixel → metres ────────────────────────────────────────────
-    def px_to_m(p):
-        return (p[0] * grid_size + x_min, p[1] * grid_size + z_min)
-
-    segs_m = [
-        [list(px_to_m(s[0])), list(px_to_m(s[1]))]
-        for s in all_segs_px
-    ]
-
-    # ── Filter short segments ─────────────────────────────────────────────
-    # Preserve short fragments (>= 0.10m) so collinear merge can reassemble full corridor walls
-    segs_m = [s for s in segs_m if _dist(s[0], s[1]) >= 0.10]
-    print(f"[c2b floor {floor_idx}] after length pre-filter: {len(segs_m)}")
-
-    # ── Collinear merge (reuse our robust implementation) ─────────────────
-    # Convert to the [[x1,y1,x2,y2]] pixel format expected by merge_collinear_segments
-    def m_to_px_line(s):
-        x1p = int((s[0][0] - x_min) / grid_size)
-        y1p = int((s[0][1] - z_min) / grid_size)
-        x2p = int((s[1][0] - x_min) / grid_size)
-        y2p = int((s[1][1] - z_min) / grid_size)
-        return [[x1p, y1p, x2p, y2p]]
-
-    lines_px = [m_to_px_line(s) for s in segs_m]
-    min_len_px = max(1, int(min_wall_m * 0.5 / grid_size))
-    merged_px = merge_collinear_segments(lines_px, gap_px=min_len_px, angle_tol_deg=4.0, max_perp_px=3.0)
-    print(f"[c2b floor {floor_idx}] after collinear merge: {len(merged_px)}")
-
-    # Back to metres
-    def px_line_to_m(l):
-        x1p, y1p, x2p, y2p = l[0]
-        return [
-            [x1p * grid_size + x_min, y1p * grid_size + z_min],
-            [x2p * grid_size + x_min, y2p * grid_size + z_min],
-        ]
-
-    segs_merged = [px_line_to_m(l) for l in merged_px]
-    segs_merged = [s for s in segs_merged if _dist(s[0], s[1]) >= min_wall_m * 0.5]
-
-    # ── Per-segment wall-height-reach filter ──────────────────────────────
-    # Discard segments whose underlying point cloud data doesn't reach
-    # 70% of storey height.  Real walls always reach well above this;
-    # cars and low obstacles do not.
-    wall_reach_y = floor_y + wall_reach_frac * storey_h
-    n_before_height = len(segs_merged)
-    height_filtered = []
-    for seg in segs_merged:
-        # Convert segment endpoints back to pixel coords
-        sx1 = int((seg[0][0] - x_min) / grid_size)
-        sy1 = int((seg[0][1] - z_min) / grid_size)
-        sx2 = int((seg[1][0] - x_min) / grid_size)
-        sy2 = int((seg[1][1] - z_min) / grid_size)
-        # Sample pixels along the segment using Bresenham-style stepping
-        seg_len_px = max(1, int(max(abs(sx2 - sx1), abs(sy2 - sy1))))
-        xs = np.linspace(sx1, sx2, seg_len_px + 1).astype(int)
-        ys = np.linspace(sy1, sy2, seg_len_px + 1).astype(int)
-        xs = np.clip(xs, 0, width - 1)
-        ys = np.clip(ys, 0, height - 1)
-        # Check max Y reached along this segment (using dilated max_y)
-        seg_max_y = float(max_y_dilated[ys, xs].max())
-        if seg_max_y >= wall_reach_y:
-            height_filtered.append(seg)
+    # ── thickness: measured vs. default, clamp ──────────────────────────
+    for p in pieces:
+        tr = p["thick_raw"]
+        if tr < 0.07:      # single scanned face → true thickness unknown
+            p["thick"], p["thick_src"] = default_thick, "default"
         else:
-            seg_len_m = _dist(seg[0], seg[1])
-            # Only filter segments that are relatively short — long segments
-            # (> 3m) are likely real outer walls even if height data is sparse
-            if seg_len_m > 3.0:
-                height_filtered.append(seg)
-            else:
-                pass  # silently discard short low-reaching segment
-    segs_merged = height_filtered
-    n_removed = n_before_height - len(segs_merged)
-    if n_removed > 0:
-        print(f"[c2b floor {floor_idx}] height-reach filter removed {n_removed} low segments (threshold={wall_reach_y:.2f}m)")
+            p["thick"], p["thick_src"] = float(min(tr, max_thick)), "measured"
 
-    # ── Group parallel pairs → wall axes ──────────────────────────────────
-    groups, singles = _group_parallel_segments(segs_merged, max_wall_thick)
-    print(f"[c2b floor {floor_idx}] parallel groups: {len(groups)}  singles: {len(singles)}")
+    # ── support filter ──────────────────────────────────────────────────
+    n0 = len(pieces)
+    pieces = [p for p in pieces if p["support"] >= min_support]
+    print(f"[c2b floor {floor_idx}] support filter: {n0} → {len(pieces)}")
 
-    wall_axes: list[list] = []
-    wall_thicknesses: list[float] = []
+    # ── stitch scan-gap fragments, then dedupe (walls inside walls) ─────
+    pieces = _merge_collinear(pieces, cfg)
+    print(f"[c2b floor {floor_idx}] after collinear merge: {len(pieces)}")
+    pieces = _dedupe(pieces, cfg)
+    pieces = _merge_collinear(pieces, cfg)
+    print(f"[c2b floor {floor_idx}] after de-duplication: {len(pieces)}")
 
-    for grp in groups:
-        axis, thick = _calc_wall_axis(grp)
-        if _dist(axis[0], axis[1]) >= min_wall_m:
-            wall_axes.append(axis)
-            wall_thicknesses.append(thick)
+    # ── drop isolated stubs (not touching anything, short) ──────────────
+    min_iso = max(min_wall_m, float(config.get("min_isolated_m", 0.9)))
+    pieces = [p for p in pieces if _piece_len(p) >= min_iso or _near_other(p, pieces, 0.30)]
+    print(f"[c2b floor {floor_idx}] after isolated-stub filter: {len(pieces)}")
 
-    # Singles with no matching face are added as-is (outer walls, single-face scans)
-    for seg in singles:
-        if _dist(seg[0], seg[1]) >= min_wall_m:
-            wall_axes.append(seg)
-            wall_thicknesses.append(0.0)
+    gaps = _find_door_gaps(pieces, cfg)
+    n_cand = len(gaps)
+    gaps = _verify_gaps(gaps, p_high, p_low | p_mid, x_min, z_min, gs)
+    print(f"[c2b floor {floor_idx}] door gaps: {len(gaps)} (of {n_cand} candidates)")
 
-    print(f"[c2b floor {floor_idx}] wall axes: {len(wall_axes)}")
+    # stable ordering: by position
+    pieces.sort(key=lambda p: (round(p["p0"][1], 1), round(p["p0"][0], 1)))
 
-    # ── Manhattan snap ────────────────────────────────────────────────────
-    if snap_to_axis:
-        # Convert to Hough-style [[x1,y1,x2,y2]] for the shared helper
-        def axis_to_hough(ax):
-            return [[
-                int((ax[0][0] - x_min) / grid_size),
-                int((ax[0][1] - z_min) / grid_size),
-                int((ax[1][0] - x_min) / grid_size),
-                int((ax[1][1] - z_min) / grid_size),
-            ]]
-
-        hough_axs = [axis_to_hough(ax) for ax in wall_axes]
-        snapped = snap_lines_to_manhattan(hough_axs, angle_tolerance=10.0)
-        # Convert back
-        wall_axes = [
-            [
-                [l[0][0] * grid_size + x_min, l[0][1] * grid_size + z_min],
-                [l[0][2] * grid_size + x_min, l[0][3] * grid_size + z_min],
-            ]
-            for l in snapped
-        ]
-        # Re-apply minimum length filter after snap
-        wall_axes = [ax for ax in wall_axes if _dist(ax[0], ax[1]) >= min_wall_m]
-
-    print(f"[c2b floor {floor_idx}] final walls: {len(wall_axes)}")
-
-    # ── Debug PNGs ────────────────────────────────────────────────────────
     if save_debug:
         dbg = os.path.join(processed_dir, f"debug_c2b_floor{floor_idx}")
-        _save_png(grid, f"{dbg}_1_density.png")
-        _save_png(binary, f"{dbg}_2_binary.png")
-        _save_png(closed, f"{dbg}_3_closed.png")
-        _save_segs_png(closed, segs_merged, x_min, z_min, grid_size,
-                        f"{dbg}_4_merged_segs.png", colour=(0, 200, 0))
-        _save_segs_png(closed, wall_axes, x_min, z_min, grid_size,
-                        f"{dbg}_5_wall_axes.png", colour=(0, 0, 255))
-        print(f"[c2b floor {floor_idx}] debug PNGs: {dbg}_1-5_*.png")
+        _save_png(density, f"{dbg}_1_density.png")
+        _save_png(wall, f"{dbg}_2_binary.png")
+        _save_walls_png(wall, pieces, gaps, x_min, z_min, gs, f"{dbg}_5_wall_axes.png")
 
-    # ── Save JSON (same format as wall_detection.py) ──────────────────────
-    real_lines = [
-        [
-            [float(pt[0]), float(pt[1])]
-            for pt in line
-        ]
-        for line in wall_axes
-    ]
-    out_path = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
+    real_lines = [[[float(p["p0"][0]), float(p["p0"][1])], [float(p["p1"][0]), float(p["p1"][1])]] for p in pieces]
     result = {
-        "floor_idx":  int(floor_idx),
-        "grid_size":  float(grid_size),
-        "x_min":      float(x_min),
-        "z_min":      float(z_min),
-        "source":     f"cloud2bim-c2b ({len(real_lines)} walls)",
-        "lines":      real_lines,
+        "floor_idx": int(floor_idx),
+        "grid_size": float(gs),
+        "x_min": float(x_min),
+        "z_min": float(z_min),
+        "source": f"cloud2bim-c2b-v2 ({len(real_lines)} walls)",
+        "lines": real_lines,
+        "thicknesses": [round(float(p["thick"]), 3) for p in pieces],
+        "thickness_source": [p["thick_src"] for p in pieces],
+        "door_gaps": gaps,
     }
-    with open(out_path, "w") as fh:
+    with open(os.path.join(processed_dir, f"walls_floor_{floor_idx}.json"), "w") as fh:
         json.dump(result, fh, default=_json_default)
 
+    ts = [p["thick"] for p in pieces if p["thick_src"] == "measured"]
+    if ts:
+        print(f"[c2b floor {floor_idx}] measured thickness: min={min(ts):.2f} median={float(np.median(ts)):.2f} max={max(ts):.2f}")
+    print(f"[c2b floor {floor_idx}] final walls: {len(real_lines)}")
     return real_lines
 
 
 # ── Internal utility ──────────────────────────────────────────────────────────
 
 def _write_empty(floor_idx: int, processed_dir: str, grid_size: float) -> None:
-    out = os.path.join(processed_dir, f"walls_floor_{floor_idx}.json")
-    with open(out, "w") as fh:
+    with open(os.path.join(processed_dir, f"walls_floor_{floor_idx}.json"), "w") as fh:
         json.dump({
-            "floor_idx": int(floor_idx),
-            "grid_size": float(grid_size),
-            "x_min": 0.0,
-            "z_min": 0.0,
-            "source": "empty-c2b",
-            "lines": [],
+            "floor_idx": int(floor_idx), "grid_size": float(grid_size),
+            "x_min": 0.0, "z_min": 0.0, "source": "empty-c2b",
+            "lines": [], "thicknesses": [], "thickness_source": [], "door_gaps": [],
         }, fh, default=_json_default)
-

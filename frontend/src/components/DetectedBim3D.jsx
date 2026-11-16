@@ -234,7 +234,8 @@ function WallMesh3D({
   const dx = x2 - x1;
   const dz = z2 - z1;
   const angleY = -Math.atan2(dz, dx);
-  const thickness = 0.20;
+  // per-wall thickness from the detector (falls back to 20 cm)
+  const thickness = Number.isFinite(wall.thickness) && wall.thickness > 0.03 ? wall.thickness : 0.20;
 
   // Unit vector along wall
   const ux = length > 1e-4 ? dx / length : 1;
@@ -953,6 +954,7 @@ export default function DetectedBim3D({
             length,
             height,
             floorY,
+            thickness: Array.isArray(data.thicknesses) ? Number(data.thicknesses[wallIdx]) : undefined,
             openings: matchedOps,
           });
         });

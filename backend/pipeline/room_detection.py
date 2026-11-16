@@ -215,6 +215,15 @@ def detect_rooms_for_floor(floor_idx: int, config: dict, processed_dir: str | No
         )
         cv2.line(canvas, ext_pt1, ext_pt2, color=255, thickness=thickness_draw)
 
+    # Doorways reported by the wall detector (verified lintel, empty body):
+    # draw them closed so rooms on either side of a door stay separate.
+    for gap in wall_data.get("door_gaps", []) or []:
+        try:
+            cv2.line(canvas, _to_px(gap[0][0], gap[0][1]), _to_px(gap[1][0], gap[1][1]),
+                     color=255, thickness=thickness_draw)
+        except Exception:
+            pass
+
     # ── Point cloud occupancy mask for outdoor void rejection ──────────────────
     pc_occupancy = None
     ceiling_mask = None
