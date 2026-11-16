@@ -111,11 +111,14 @@ function drawMpOverlays2D(
     showEquip = true,
     showSweeps = false,
     showAiHints = true,
+    hiddenMpLabels = [],
     selectedMpItem = null,
   }
 ) {
   const onFloor = (item) =>
-    item?.s2f_position && (item.floor_idx == null || item.floor_idx === selectedFloor);
+    Boolean(item?.s2f_position) &&
+    item.floor_idx != null &&
+    Number(item.floor_idx) === Number(selectedFloor);
 
   // 1. 360° Sweep nodes
   if (showSweeps) {
@@ -138,6 +141,7 @@ function drawMpOverlays2D(
   // 2. AI Door/Window Hints & Equipment markers
   for (const inst of mpInstances || []) {
     if (!onFloor(inst)) continue;
+    if (hiddenMpLabels.includes(inst.label)) continue;
     const isOpeningHint = inst.label === "dvere" || inst.label === "okno";
     if (isOpeningHint && !showAiHints) continue;
     if (!isOpeningHint && !showEquip) continue;
@@ -187,7 +191,7 @@ function drawMpOverlays2D(
   }
 
   // 4. Live 360° Showcase camera wedge
-  if (livePose?.s2f_position && (livePose.floor_idx == null || livePose.floor_idx === selectedFloor)) {
+  if (onFloor(livePose)) {
     const [kx, ky] = toCanvas(livePose.s2f_position.x, livePose.s2f_position.z, cam);
     const yawRad = ((Number(livePose.rotation?.y ?? 0) * Math.PI) / 180) + Math.PI / 2;
     ctx.save();
@@ -206,6 +210,23 @@ function drawMpOverlays2D(
     ctx.stroke();
     ctx.restore();
   }
+}
+
+function normalizeWallThickness(val) {
+  const t = Number(val);
+  return Number.isFinite(t) && t > 0.02 ? t : 0.20;
+}
+
+function wallJsonToEditedLines(w) {
+  const lines = w?.lines ?? [];
+  const thicks = Array.isArray(w?.thicknesses) ? w.thicknesses : [];
+  const srcs = Array.isArray(w?.thickness_source) ? w.thickness_source : [];
+  return lines.map((pts, i) => ({
+    pts,
+    source: "algo",
+    thickness: normalizeWallThickness(thicks[i]),
+    thicknessSource: srcs[i] || "default",
+  }));
 }
 
 function wallsBoundsFromEdited(editedLines) {
@@ -338,14 +359,16 @@ function computeSnapConstrained(wx, wz, editedLines, cam, fromX, fromZ, pixThres
   };
 }
 
-/** Find index of line closest to (wx,wz) within pixThresh px, or -1. */
+/** Find index of line closest to (wx,wz) within pixThresh px (or wall thickness), or -1. */
 function findNearestLine(wx, wz, editedLines, cam, pixThresh = 10) {
   const worldThresh = pixThresh / cam.scale;
-  let best = worldThresh, idx = -1;
+  let best = Infinity, idx = -1;
   for (let i = 0; i < editedLines.length; i++) {
     const [[x1, z1], [x2, z2]] = editedLines[i].pts;
     const d = distPointToSeg(wx, wz, x1, z1, x2, z2);
-    if (d < best) { best = d; idx = i; }
+    const halfThick = normalizeWallThickness(editedLines[i].thickness) * 0.5;
+    const hitThresh = Math.max(worldThresh, halfThick + 4 / cam.scale);
+    if (d < hitThresh && d < best) { best = d; idx = i; }
   }
   return idx;
 }
@@ -545,8 +568,22 @@ function drawRooms(ctx, rooms, cam, highlightedRoomId, TC) {
   ctx.restore();
 }
 
+function traceWallRect(ctx, cx1, cy1, cx2, cy2, wPx) {
+  const dx = cx2 - cx1, dy = cy2 - cy1;
+  const segPx = Math.hypot(dx, dy);
+  if (segPx < 0.5) return false;
+  const nx = (-dy / segPx) * (wPx * 0.5);
+  const ny = (dx / segPx) * (wPx * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(cx1 + nx, cy1 + ny);
+  ctx.lineTo(cx2 + nx, cy2 + ny);
+  ctx.lineTo(cx2 - nx, cy2 - ny);
+  ctx.lineTo(cx1 - nx, cy1 - ny);
+  ctx.closePath();
+  return true;
+}
+
 function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, editMode, TC) {
-  // Thinner lines — scale * 0.09 (was 0.18), min 1px
   const lw = Math.max(1.0, cam.scale * 0.09);
 
   // Draw hidden walls first (below active walls)
@@ -554,6 +591,8 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const line = editedLines[i];
     if (!line.hidden) continue;
     const [[x1, z1], [x2, z2]] = line.pts;
+    const tM = normalizeWallThickness(line.thickness);
+    const wPx = Math.max(1.8, tM * cam.scale);
     const isHovered = i === hoveredIdx && (editMode === "delete" || editMode === "hide");
     const color = isHovered ? TC.wallHover : TC.wallHidden;
     const glow = isHovered ? TC.wallHoverGlow : TC.wallHiddenGlow;
@@ -561,13 +600,20 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const [cx2, cy2] = toCanvas(x2, z2, cam);
     ctx.save();
     ctx.globalAlpha = isHovered ? 0.85 : 0.45;
-    ctx.lineCap = "round";
+    ctx.lineCap = "butt";
     if (!isHovered) ctx.setLineDash([5, 6]);
-    ctx.strokeStyle = glow; ctx.lineWidth = lw + 5;
-    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
-    ctx.strokeStyle = color; ctx.lineWidth = isHovered ? lw * 1.8 : lw;
-    ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 8 : 2;
-    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    if (wPx >= 4.5 && traceWallRect(ctx, cx1, cy1, cx2, cy2, wPx)) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isHovered ? 2.0 : 1.1;
+      ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 8 : 2;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = glow; ctx.lineWidth = wPx + 3;
+      ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+      ctx.strokeStyle = color; ctx.lineWidth = isHovered ? wPx + 2 : wPx;
+      ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 8 : 2;
+      ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    }
     ctx.setLineDash([]);
     ctx.restore();
   }
@@ -582,13 +628,47 @@ function drawEditedWalls(ctx, editedLines, cam, hoveredIdx, addStart, snapInfo, 
     const glow = isHovered ? TC.wallHoverGlow : source === "user" ? TC.wallUserGlow : TC.wallGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam);
     const [cx2, cy2] = toCanvas(x2, z2, cam);
+    const tM = normalizeWallThickness(line.thickness);
+    const wPx = Math.max(1.8, tM * cam.scale);
+    const segPx = Math.hypot(cx2 - cx1, cy2 - cy1);
     ctx.save();
-    ctx.lineCap = "round";
-    ctx.strokeStyle = glow; ctx.lineWidth = lw + 6;
-    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
-    ctx.strokeStyle = color; ctx.lineWidth = isHovered ? lw * 2 : lw;
-    ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 10 : 3;
-    ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    ctx.lineCap = "butt";
+    if (wPx >= 4.5 && traceWallRect(ctx, cx1, cy1, cx2, cy2, wPx)) {
+      ctx.globalAlpha = isHovered ? 0.55 : 0.32;
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = isHovered ? 2.0 : 1.25;
+      ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 10 : 3;
+      ctx.stroke();
+      // Subtle centre-line
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 0.45;
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    } else {
+      ctx.strokeStyle = glow; ctx.lineWidth = wPx + 3;
+      ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+      ctx.strokeStyle = color; ctx.lineWidth = isHovered ? wPx + 2 : wPx;
+      ctx.shadowColor = color; ctx.shadowBlur = isHovered ? 10 : 3;
+      ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
+    }
+    if (isHovered || (cam.scale >= 32 && segPx >= 42)) {
+      const mx = (cx1 + cx2) * 0.5;
+      const my = (cy1 + cy2) * 0.5;
+      const lbl = `${Math.round(tM * 100)} cm`;
+      ctx.globalAlpha = 0.92;
+      ctx.shadowBlur = 0;
+      ctx.font = '600 9px "JetBrains Mono", monospace';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const tw = ctx.measureText(lbl).width;
+      ctx.fillStyle = TC.bg === "#0f0f0f" ? "rgba(15,15,15,0.82)" : "rgba(245,245,245,0.88)";
+      ctx.fillRect(mx - tw / 2 - 3, my - 6, tw + 6, 12);
+      ctx.fillStyle = color;
+      ctx.fillText(lbl, mx, my);
+    }
     ctx.restore();
   }
 
@@ -1512,6 +1592,7 @@ export default function FloorPlanViewer({
   livePose = null,
   selectedMpItem = null,
   onSelectMpItem,
+  hiddenMpLabels = [],
   // Optional shared layer state (synced with the 3D viewer). Falls back to local state.
   sharedShowMpEquip,
   sharedSetShowMpEquip,
@@ -1731,6 +1812,7 @@ export default function FloorPlanViewer({
         showEquip: showMpEquip,
         showSweeps: showMpSweeps,
         showAiHints: showMpAiHints,
+        hiddenMpLabels,
         selectedMpItem,
       });
 
@@ -1738,7 +1820,7 @@ export default function FloorPlanViewer({
       drawScale(ctx, cam, w, h, TC);
       drawCompass(ctx, w);
     });
-  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, mpInstances, mpSweeps, mpPoints, livePose, showMpEquip, showMpSweeps, showMpAiHints, selectedMpItem, selectedFloor]);
+  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, mpInstances, mpSweeps, mpPoints, livePose, showMpEquip, showMpSweeps, showMpAiHints, hiddenMpLabels, selectedMpItem, selectedFloor]);
 
   const isDirtyRef = useRef(false);
   useEffect(() => { isDirtyRef.current = isDirty; }, [isDirty]);
@@ -1780,7 +1862,7 @@ export default function FloorPlanViewer({
         if (cancelled) return;
 
         if (w) {
-          const converted = (w?.lines ?? []).map(pts => ({ pts, source: "algo" }));
+          const converted = wallJsonToEditedLines(w);
           setEditedLines(converted); editedLinesRef.current = converted;
           if (r) setRoomsData(r);
           setIsDirty(false);
@@ -1893,14 +1975,14 @@ export default function FloorPlanViewer({
       }
       if (isDirty) {
         // Hidden walls are excluded — they are suppressed from room recalculation
-        const lines = editedLinesRef.current
-          .filter(l => !l.hidden)
-          .map(l => l.pts);
+        const visibleLines = editedLinesRef.current.filter(l => !l.hidden);
+        const lines = visibleLines.map(l => l.pts);
+        const thicknesses = visibleLines.map(l => normalizeWallThickness(l.thickness));
         const putUrl = `${apiBase}/walls/${selectedFloor}`;
         const wallRes = await fetch(putUrl, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lines, polygon_rooms: roomMode === "polygon" }),
+          body: JSON.stringify({ lines, thicknesses, polygon_rooms: roomMode === "polygon" }),
         });
         if (!wallRes.ok) { setSaveState("error"); return; }
         setIsDirty(false);
@@ -2327,7 +2409,9 @@ export default function FloorPlanViewer({
         const [mwx, mwz] = getWorldFromEvent(e);
         const hitR = 10 / camRef.current.scale;
         const onFloor = (item) =>
-          item?.s2f_position && (item.floor_idx == null || item.floor_idx === selectedFloor);
+          Boolean(item?.s2f_position) &&
+          item.floor_idx != null &&
+          Number(item.floor_idx) === Number(selectedFloor);
 
         for (const pt of mpPoints || []) {
           if (!onFloor(pt)) continue;
@@ -2339,6 +2423,7 @@ export default function FloorPlanViewer({
         if (showMpEquip || showMpAiHints) {
           for (const inst of mpInstances || []) {
             if (!onFloor(inst)) continue;
+            if (hiddenMpLabels.includes(inst.label)) continue;
             const isHint = inst.label === "dvere" || inst.label === "okno";
             if ((isHint && !showMpAiHints) || (!isHint && !showMpEquip)) continue;
             if (Math.hypot(inst.s2f_position.x - mwx, inst.s2f_position.z - mwz) <= hitR) {
@@ -2401,7 +2486,7 @@ export default function FloorPlanViewer({
         scheduleDraw();
       } else {
         // Place second point → commit
-        const newLine = { pts: [addStepRef.current, [wx, wz]], source: "user" };
+        const newLine = { pts: [addStepRef.current, [wx, wz]], source: "user", thickness: 0.20, thicknessSource: "edited" };
         const newLines = [...editedLinesRef.current, newLine];
         pushHistory(editedLinesRef.current);
         setEditedLines(newLines); editedLinesRef.current = newLines;
@@ -2514,7 +2599,7 @@ export default function FloorPlanViewer({
       }
       return;
     }
-  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor]);
+  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, hiddenMpLabels, onSelectMpItem]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();
@@ -2560,12 +2645,13 @@ export default function FloorPlanViewer({
     addStepRef.current = null; setAddStep(null); snapRef.current = null;
     setEditMode("select"); editModeRef.current = "select";
     setSelectedFloor(i);
+    onSelectFloor?.(i);
   };
 
   // Discard all edits
   const handleReset = useCallback(() => {
     fetch(`${apiBase}/walls/${selectedFloor}`).then(r => r.json()).then(w => {
-      const converted = (w?.lines ?? []).map(pts => ({ pts, source: "algo" }));
+      const converted = wallJsonToEditedLines(w);
       setEditedLines(converted); editedLinesRef.current = converted;
       setUndoStack([]); setRedoStack([]);
       setIsDirty(false); setAddStep(null); addStepRef.current = null;

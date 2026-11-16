@@ -70,7 +70,7 @@ export default function App() {
   const [selectedOpening, setSelectedOpening] = useState(null);
   const [hoveredOpening, setHoveredOpening] = useState(null);
   const [fpFloor, setFpFloor] = useState(0);
-  const [activeFloor, setActiveFloor] = useState("all");
+  const [activeFloor, setActiveFloor] = useState(0);
 
   /* ---------- theme ------------------- */
   const [theme, setTheme] = useState(() => {
@@ -183,23 +183,33 @@ export default function App() {
       if (!res.ok) throw new Error("Failed to fetch walls");
       const data = await res.json();
       const currentLines = data.lines || [];
+      const currentThicknesses = Array.isArray(data.thicknesses) ? data.thicknesses : null;
 
-      // Filter out this wall (by index or proximity of endpoints)
-      const filteredLines = currentLines.filter((seg, idx) => {
-        if (idx === wall.wallIdx) return false;
+      // Filter out this wall (by index or proximity of endpoints) while keeping thicknesses aligned
+      const filteredLines = [];
+      const filteredThicknesses = currentThicknesses ? [] : null;
+      currentLines.forEach((seg, idx) => {
         const [[x1, z1], [x2, z2]] = seg;
         const match1 = Math.hypot(x1 - wall.x1, z1 - wall.z1) < 0.04 && Math.hypot(x2 - wall.x2, z2 - wall.z2) < 0.04;
         const match2 = Math.hypot(x1 - wall.x2, z1 - wall.z2) < 0.04 && Math.hypot(x2 - wall.x1, z2 - wall.z1) < 0.04;
-        return !(match1 || match2);
+        if (idx === wall.wallIdx || match1 || match2) return;
+        filteredLines.push(seg);
+        if (filteredThicknesses) {
+          const tv = Number(currentThicknesses[idx]);
+          filteredThicknesses.push(Number.isFinite(tv) && tv > 0.02 ? tv : 0.20);
+        }
       });
+
+      const putBody = {
+        lines: filteredLines,
+        polygon_rooms: roomMode === "polygon",
+      };
+      if (filteredThicknesses) putBody.thicknesses = filteredThicknesses;
 
       const putRes = await fetch(`${apiBase}/walls/${floorIdx}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          lines: filteredLines,
-          polygon_rooms: roomMode === "polygon",
-        }),
+        body: JSON.stringify(putBody),
       });
       if (!putRes.ok) throw new Error("Failed to save walls");
 
@@ -426,7 +436,7 @@ export default function App() {
     };
   }, [activeFloor, floorDataVersion, loadedSave]);
 
-  // Clear room selection only when user manually changes activeFloor to a different floor
+  // Clear room and equipment selection when user changes activeFloor
   const prevActiveFloorRef = useRef(activeFloor);
   useEffect(() => {
     if (prevActiveFloorRef.current !== activeFloor) {
@@ -434,6 +444,15 @@ export default function App() {
       if (selectedRoomFloor != null && activeFloor !== "all" && activeFloor !== selectedRoomFloor) {
         handleSelectRoom(null);
       }
+      setSelectedMpItem((prev) => {
+        if (
+          prev?.data?.floor_idx != null &&
+          (activeFloor === "all" || Number(activeFloor) !== Number(prev.data.floor_idx))
+        ) {
+          return null;
+        }
+        return prev;
+      });
     }
   }, [activeFloor, selectedRoomFloor, handleSelectRoom]);
 
@@ -733,7 +752,7 @@ export default function App() {
     setFpvRequest(null);
     setMpLabelFilter(null);
     setHiddenMpLabels([]);
-    setActiveFloor("all");
+    setActiveFloor(0);
     setShowAlgo(false);
     setLayout("single");
     setSlots(["3d", "2d"]);
@@ -1093,6 +1112,7 @@ export default function App() {
       livePose={liveMpPose}
       selectedMpItem={selectedMpItem}
       onSelectMpItem={onSelectMpItemShared}
+      hiddenMpLabels={hiddenMpLabels}
       sharedShowMpEquip={showMpEquip}
       sharedSetShowMpEquip={setShowMpEquip}
       sharedShowMpSweeps={showMpSweeps}

@@ -201,6 +201,23 @@ function drawBoxSelect(ctx, box, mode) {
   ctx.strokeRect(x, y, w, h); ctx.setLineDash([]); ctx.restore();
 }
 
+function normalizeWallThickness(val) {
+  const t = Number(val);
+  return Number.isFinite(t) && t > 0.02 ? t : 0.20;
+}
+
+function wallJsonToEditedLines(w) {
+  const lines = w?.lines ?? [];
+  const thicks = Array.isArray(w?.thicknesses) ? w.thicknesses : [];
+  const srcs = Array.isArray(w?.thickness_source) ? w.thickness_source : [];
+  return lines.map((pts, i) => ({
+    pts,
+    source: "algo",
+    thickness: normalizeWallThickness(thicks[i]),
+    thicknessSource: srcs[i] || "default",
+  }));
+}
+
 function drawWalls(ctx, lines, cam, hovIdx, addStart, snapInfo, mode, room, TC, hoverOp, toolParams) {
   const lw = Math.max(1.0, cam.scale * 0.09);
 
@@ -209,9 +226,10 @@ function drawWalls(ctx, lines, cam, hovIdx, addStart, snapInfo, mode, room, TC, 
     const l = lines[i];
     if (isRoomWall(l, room) || l.hidden) continue;
     const [[x1, z1], [x2, z2]] = l.pts;
+    const wPx = Math.max(1.8, normalizeWallThickness(l.thickness) * cam.scale);
     const [cx1, cy1] = toCanvas(x1, z1, cam), [cx2, cy2] = toCanvas(x2, z2, cam);
-    ctx.save(); ctx.globalAlpha = 0.15; ctx.lineCap = "round";
-    ctx.strokeStyle = TC.wall; ctx.lineWidth = lw;
+    ctx.save(); ctx.globalAlpha = 0.15; ctx.lineCap = "butt";
+    ctx.strokeStyle = TC.wall; ctx.lineWidth = wPx;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke(); ctx.restore();
   }
 
@@ -220,14 +238,15 @@ function drawWalls(ctx, lines, cam, hovIdx, addStart, snapInfo, mode, room, TC, 
     const l = lines[i];
     if (!l.hidden || !isRoomWall(l, room)) continue;
     const [[x1, z1], [x2, z2]] = l.pts;
+    const wPx = Math.max(1.8, normalizeWallThickness(l.thickness) * cam.scale);
     const isHov = i === hovIdx && (mode === "delete" || mode === "hide");
     const color = isHov ? TC.wallHover : TC.wallHidden;
     const [cx1, cy1] = toCanvas(x1, z1, cam), [cx2, cy2] = toCanvas(x2, z2, cam);
-    ctx.save(); ctx.globalAlpha = isHov ? 0.85 : 0.45; ctx.lineCap = "round";
+    ctx.save(); ctx.globalAlpha = isHov ? 0.85 : 0.45; ctx.lineCap = "butt";
     if (!isHov) ctx.setLineDash([5, 6]);
-    ctx.strokeStyle = TC.wallHiddenGlow; ctx.lineWidth = lw + 5;
+    ctx.strokeStyle = TC.wallHiddenGlow; ctx.lineWidth = wPx + 3;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
-    ctx.strokeStyle = color; ctx.lineWidth = isHov ? lw * 1.8 : lw;
+    ctx.strokeStyle = color; ctx.lineWidth = isHov ? wPx + 2 : wPx;
     ctx.shadowColor = color; ctx.shadowBlur = isHov ? 8 : 2;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
     ctx.setLineDash([]); ctx.restore();
@@ -238,15 +257,16 @@ function drawWalls(ctx, lines, cam, hovIdx, addStart, snapInfo, mode, room, TC, 
     const l = lines[i];
     if (l.hidden || !isRoomWall(l, room)) continue;
     const { pts: [[x1, z1], [x2, z2]], source } = l;
+    const wPx = Math.max(1.8, normalizeWallThickness(l.thickness) * cam.scale);
     const isHov = i === hovIdx && (mode === "delete" || mode === "hide");
     const isOpHov = (mode === "add-door" || mode === "add-window") && hoverOp?.wallIdx === i;
     const color = isHov ? TC.wallHover : isOpHov ? C.corner : source === "user" ? TC.wallUser : TC.wall;
     const glow  = isHov ? TC.wallHoverGlow : source === "user" ? TC.wallUserGlow : TC.wallGlow;
     const [cx1, cy1] = toCanvas(x1, z1, cam), [cx2, cy2] = toCanvas(x2, z2, cam);
-    ctx.save(); ctx.lineCap = "round";
-    ctx.strokeStyle = glow; ctx.lineWidth = lw + 6;
+    ctx.save(); ctx.lineCap = "butt";
+    ctx.strokeStyle = glow; ctx.lineWidth = wPx + 3;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke();
-    ctx.strokeStyle = color; ctx.lineWidth = isHov ? lw * 2 : isOpHov ? lw * 1.5 : lw;
+    ctx.strokeStyle = color; ctx.lineWidth = isHov ? wPx + 2 : isOpHov ? wPx * 1.25 : wPx;
     ctx.shadowColor = color; ctx.shadowBlur = isHov ? 10 : isOpHov ? 8 : 3;
     ctx.beginPath(); ctx.moveTo(cx1, cy1); ctx.lineTo(cx2, cy2); ctx.stroke(); ctx.restore();
   }
@@ -627,7 +647,7 @@ export default function RoomEditorPanel({
       fetch(`${apiBase}/openings/${floor}`).then(r => r.json()),
     ]).then(([w, o]) => {
       if (cancelled) return;
-      const converted = (w?.lines ?? []).map(pts => ({ pts, source: "algo" }));
+      const converted = wallJsonToEditedLines(w);
       setEditedLines(converted); editedLinesRef.current = converted;
       const auto = o?.openings ?? [];
       setAutoOpenings(auto); autoOpeningsRef.current = auto;
@@ -683,10 +703,12 @@ export default function RoomEditorPanel({
         setOpeningsDirty(false);
       }
       if (isDirty) {
-        const lines = editedLinesRef.current.filter(l => !l.hidden).map(l => l.pts);
+        const visibleLines = editedLinesRef.current.filter(l => !l.hidden);
+        const lines = visibleLines.map(l => l.pts);
+        const thicknesses = visibleLines.map(l => normalizeWallThickness(l.thickness));
         await fetch(`${apiBase}/walls/${floor}`, {
           method: "PUT", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ lines, polygon_rooms: true }),
+          body: JSON.stringify({ lines, thicknesses, polygon_rooms: true }),
         });
         setIsDirty(false);
       }
@@ -698,7 +720,7 @@ export default function RoomEditorPanel({
   // ── Reset ───────────────────────────────────────────────────────────────────
   const handleReset = useCallback(() => {
     fetch(`${apiBase}/walls/${floor}`).then(r => r.json()).then(w => {
-      const c = (w?.lines ?? []).map(pts => ({ pts, source: "algo" }));
+      const c = wallJsonToEditedLines(w);
       setEditedLines(c); editedLinesRef.current = c;
       setUndoStack([]); setRedoStack([]); setIsDirty(false);
       setAddStep(null); addStepRef.current = null; scheduleDraw();
@@ -751,7 +773,7 @@ export default function RoomEditorPanel({
         for (const inst of mpInstances) {
           const p = inst?.s2f_position;
           if (!p) continue;
-          if (inst.floor_idx != null && inst.floor_idx !== floor) continue;
+          if (inst.floor_idx == null || Number(inst.floor_idx) !== Number(floor)) continue;
           if (p.x < x_min - pad || p.x > x_max + pad || p.z < z_min - pad || p.z > z_max + pad) continue;
           const sx = cam.ox + p.x * cam.scale;
           const sy = cam.oy + p.z * cam.scale;
@@ -987,7 +1009,7 @@ export default function RoomEditorPanel({
       if (!addStepRef.current) { addStepRef.current = [wx, wz]; setAddStep([wx, wz]); scheduleDraw(); }
       else {
         pushHistory(editedLinesRef.current);
-        const newLines = [...editedLinesRef.current, { pts: [addStepRef.current, [wx, wz]], source: "user" }];
+        const newLines = [...editedLinesRef.current, { pts: [addStepRef.current, [wx, wz]], source: "user", thickness: 0.20, thicknessSource: "edited" }];
         setEditedLines(newLines); editedLinesRef.current = newLines;
         addStepRef.current = null; setAddStep(null); setIsDirty(true); scheduleDraw();
       }

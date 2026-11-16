@@ -53,12 +53,13 @@ export default function LayersPanel({
 
   const labelInfo = useMemo(() => {
     const floorNum = activeFloor === "all" || activeFloor == null ? null : Number(activeFloor);
+    if (floorNum === null) return [];
     const names = {};
     inventory.forEach((r) => { names[r.label] = r.cz || r.en || r.label; });
     const counts = {};
     instances.forEach((inst) => {
       if (!inst?.s2f_position) return;
-      if (floorNum !== null && inst.floor_idx != null && inst.floor_idx !== floorNum) return;
+      if (inst.floor_idx == null || Number(inst.floor_idx) !== floorNum) return;
       counts[inst.label] = (counts[inst.label] || 0) + 1;
     });
     return Object.entries(counts)
@@ -145,7 +146,11 @@ export default function LayersPanel({
                   </span>
                 </div>
                 {labelInfo.length === 0 ? (
-                  <div className="s2f-hint">No equipment on this floor</div>
+                  <div className="s2f-hint">
+                    {activeFloor === "all" || activeFloor == null
+                      ? "Select a floor (F0, F1, …) to view equipment"
+                      : "No equipment on this floor"}
+                  </div>
                 ) : (
                   <div className="s2f-equip-list">
                     {labelInfo.map(({ label, count, name }) => (

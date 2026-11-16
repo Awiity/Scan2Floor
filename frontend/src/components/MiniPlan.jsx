@@ -90,7 +90,7 @@ export default function MiniPlan({
   const [prefs, setPrefs] = useState(loadPrefs);
   const { open, opts, hidden, w, h } = prefs;
   const [showFilters, setShowFilters] = useState(false);
-  const [data, setData] = useState({ walls: [], rooms: [], openings: [] });
+  const [data, setData] = useState({ walls: [], wallThicknesses: [], rooms: [], openings: [] });
   const [loadState, setLoadState] = useState("loading");
   const [tick, setTick] = useState(0);
 
@@ -140,6 +140,7 @@ export default function MiniPlan({
         if (cancelled) return;
         setData({
           walls: wd?.lines ?? [],
+          wallThicknesses: wd?.thicknesses ?? [],
           rooms: rd?.rooms ?? [],
           openings: [...(od?.openings ?? []), ...(od?.user_openings ?? [])],
         });
@@ -153,7 +154,7 @@ export default function MiniPlan({
 
   /* ---------------- equipment data ---------------- */
   const onFloor = useCallback(
-    (item) => item?.s2f_position && (item.floor_idx == null || item.floor_idx === floor),
+    (item) => Boolean(item?.s2f_position) && item.floor_idx != null && Number(item.floor_idx) === Number(floor),
     [floor]
   );
   const floorInstances = useMemo(() => instances.filter(onFloor), [instances, onFloor]);
@@ -260,16 +261,18 @@ export default function MiniPlan({
       // walls
       if (opts.walls) {
         ctx.strokeStyle = T.wall;
-        ctx.lineWidth = clamp(0.2 * cam.s, 1.2, 4);
-        ctx.lineCap = "round";
-        ctx.beginPath();
-        data.walls.forEach(([a, b]) => {
+        ctx.lineCap = "butt";
+        data.walls.forEach(([a, b], i) => {
+          const tv = Number(data.wallThicknesses?.[i]);
+          const tM = Number.isFinite(tv) && tv > 0.02 ? tv : 0.2;
+          ctx.lineWidth = clamp(tM * cam.s, 1.2, 14);
           const [x1, z1] = P(a[0], a[1]);
           const [x2, z2] = P(b[0], b[1]);
+          ctx.beginPath();
           ctx.moveTo(x1, z1);
           ctx.lineTo(x2, z2);
+          ctx.stroke();
         });
-        ctx.stroke();
       }
 
       // openings

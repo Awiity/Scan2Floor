@@ -60,13 +60,15 @@ export default function MpObjects3D({
   onSelectMpItem,
   onHoverMpItem,
 }) {
-  const floorNum = activeFloor === "all" ? null : Number(activeFloor);
+  const floorNum = activeFloor === "all" || activeFloor == null ? null : Number(activeFloor);
+
+  const onChosenFloor = (item) =>
+    floorNum !== null && item?.floor_idx != null && Number(item.floor_idx) === floorNum;
 
   const visibleInstances = useMemo(() => {
-    if (!showEquipment) return [];
+    if (!showEquipment || floorNum === null) return [];
     return instances.filter((inst) => {
-      if (!inst?.s2f_position) return false;
-      if (floorNum !== null && inst.floor_idx != null && inst.floor_idx !== floorNum) return false;
+      if (!inst?.s2f_position || !onChosenFloor(inst)) return false;
       if (labelFilter && inst.label !== labelFilter) return false;
       if (hiddenLabels.includes(inst.label)) return false;
       return true;
@@ -74,30 +76,19 @@ export default function MpObjects3D({
   }, [instances, showEquipment, floorNum, labelFilter, hiddenLabels]);
 
   const visiblePoints = useMemo(() => {
-    if (!showPoints) return [];
-    return points.filter((pt) => {
-      if (!pt?.s2f_position) return false;
-      if (floorNum !== null && pt.floor_idx != null && pt.floor_idx !== floorNum) return false;
-      return true;
-    });
+    if (!showPoints || floorNum === null) return [];
+    return points.filter((pt) => Boolean(pt?.s2f_position) && onChosenFloor(pt));
   }, [points, showPoints, floorNum]);
 
   const visibleSweeps = useMemo(() => {
-    if (!showSweeps) return [];
-    return Object.values(sweeps || {}).filter((sw) => {
-      if (!sw?.s2f_position) return false;
-      if (floorNum !== null && sw.floor_idx != null && sw.floor_idx !== floorNum) return false;
-      return true;
-    });
+    if (!showSweeps || floorNum === null) return [];
+    return Object.values(sweeps || {}).filter((sw) => Boolean(sw?.s2f_position) && onChosenFloor(sw));
   }, [sweeps, showSweeps, floorNum]);
 
   const poseVisible = useMemo(() => {
-    if (!showLivePose) return false;
+    if (!showLivePose || floorNum === null) return false;
     if (!livePose?.s2f_position) return false;
-    if (floorNum !== null && livePose.floor_idx != null && livePose.floor_idx !== floorNum) {
-      return false;
-    }
-    return true;
+    return onChosenFloor(livePose);
   }, [livePose, showLivePose, floorNum]);
 
   const cameraYawRad = useMemo(() => {
