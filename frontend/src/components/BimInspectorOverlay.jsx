@@ -1,4 +1,9 @@
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
+import {
+  EQUIPMENT_META,
+  SUPPORTED_EQUIPMENT_LABELS,
+  colorForMpLabel,
+} from "./MpObjects3D";
 
 /* Design tokens — all values come from CSS variables in index.css */
 const mix = (c, pct) => `color-mix(in srgb, ${c} ${pct}%, transparent)`;
@@ -322,6 +327,97 @@ function OpeningEditPanel({ op, wallLength, onSave, onClose, onDelete, isSaving,
   );
 }
 
+function PlacedEquipmentEditor({ item, modelInfo, onSave, onDelete, isSaving, isDeleting }) {
+  const levels = modelInfo?.floor_levels ?? [];
+  const fIdx = Number(item.floor_idx ?? 0);
+  const floorY =
+    item.floor_y != null
+      ? Number(item.floor_y)
+      : fIdx >= 0 && fIdx < levels.length && levels[fIdx] != null
+        ? Number(levels[fIdx])
+        : fIdx * 2.8;
+  const nextFloorY =
+    item.ceil_y != null
+      ? Number(item.ceil_y)
+      : fIdx + 1 < levels.length && levels[fIdx + 1] != null
+        ? Number(levels[fIdx + 1])
+        : floorY + 2.8;
+  const storeyH = Math.max(2.0, nextFloorY - floorY);
+  const maxRelY = Number((storeyH - 0.05).toFixed(2));
+
+  const clampRelY = (yVal) =>
+    Math.max(0.20, Math.min(maxRelY, Number(yVal ?? floorY + 0.9) - floorY));
+  const normDeg = (deg) => ((Number(deg ?? 0) % 360) + 360) % 360;
+
+  const [relHeight, setRelHeight] = useState(() => clampRelY(item.y));
+  const [rotY, setRotY] = useState(() => normDeg(item.rotation_y));
+  const [isDirty, setIsDirty] = useState(false);
+
+  const accent = colorForMpLabel(item.label);
+
+  return (
+    <div style={{
+      marginTop: 10, padding: "12px", background: "rgba(var(--shadow-rgb),0.35)",
+      borderRadius: 10, border: "1px solid " + mix(accent, 30),
+    }}>
+      <EditSlider
+        label="Height (above floor)"
+        value={relHeight}
+        min={0.2}
+        max={maxRelY}
+        step={0.05}
+        unit="m"
+        accent={accent}
+        onChange={(v) => { setRelHeight(v); setIsDirty(true); }}
+      />
+      <EditSlider
+        label="Rotation (Y)"
+        value={rotY}
+        min={0}
+        max={360}
+        step={5}
+        unit="°"
+        accent={accent}
+        onChange={(v) => { setRotY(v); setIsDirty(true); }}
+      />
+      <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
+        <button
+          onClick={() => onSave?.({
+            ...item,
+            y: Number((floorY + relHeight).toFixed(4)),
+            rotation_y: Number(rotY),
+          })}
+          disabled={isSaving || !isDirty}
+          style={{
+            flex: 1, padding: "8px 12px", borderRadius: 7, fontSize: 11.5, fontWeight: 700, fontFamily: T.font,
+            cursor: isSaving || !isDirty ? "not-allowed" : "pointer",
+            background: isDirty ? "rgba(var(--green-rgb),0.22)" : "rgba(var(--fg-rgb),0.05)",
+            border: isDirty ? "1px solid rgba(var(--green-rgb),0.5)" : "1px solid rgba(var(--fg-rgb),0.1)",
+            color: isDirty ? "var(--green)" : "rgba(var(--fg-rgb),0.45)",
+          }}
+        >
+          {isSaving ? "⏳ Saving…" : "💾 Apply Changes"}
+        </button>
+        {onDelete && (
+          <button
+            onClick={() => onDelete(item)}
+            disabled={isDeleting}
+            title="Remove from 3D Viewer"
+            style={{
+              padding: "8px 11px", borderRadius: 7, fontSize: 11.5, fontWeight: 700,
+              cursor: isDeleting ? "not-allowed" : "pointer",
+              background: T.deleteBg, border: "1px solid " + T.deleteBorder,
+              color: "var(--red)",
+            }}
+          >
+            {isDeleting ? "…" : "🗑 Remove from 3D"}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Main export
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -343,6 +439,11 @@ export default function BimInspectorOverlay({
   onEnterFpv,
   onDeleteMpPoint,
   onSaveMpAsPoint,
+  placedEquipment = [],
+  modelInfo = null,
+  onAddEquipmentFromMp,
+  onUpdateEquipment,
+  onDeleteEquipment,
 }) {
   const activeWall = selectedWall;
   const activeOp   = selectedOpening;
@@ -351,6 +452,26 @@ export default function BimInspectorOverlay({
   const [wallEditOp, setWallEditOp]         = useState(null);
   const [isSavingInline, setIsSavingInline] = useState(false);
   const [isDeletingInline, setIsDeletingInline] = useState(false);
+  const [isMutatingEquip, setIsMutatingEquip] = useState(false);
+
+  const matchedPlacedEquip = useMemo(() => {
+    if (!selectedMpItem?.data) return null;
+    if (selectedMpItem.kind === "equipment") return selectedMpItem.data;
+    if (selectedMpItem.kind === "instance" && selectedMpItem.data.instance_id) {
+      return (placedEquipment || []).find(
+        (eq) => eq.instance_id === selectedMpItem.data.instance_id
+      ) || null;
+    }
+    return null;
+  }, [selectedMpItem, placedEquipment]);
+
+  const effectiveMpItem = useMemo(() => {
+    if (!selectedMpItem) return null;
+    if (matchedPlacedEquip) {
+      return { kind: "equipment", isPlaced: true, data: matchedPlacedEquip };
+    }
+    return selectedMpItem;
+  }, [selectedMpItem, matchedPlacedEquip]);
 
   React.useEffect(() => {
     if (!wallEditOp) return;
@@ -571,134 +692,224 @@ export default function BimInspectorOverlay({
         </div>
       )}
 
-      {/* ── 6. Selected — Matterport Asset / Viewpoint / Sweep ── */}
-      {!activeWall && !activeOp && selectedMpItem && (
-        <CardShell accentColor="#38bdf8">
-          <CardHeader
-            icon={selectedMpItem.kind === "point" ? "📍" : selectedMpItem.kind === "sweep" ? "🌐" : "📦"}
-            title={
-              selectedMpItem.kind === "point"
-                ? (selectedMpItem.data?.name || "Viewpoint")
-                : selectedMpItem.kind === "sweep"
-                ? `Sweep ${selectedMpItem.data?.sweep_id || ""}`
-                : (selectedMpItem.data?.instance_id || selectedMpItem.data?.label || "Equipment")
-            }
-            badge={selectedMpItem.kind === "instance" ? selectedMpItem.data?.label : selectedMpItem.kind.toUpperCase()}
-            badgeColor="#38bdf8"
-            badgeBg="rgba(56,189,248,0.14)"
-            badgeBorder="rgba(56,189,248,0.35)"
-            onClose={onCloseMpItem}
-          />
-          <PropGrid>
-            <Prop
-              label="Floor"
-              value={selectedMpItem.data?.floor_idx != null ? `Level ${selectedMpItem.data.floor_idx}` : "Unknown"}
-              valueColor={T.accentWindow}
+      {/* ── 6. Selected — Matterport Asset / Placed Equipment / Viewpoint / Sweep ── */}
+      {!activeWall && !activeOp && effectiveMpItem && (() => {
+        const mpKind = effectiveMpItem.kind;
+        const mpData = effectiveMpItem.data || {};
+        const equipMeta = EQUIPMENT_META[mpData.label];
+        const isEquipOrInst = mpKind === "equipment" || mpKind === "instance";
+        const isPlacedEquip = mpKind === "equipment";
+        const isSupportedEquip = SUPPORTED_EQUIPMENT_LABELS.includes(mpData.label);
+        const accentCol = isEquipOrInst ? colorForMpLabel(mpData.label) : "#38bdf8";
+        const pos3d = isPlacedEquip
+          ? { x: mpData.x, y: mpData.y, z: mpData.z }
+          : (mpData.snapped_s2f_position || mpData.s2f_position);
+        const icon =
+          mpKind === "point"
+            ? "📍"
+            : mpKind === "sweep"
+              ? "🌐"
+              : (equipMeta?.icon || "📦");
+        const title =
+          mpKind === "point"
+            ? (mpData.name || "Viewpoint")
+            : mpKind === "sweep"
+              ? `Sweep ${mpData.sweep_id || ""}`
+              : (equipMeta?.en || mpData.instance_id || mpData.label || "Equipment");
+        const badge = isPlacedEquip
+          ? "Placed in 3D"
+          : mpKind === "instance"
+            ? (isSupportedEquip ? "Matterport Hint" : mpData.label)
+            : mpKind.toUpperCase();
+
+        return (
+          <CardShell accentColor={accentCol}>
+            <CardHeader
+              icon={icon}
+              title={title}
+              badge={badge}
+              badgeColor={isPlacedEquip ? "#4ade80" : accentCol}
+              badgeBg={isPlacedEquip ? "rgba(34,197,94,0.16)" : mix(accentCol, 15)}
+              badgeBorder={isPlacedEquip ? "rgba(34,197,94,0.4)" : mix(accentCol, 38)}
+              onClose={onCloseMpItem}
             />
-            {selectedMpItem.data?.room_name && (
-              <Prop label="Room" value={selectedMpItem.data.room_name} />
-            )}
-            {selectedMpItem.kind === "instance" && (
-              <>
-                <Prop label="Class" value={selectedMpItem.data?.label || "-"} />
-                <Prop label="Max Score" value={String(selectedMpItem.data?.max_score ?? "-")} />
-                <Prop label="Observations" value={String(selectedMpItem.data?.observation_count ?? 1)} />
-              </>
-            )}
-            {selectedMpItem.kind === "point" && selectedMpItem.data?.note && (
-              <Prop label="Note" value={selectedMpItem.data.note} span={2} />
-            )}
-            {selectedMpItem.kind === "sweep" && (
-              <Prop label="Detections" value={String(selectedMpItem.data?.detections?.length ?? 0)} />
-            )}
-            {selectedMpItem.data?.s2f_position && (
+            <PropGrid>
               <Prop
-                label="3D [X, Y, Z]"
-                value={`[${selectedMpItem.data.s2f_position.x.toFixed(2)}, ${selectedMpItem.data.s2f_position.y.toFixed(2)}, ${selectedMpItem.data.s2f_position.z.toFixed(2)}]`}
-                mono
-                span={2}
+                label="Floor"
+                value={mpData.floor_idx != null ? `Level ${mpData.floor_idx}` : "Unknown"}
+                valueColor={T.accentWindow}
+              />
+              {mpData.room_name && (
+                <Prop label="Room" value={mpData.room_name} />
+              )}
+              {isEquipOrInst && (
+                <>
+                  <Prop label="Type" value={equipMeta ? `${equipMeta.en} (${equipMeta.cz})` : (mpData.label || "-")} />
+                  {mpData.mount_type && (
+                    <Prop label="Mount" value={mpData.mount_type} />
+                  )}
+                  <Prop label="Confidence" value={mpData.max_score != null ? `${Math.round(Number(mpData.max_score) * 100)}%` : "-"} />
+                  <Prop label="Observations" value={String(mpData.observation_count ?? 1)} />
+                  {mpData.instance_id && (
+                    <Prop label="Instance ID" value={mpData.instance_id} mono span={2} />
+                  )}
+                </>
+              )}
+              {mpKind === "point" && mpData.note && (
+                <Prop label="Note" value={mpData.note} span={2} />
+              )}
+              {mpKind === "sweep" && (
+                <Prop label="Detections" value={String(mpData.detections?.length ?? 0)} />
+              )}
+              {pos3d && pos3d.x != null && (
+                <Prop
+                  label={isPlacedEquip ? "3D [X, Y, Z]" : "Snapped 3D [X, Y, Z]"}
+                  value={`[${Number(pos3d.x).toFixed(2)}, ${Number(pos3d.y).toFixed(2)}, ${Number(pos3d.z).toFixed(2)}]`}
+                  mono
+                  span={2}
+                />
+              )}
+            </PropGrid>
+
+            {isPlacedEquip && onUpdateEquipment && (
+              <PlacedEquipmentEditor
+                key={`${mpData.id || mpData.instance_id}-${mpData.y}-${mpData.rotation_y}`}
+                item={mpData}
+                modelInfo={modelInfo}
+                isSaving={isMutatingEquip}
+                isDeleting={isMutatingEquip}
+                onSave={async (updated) => {
+                  setIsMutatingEquip(true);
+                  try { await onUpdateEquipment(updated); } finally { setIsMutatingEquip(false); }
+                }}
+                onDelete={onDeleteEquipment ? async (it) => {
+                  setIsMutatingEquip(true);
+                  try { await onDeleteEquipment(it); } finally { setIsMutatingEquip(false); }
+                } : undefined}
               />
             )}
-          </PropGrid>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
-            {onEnterFpv && (
-              <button
-                onClick={() => onEnterFpv(selectedMpItem)}
-                style={{
-                  flex: "1 1 100%", padding: "8px 10px", borderRadius: 8, cursor: "pointer",
-                  background: "rgba(56,189,248,0.22)", border: "1px solid rgba(56,189,248,0.5)",
-                  color: "#38bdf8", fontWeight: 700, fontSize: 12,
-                }}
-              >
-                👁 First-Person View (Look at {selectedMpItem.kind === "instance" ? selectedMpItem.data?.label : "Point"})
-              </button>
-            )}
-            {onJumpToMpItem && (
-              <button
-                onClick={() => onJumpToMpItem(selectedMpItem)}
-                style={{
-                  flex: 1, padding: "7px 10px", borderRadius: 8, cursor: "pointer",
-                  background: "rgba(96,165,250,0.14)", border: "1px solid rgba(96,165,250,0.35)",
-                  color: "#93c5fd", fontWeight: 700, fontSize: 11.5,
-                }}
-              >
-                🌐 360° Showcase
-              </button>
-            )}
-            {selectedMpItem.kind === "instance" && onSaveMpAsPoint && (
-              <button
-                onClick={() => onSaveMpAsPoint(selectedMpItem.data)}
-                style={{
-                  padding: "7px 10px", borderRadius: 8, cursor: "pointer",
-                  background: "rgba(34,197,94,0.16)", border: "1px solid rgba(34,197,94,0.38)",
-                  color: "#4ade80", fontWeight: 700, fontSize: 11.5,
-                }}
-              >
-                + Save Viewpoint
-              </button>
-            )}
-            {selectedMpItem.kind === "point" && onDeleteMpPoint && (
-              <button
-                onClick={() => onDeleteMpPoint(selectedMpItem.data.id)}
-                style={{
-                  padding: "7px 10px", borderRadius: 8, cursor: "pointer",
-                  background: T.deleteBg, border: `1px solid ${T.deleteBorder}`,
-                  color: "#f87171", fontWeight: 700, fontSize: 11.5,
-                }}
-              >
-                Delete
-              </button>
-            )}
-          </div>
-        </CardShell>
-      )}
 
-      {/* ── 7. Hover — Matterport Asset / Viewpoint / Sweep ── */}
-      {!activeWall && !activeOp && !selectedMpItem && !hoveredOpening && !hoveredWall && !hoveredRoom && hoveredMpItem && (
-        <div style={{ ...tooltipBase, border: "1px solid rgba(56,189,248,0.45)" }}>
-          <span>{hoveredMpItem.kind === "point" ? "📍" : hoveredMpItem.kind === "sweep" ? "🌐" : "📦"}</span>
-          <span style={{ fontWeight: 700, color: "#38bdf8" }}>
-            {hoveredMpItem.kind === "point"
-              ? hoveredMpItem.data?.name
-              : hoveredMpItem.kind === "sweep"
-              ? `Sweep ${hoveredMpItem.data?.sweep_id}`
-              : hoveredMpItem.data?.instance_id}
-          </span>
-          {hoveredMpItem.data?.label && (
-            <>
-              <TooltipSep />
-              <span>{hoveredMpItem.data.label}</span>
-            </>
-          )}
-          {hoveredMpItem.data?.floor_idx != null && (
-            <>
-              <TooltipSep />
-              <span style={{ color: T.labelColor }}>Floor {hoveredMpItem.data.floor_idx}</span>
-            </>
-          )}
-          <span style={{ color: T.labelColor, fontSize: 10, marginLeft: 2 }}>&middot; click to inspect</span>
-        </div>
-      )}
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 12 }}>
+              {mpKind === "instance" && isSupportedEquip && onAddEquipmentFromMp && (
+                <button
+                  disabled={isMutatingEquip}
+                  onClick={async () => {
+                    setIsMutatingEquip(true);
+                    try {
+                      await onAddEquipmentFromMp({ instanceIds: [mpData.instance_id] });
+                    } finally {
+                      setIsMutatingEquip(false);
+                    }
+                  }}
+                  style={{
+                    flex: "1 1 100%", padding: "9px 10px", borderRadius: 8,
+                    cursor: isMutatingEquip ? "wait" : "pointer",
+                    background: "rgba(34,197,94,0.22)", border: "1px solid rgba(34,197,94,0.5)",
+                    color: "#4ade80", fontWeight: 700, fontSize: 12.5,
+                  }}
+                >
+                  {isMutatingEquip ? "Adding…" : `+ Add ${equipMeta?.en || "Equipment"} to 3D Viewer`}
+                </button>
+              )}
+              {onEnterFpv && (
+                <button
+                  onClick={() => onEnterFpv(effectiveMpItem)}
+                  style={{
+                    flex: "1 1 100%", padding: "8px 10px", borderRadius: 8, cursor: "pointer",
+                    background: "rgba(56,189,248,0.22)", border: "1px solid rgba(56,189,248,0.5)",
+                    color: "#38bdf8", fontWeight: 700, fontSize: 12,
+                  }}
+                >
+                  👁 First-Person View (Look at {isEquipOrInst ? (equipMeta?.en || mpData.label) : "Point"})
+                </button>
+              )}
+              {onJumpToMpItem && (mpKind !== "equipment" || mpData.instance_id) && (
+                <button
+                  onClick={() => onJumpToMpItem(effectiveMpItem)}
+                  style={{
+                    flex: 1, padding: "7px 10px", borderRadius: 8, cursor: "pointer",
+                    background: "rgba(96,165,250,0.14)", border: "1px solid rgba(96,165,250,0.35)",
+                    color: "#93c5fd", fontWeight: 700, fontSize: 11.5,
+                  }}
+                >
+                  🌐 360° Showcase
+                </button>
+              )}
+              {mpKind === "instance" && onSaveMpAsPoint && (
+                <button
+                  onClick={() => onSaveMpAsPoint(mpData)}
+                  style={{
+                    padding: "7px 10px", borderRadius: 8, cursor: "pointer",
+                    background: "rgba(34,197,94,0.16)", border: "1px solid rgba(34,197,94,0.38)",
+                    color: "#4ade80", fontWeight: 700, fontSize: 11.5,
+                  }}
+                >
+                  + Save Viewpoint
+                </button>
+              )}
+              {mpKind === "point" && onDeleteMpPoint && (
+                <button
+                  onClick={() => onDeleteMpPoint(mpData.id)}
+                  style={{
+                    padding: "7px 10px", borderRadius: 8, cursor: "pointer",
+                    background: T.deleteBg, border: `1px solid ${T.deleteBorder}`,
+                    color: "#f87171", fontWeight: 700, fontSize: 11.5,
+                  }}
+                >
+                  Delete
+                </button>
+              )}
+            </div>
+          </CardShell>
+        );
+      })()}
+
+      {/* ── 7. Hover — Matterport Asset / Equipment / Viewpoint / Sweep ── */}
+      {!activeWall && !activeOp && !effectiveMpItem && !hoveredOpening && !hoveredWall && !hoveredRoom && hoveredMpItem && (() => {
+        const hData = hoveredMpItem.data || {};
+        const hMeta = EQUIPMENT_META[hData.label];
+        const hIcon =
+          hoveredMpItem.kind === "point"
+            ? "📍"
+            : hoveredMpItem.kind === "sweep"
+              ? "🌐"
+              : (hMeta?.icon || "📦");
+        const hCol =
+          hoveredMpItem.kind === "equipment" || hoveredMpItem.kind === "instance"
+            ? colorForMpLabel(hData.label)
+            : "#38bdf8";
+        return (
+          <div style={{ ...tooltipBase, border: `1px solid ${mix(hCol, 45)}` }}>
+            <span>{hIcon}</span>
+            <span style={{ fontWeight: 700, color: hCol }}>
+              {hoveredMpItem.kind === "point"
+                ? hData.name
+                : hoveredMpItem.kind === "sweep"
+                  ? `Sweep ${hData.sweep_id}`
+                  : (hMeta?.en || hData.instance_id)}
+            </span>
+            {hoveredMpItem.kind === "equipment" && (
+              <>
+                <TooltipSep />
+                <span style={{ color: "#4ade80", fontWeight: 600 }}>3D Placed</span>
+              </>
+            )}
+            {hoveredMpItem.kind === "instance" && (
+              <>
+                <TooltipSep />
+                <span style={{ color: T.labelColor }}>Hint</span>
+              </>
+            )}
+            {hData.floor_idx != null && (
+              <>
+                <TooltipSep />
+                <span style={{ color: T.labelColor }}>Floor {hData.floor_idx}</span>
+              </>
+            )}
+            <span style={{ color: T.labelColor, fontSize: 10, marginLeft: 2 }}>&middot; click to inspect</span>
+          </div>
+        );
+      })()}
     </>
   );
 }

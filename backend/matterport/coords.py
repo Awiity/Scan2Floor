@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .config import PROCESSED_DIR, SAVES_DIR
+
+DEFAULT_FLOOR_LEVELS: list[float] = [-1.5141, 1.0359, 4.1859]
 
 
 @dataclass
@@ -19,7 +22,9 @@ class S2fContext:
     floor_levels: list[float] = field(default_factory=list)
     rooms_by_floor: dict[int, list[dict[str, Any]]] = field(default_factory=dict)
     wall_bounds_by_floor: dict[int, tuple[float, float, float, float]] = field(default_factory=dict)
+    walls_by_floor: dict[int, list[tuple[float, float, float, float, float]]] = field(default_factory=dict)
     sweep_floor_by_id: dict[str, int] = field(default_factory=dict)
+    sweeps_s2f_by_id: dict[str, dict[str, float]] = field(default_factory=dict)
 
 
 def _room_polygon(room: dict[str, Any]) -> list[list[float]]:
@@ -98,11 +103,32 @@ def _load_floor_spatial_data(ctx: S2fContext, base_dir: Path) -> None:
             try:
                 idx = int(name[len("walls_floor_") : -len(".json")])
                 data = json.loads((base_dir / name).read_text(encoding="utf-8"))
-                for seg in (data.get("lines", []) if isinstance(data, dict) else []):
+                raw_lines = data.get("lines", []) if isinstance(data, dict) else []
+                thicks = data.get("thicknesses", []) if isinstance(data, dict) else []
+                floor_walls: list[tuple[float, float, float, float, float]] = []
+                for wi, seg in enumerate(raw_lines):
                     if isinstance(seg, list) and len(seg) >= 2:
-                        for pt in seg[:2]:
-                            if isinstance(pt, (list, tuple)) and len(pt) >= 2:
-                                _add_pt(idx, float(pt[0]), float(pt[1]))
+                        p0, p1 = seg[0], seg[1]
+                        if (
+                            isinstance(p0, (list, tuple))
+                            and isinstance(p1, (list, tuple))
+                            and len(p0) >= 2
+                            and len(p1) >= 2
+                        ):
+                            x1, z1 = float(p0[0]), float(p0[1])
+                            x2, z2 = float(p1[0]), float(p1[1])
+                            _add_pt(idx, x1, z1)
+                            _add_pt(idx, x2, z2)
+                            tv = 0.20
+                            if isinstance(thicks, list) and wi < len(thicks):
+                                try:
+                                    cand_t = float(thicks[wi])
+                                    if math.isfinite(cand_t) and cand_t > 0.02:
+                                        tv = cand_t
+                                except (TypeError, ValueError):
+                                    pass
+                            floor_walls.append((x1, z1, x2, z2, tv))
+                ctx.walls_by_floor[idx] = floor_walls
             except Exception:
                 continue
 
@@ -112,9 +138,10 @@ def _load_floor_spatial_data(ctx: S2fContext, base_dir: Path) -> None:
 
 
 def _populate_sweeps(ctx: S2fContext, sweeps: dict[str, Any]) -> None:
-    """Pre-populate ctx.sweep_floor_by_id from raw sweep dicts."""
+    """Pre-populate ctx.sweep_floor_by_id and ctx.sweeps_s2f_by_id from raw sweep dicts."""
     if not isinstance(sweeps, dict):
         return
+    levels = ctx.floor_levels or DEFAULT_FLOOR_LEVELS
     for sid, sw in sweeps.items():
         if not isinstance(sw, dict):
             continue
@@ -122,7 +149,8 @@ def _populate_sweeps(ctx: S2fContext, sweeps: dict[str, Any]) -> None:
         if not isinstance(pos, dict):
             continue
         s2f = mp_to_s2f(pos, ctx)
-        fidx = assign_floor_idx(s2f["y"], ctx.floor_levels)
+        ctx.sweeps_s2f_by_id[sid] = s2f
+        fidx = assign_floor_idx(s2f["y"], levels)
         if fidx is not None:
             ctx.sweep_floor_by_id[sid] = fidx
 
@@ -304,31 +332,190 @@ def enrich_point(point: dict[str, Any], ctx: S2fContext) -> dict[str, Any]:
     return out
 
 
+def _best_observing_sweep_pos(
+    instance: dict[str, Any],
+    sweeps_s2f_by_id: dict[str, dict[str, float]],
+) -> dict[str, float] | None:
+    """Return the s2f position of the highest-confidence observing sweep."""
+    obs = sorted(
+        (o for o in (instance.get("observations") or []) if isinstance(o, dict)),
+        key=lambda o: (-float(o.get("score") or 0.0), float(o.get("distance_m") or 99.0)),
+    )
+    for o in obs:
+        pos = sweeps_s2f_by_id.get(str(o.get("sweep_id") or ""))
+        if pos is not None:
+            return pos
+    for sid in instance.get("sweep_ids") or []:
+        pos = sweeps_s2f_by_id.get(str(sid))
+        if pos is not None:
+            return pos
+    return None
+
+
+def _nearest_wall_match(
+    px: float,
+    pz: float,
+    walls: list[tuple[float, float, float, float, float]],
+    max_dist_m: float,
+) -> tuple[float, int, float, float, float, float, float, float, float] | None:
+    """Return closest wall match within ``max_dist_m`` as (dist, wall_idx, proj_x, proj_z, x1, z1, x2, z2, thick)."""
+    best: tuple[float, int, float, float, float, float, float, float, float] | None = None
+    for wi, (x1, z1, x2, z2, thick) in enumerate(walls):
+        dx = x2 - x1
+        dz = z2 - z1
+        l2 = dx * dx + dz * dz
+        if l2 < 1e-8:
+            continue
+        t = max(0.0, min(1.0, ((px - x1) * dx + (pz - z1) * dz) / l2))
+        proj_x = x1 + t * dx
+        proj_z = z1 + t * dz
+        dist = math.hypot(px - proj_x, pz - proj_z)
+        if dist <= max_dist_m and (best is None or dist < best[0]):
+            best = (dist, wi, proj_x, proj_z, x1, z1, x2, z2, thick)
+    return best
+
+
+def compute_equipment_snap(
+    instance: dict[str, Any],
+    s2f: dict[str, float],
+    floor_idx: int | None,
+    ctx: S2fContext,
+) -> dict[str, Any]:
+    """Compute realistic wall/ceiling-snapped 3D coordinates and orientation for equipment."""
+    from .objects import normalize_label
+
+    levels = ctx.floor_levels or DEFAULT_FLOOR_LEVELS
+    if floor_idx is None:
+        return {
+            "snapped_s2f_position": dict(s2f),
+            "rotation_y": 0.0,
+            "mount_type": "free",
+            "wall_idx": None,
+            "floor_y": None,
+            "ceil_y": None,
+        }
+
+    band = _floor_y_band(floor_idx, levels)
+    if band is None:
+        floor_y = round(float(levels[0]), 4)
+        ceil_y = round(floor_y + 2.8, 4)
+    else:
+        floor_y = round(float(band[0]), 4)
+        ceil_y = round(float(band[1]), 4)
+
+    label = normalize_label(instance.get("label") or instance.get("raw_label") or "other")
+    walls = ctx.walls_by_floor.get(floor_idx, [])
+    obs_pos = _best_observing_sweep_pos(instance, ctx.sweeps_s2f_by_id)
+
+    sx, sy, sz = float(s2f["x"]), float(s2f["y"]), float(s2f["z"])
+    rot_y = 0.0
+    mount_type = "detected"
+    wall_idx: int | None = None
+
+    if label in {"hasici_pristroj", "nouzove_osvetleni"}:
+        match = _nearest_wall_match(sx, sz, walls, max_dist_m=1.20)
+        if label == "hasici_pristroj":
+            sy = round(min(ceil_y - 0.35, floor_y + 0.90), 4)
+            wall_offset = 0.10
+        else:
+            sy = round(min(ceil_y - 0.35, floor_y + 2.25), 4)
+            wall_offset = 0.06
+
+        if match is not None:
+            _, wall_idx, proj_x, proj_z, x1, z1, x2, z2, thick = match
+            wlen = math.hypot(x2 - x1, z2 - z1) or 1.0
+            ux, uz = (x2 - x1) / wlen, (z2 - z1) / wlen
+            nx, nz = -uz, ux
+            ref = obs_pos if obs_pos is not None else s2f
+            if (float(ref["x"]) - proj_x) * nx + (float(ref["z"]) - proj_z) * nz < 0.0:
+                nx, nz = -nx, -nz
+            off = thick / 2.0 + wall_offset
+            sx = round(proj_x + nx * off, 4)
+            sz = round(proj_z + nz * off, 4)
+            rot_y = round(math.degrees(math.atan2(nx, nz)) % 360.0, 2)
+            mount_type = "wall"
+        elif label == "hasici_pristroj":
+            mount_type = "floor"
+            if obs_pos is not None:
+                dx = float(obs_pos["x"]) - sx
+                dz = float(obs_pos["z"]) - sz
+                if math.hypot(dx, dz) > 0.05:
+                    rot_y = round(math.degrees(math.atan2(dx, dz)) % 360.0, 2)
+        else:
+            mount_type = "ceiling"
+            sy = round(ceil_y - 0.08, 4)
+            near_wall = _nearest_wall_match(sx, sz, walls, max_dist_m=4.0)
+            if near_wall is not None:
+                _, wall_idx, _, _, x1, z1, x2, z2, _ = near_wall
+                rot_y = round(math.degrees(-math.atan2(z2 - z1, x2 - x1)) % 360.0, 2)
+    elif label == "svitidlo":
+        mount_type = "ceiling"
+        sy = round(ceil_y - 0.05, 4)
+        near_wall = _nearest_wall_match(sx, sz, walls, max_dist_m=4.0)
+        if near_wall is not None:
+            _, wall_idx, _, _, x1, z1, x2, z2, _ = near_wall
+            rot_y = round(math.degrees(-math.atan2(z2 - z1, x2 - x1)) % 360.0, 2)
+
+    return {
+        "snapped_s2f_position": {"x": round(sx, 4), "y": round(sy, 4), "z": round(sz, 4)},
+        "rotation_y": rot_y,
+        "mount_type": mount_type,
+        "wall_idx": wall_idx,
+        "floor_y": floor_y,
+        "ceil_y": ceil_y,
+    }
+
+
 def enrich_instance(instance: dict[str, Any], ctx: S2fContext) -> dict[str, Any]:
-    """Return a copy of a Matterport object instance enriched with ``s2f_position``, ``floor_idx``, ``room_id``."""
+    """Return a copy of a Matterport object instance enriched with ``s2f_position``, ``floor_idx``, ``room_id``, and snapped placement."""
+    from .objects import normalize_label
+
     out = dict(instance)
+    out["label"] = normalize_label(out.get("label") or out.get("raw_label") or "other")
     pos = instance.get("anchor") or instance.get("position") or {}
     s2f = mp_to_s2f(pos, ctx)
+    levels = ctx.floor_levels or DEFAULT_FLOOR_LEVELS
     floor_idx = _sweep_voted_floor(instance, ctx.sweep_floor_by_id)
     if floor_idx is None:
-        floor_idx = assign_floor_idx(s2f["y"], ctx.floor_levels)
+        floor_idx = assign_floor_idx(s2f["y"], levels)
+
+    # Reject extreme raycast outliers > 25 m from all observing sweeps
+    obs_sids = [
+        str(o.get("sweep_id"))
+        for o in (instance.get("observations") or [])
+        if isinstance(o, dict) and o.get("sweep_id")
+    ] + [str(sid) for sid in (instance.get("sweep_ids") or []) if sid]
+    obs_positions = [ctx.sweeps_s2f_by_id[sid] for sid in obs_sids if sid in ctx.sweeps_s2f_by_id]
+    if obs_positions:
+        min_d = min(
+            math.sqrt(
+                (s2f["x"] - sp["x"]) ** 2
+                + (s2f["y"] - sp["y"]) ** 2
+                + (s2f["z"] - sp["z"]) ** 2
+            )
+            for sp in obs_positions
+        )
+        if min_d > 25.0:
+            floor_idx = None
 
     # Clamp 3D marker elevation into its assigned storey band
     if floor_idx is not None:
-        band = _floor_y_band(floor_idx, ctx.floor_levels)
+        band = _floor_y_band(floor_idx, levels)
         if band is not None:
             lo = band[0] + 0.08
             hi = max(lo, band[1] - 0.12)
             s2f["y"] = round(min(max(s2f["y"], lo), hi), 4)
 
-    # Exclude raycast outliers falling outside the floor's 2D wall/room footprint
-    if floor_idx is not None and floor_idx in ctx.wall_bounds_by_floor:
-        x_min, x_max, z_min, z_max = ctx.wall_bounds_by_floor[floor_idx]
-        if not (x_min - 0.8 <= s2f["x"] <= x_max + 0.8 and z_min - 0.8 <= s2f["z"] <= z_max + 0.8):
-            floor_idx = None
-
-    room_id, room_name = assign_room_id(s2f["x"], s2f["z"], floor_idx, ctx.rooms_by_floor)
+    snap_info = compute_equipment_snap(instance, s2f, floor_idx, ctx)
+    snap_pos = snap_info["snapped_s2f_position"]
+    room_id, room_name = assign_room_id(snap_pos["x"], snap_pos["z"], floor_idx, ctx.rooms_by_floor)
     out["s2f_position"] = s2f
+    out["snapped_s2f_position"] = snap_pos
+    out["rotation_y"] = snap_info["rotation_y"]
+    out["mount_type"] = snap_info["mount_type"]
+    out["wall_idx"] = snap_info["wall_idx"]
+    out["floor_y"] = snap_info["floor_y"]
+    out["ceil_y"] = snap_info["ceil_y"]
     out["floor_idx"] = floor_idx
     out["room_id"] = room_id
     if room_name:
@@ -342,7 +529,7 @@ def enrich_sweep(sweep_id: str, sweep: dict[str, Any], ctx: S2fContext) -> dict[
     out["sweep_id"] = sweep_id
     pos = sweep.get("position") or {}
     s2f = mp_to_s2f(pos, ctx)
-    floor_idx = assign_floor_idx(s2f["y"], ctx.floor_levels)
+    floor_idx = assign_floor_idx(s2f["y"], ctx.floor_levels or DEFAULT_FLOOR_LEVELS)
     room_id, room_name = assign_room_id(s2f["x"], s2f["z"], floor_idx, ctx.rooms_by_floor)
     out["s2f_position"] = s2f
     out["floor_idx"] = floor_idx
@@ -414,4 +601,38 @@ def load_mp_instances_for_dir(data_dir: str | Path, floor_idx: int) -> list[dict
         if enriched.get("floor_idx") == floor_idx:
             out.append(enriched)
     return out
+
+
+def load_placed_or_mp_equipment(data_dir: str | Path, floor_idx: int) -> list[dict[str, Any]]:
+    """Return placed equipment from ``equipment_floor_<N>.json`` if present, else Matterport instances."""
+    from .objects import SUPPORTED_EQUIPMENT_LABELS
+
+    base_dir = Path(data_dir)
+    eq_path = base_dir / f"equipment_floor_{floor_idx}.json"
+    if eq_path.is_file():
+        try:
+            raw = json.loads(eq_path.read_text(encoding="utf-8"))
+            items = raw.get("items") if isinstance(raw, dict) else None
+            if isinstance(items, list):
+                out: list[dict[str, Any]] = []
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    copy_it = dict(it)
+                    if "x" in it and "y" in it and "z" in it:
+                        copy_it["s2f_position"] = {
+                            "x": float(it["x"]),
+                            "y": float(it["y"]),
+                            "z": float(it["z"]),
+                        }
+                    out.append(copy_it)
+                return out
+        except Exception:
+            pass
+
+    return [
+        inst
+        for inst in load_mp_instances_for_dir(base_dir, floor_idx)
+        if inst.get("label") in SUPPORTED_EQUIPMENT_LABELS
+    ]
 

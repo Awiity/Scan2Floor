@@ -13,7 +13,11 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { colorForMpLabel } from "./MpObjects3D";
+import {
+  colorForMpLabel,
+  EQUIPMENT_META,
+  SUPPORTED_EQUIPMENT_LABELS,
+} from "./MpObjects3D";
 import { getCanvasTheme, getRoomAccent, withAlpha } from "../theme";
 import { fetchPointCloudOrtho, renderPhotoOrtho } from "../utils/orthoReference";
 
@@ -55,6 +59,7 @@ function drawMpOverlays2D(
   selectedFloor,
   {
     mpInstances = [],
+    placedEquipment = [],
     mpSweeps = {},
     mpPoints = [],
     livePose = null,
@@ -70,7 +75,7 @@ function drawMpOverlays2D(
   }
 ) {
   const onFloor = (item) =>
-    Boolean(item?.s2f_position) &&
+    Boolean(item?.s2f_position || (item?.x != null && item?.z != null)) &&
     item.floor_idx != null &&
     Number(item.floor_idx) === Number(selectedFloor);
 
@@ -92,17 +97,31 @@ function drawMpOverlays2D(
     }
   }
 
-  // 2. AI Door/Window Hints & Equipment markers
+  // 2. AI Door/Window Hints & Unplaced Equipment Hints (dashed ring)
+  const placedIds = new Set(
+    (placedEquipment || []).map((eq) => eq.instance_id).filter(Boolean)
+  );
+  const selInstId =
+    selectedMpItem?.kind === "equipment" || selectedMpItem?.kind === "instance"
+      ? selectedMpItem?.data?.instance_id
+      : null;
+
   for (const inst of mpInstances || []) {
     if (!onFloor(inst)) continue;
     if (hiddenMpLabels.includes(inst.label)) continue;
     const isOpeningHint = inst.label === "dvere" || inst.label === "okno";
     if (isOpeningHint && !showAiHints) continue;
-    if (!isOpeningHint && !showEquip) continue;
+    if (!isOpeningHint) {
+      if (!showEquip || !SUPPORTED_EQUIPMENT_LABELS.includes(inst.label)) continue;
+      if (placedIds.has(inst.instance_id)) continue;
+    }
 
-    const [cx, cy] = toCanvas(inst.s2f_position.x, inst.s2f_position.z, cam);
+    const pos = inst.snapped_s2f_position || inst.s2f_position;
+    if (!pos) continue;
+    const [cx, cy] = toCanvas(pos.x, pos.z, cam);
     const isSel =
       selectedMpItem?.kind === "instance" &&
+      !selectedMpItem?.isPlaced &&
       selectedMpItem?.data?.instance_id === inst.instance_id;
 
     ctx.save();
@@ -115,20 +134,47 @@ function drawMpOverlays2D(
       ctx.stroke();
     } else {
       const col = colorForMpLabel(inst.label);
+      ctx.setLineDash([2.5, 2]);
       ctx.beginPath();
       ctx.arc(cx, cy, isSel ? 6 : 4.2, 0, Math.PI * 2);
-      ctx.fillStyle = isSel ? "#ffffff" : col;
-      ctx.strokeStyle = "#0b1120";
-      ctx.lineWidth = 1.2;
-      ctx.fill();
+      ctx.strokeStyle = isSel ? "#ffffff" : col;
+      ctx.lineWidth = isSel ? 2.2 : 1.5;
       ctx.stroke();
       if (cam.scale >= 22 || isSel) {
         ctx.font = "10px Inter, sans-serif";
         ctx.fillStyle = col;
-        ctx.fillText(inst.label, cx + 6, cy + 3);
+        ctx.fillText(EQUIPMENT_META[inst.label]?.en || inst.label, cx + 6, cy + 3);
       }
     }
     ctx.restore();
+  }
+
+  // 2b. Placed 3D Equipment (solid circle)
+  if (showEquip) {
+    for (const eq of placedEquipment || []) {
+      if (!onFloor(eq)) continue;
+      if (!SUPPORTED_EQUIPMENT_LABELS.includes(eq.label)) continue;
+      if (hiddenMpLabels.includes(eq.label)) continue;
+      const [cx, cy] = toCanvas(eq.x, eq.z, cam);
+      const isSel =
+        (selectedMpItem?.kind === "equipment" && selectedMpItem?.data?.id === eq.id) ||
+        (eq.instance_id && eq.instance_id === selInstId);
+      const col = colorForMpLabel(eq.label);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, isSel ? 6.8 : 4.8, 0, Math.PI * 2);
+      ctx.fillStyle = isSel ? "#ffffff" : col;
+      ctx.strokeStyle = "#0b1120";
+      ctx.lineWidth = 1.4;
+      ctx.fill();
+      ctx.stroke();
+      if (cam.scale >= 22 || isSel) {
+        ctx.font = "600 10px Inter, sans-serif";
+        ctx.fillStyle = col;
+        ctx.fillText(EQUIPMENT_META[eq.label]?.en || eq.label, cx + 7, cy + 3);
+      }
+      ctx.restore();
+    }
   }
 
   // 3. Saved viewpoints
@@ -2351,6 +2397,7 @@ export default function FloorPlanViewer({
   saveName = null,
   onWallsSaved,
   mpInstances = [],
+  placedEquipment = [],
   mpSweeps = {},
   mpPoints = [],
   mpInventory = [],
@@ -2469,17 +2516,31 @@ export default function FloorPlanViewer({
 
   const labelInfo = useMemo(() => {
     const names = {};
-    (mpInventory || []).forEach((r) => { names[r.label] = r.cz || r.en || r.label; });
+    (mpInventory || []).forEach((r) => { names[r.label] = r.en || r.cz || r.label; });
+    const placedIdSet = new Set(
+      (placedEquipment || []).map((eq) => eq.instance_id).filter(Boolean)
+    );
     const counts = {};
+    (placedEquipment || []).forEach((eq) => {
+      if (!SUPPORTED_EQUIPMENT_LABELS.includes(eq?.label)) return;
+      if (eq.floor_idx == null || Number(eq.floor_idx) !== Number(selectedFloor)) return;
+      counts[eq.label] = (counts[eq.label] || 0) + 1;
+    });
     (mpInstances || []).forEach((inst) => {
-      if (!inst?.s2f_position) return;
+      if (!SUPPORTED_EQUIPMENT_LABELS.includes(inst?.label)) return;
+      if (placedIdSet.has(inst.instance_id)) return;
+      if (!(inst?.snapped_s2f_position || inst?.s2f_position)) return;
       if (inst.floor_idx == null || Number(inst.floor_idx) !== Number(selectedFloor)) return;
       counts[inst.label] = (counts[inst.label] || 0) + 1;
     });
-    return Object.entries(counts)
-      .map(([label, count]) => ({ label, count, name: names[label] || label }))
-      .sort((a, b) => b.count - a.count);
-  }, [mpInstances, mpInventory, selectedFloor]);
+    return SUPPORTED_EQUIPMENT_LABELS
+      .filter((lbl) => (counts[lbl] || 0) > 0)
+      .map((label) => ({
+        label,
+        count: counts[label] || 0,
+        name: EQUIPMENT_META[label]?.en || names[label] || label,
+      }));
+  }, [mpInstances, placedEquipment, mpInventory, selectedFloor]);
 
   const totalEquipCount = labelInfo.reduce((acc, item) => acc + item.count, 0);
   const visibleEquipCount = labelInfo.reduce(
@@ -2744,6 +2805,7 @@ export default function FloorPlanViewer({
 
       drawMpOverlays2D(ctx, cam, selectedFloor, {
         mpInstances,
+        placedEquipment,
         mpSweeps,
         mpPoints,
         livePose,
@@ -2764,7 +2826,7 @@ export default function FloorPlanViewer({
         drawCompass(ctx, w, TC);
       }
     });
-  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, toolWallThickness, typedWallLength, selectedWallIdx, hoveredHandle, notchPreview, toolNotchThickness, trimNotchCorner, orthoMode, orthoOpacity, mpInstances, mpSweeps, mpPoints, livePose, fpvPoseStore, showMpEquip, showMpSweeps, showMpAiHints, showMpPoints, showMpLive, hiddenMpLabels, selectedMpItem, selectedFloor, showWalls, showRooms, showRoomLabels, showDoors, showWindows, showGrid, showScale]);
+  }, [roomsData, openingsData, cornerIntersection, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, toolWallThickness, typedWallLength, selectedWallIdx, hoveredHandle, notchPreview, toolNotchThickness, trimNotchCorner, orthoMode, orthoOpacity, mpInstances, placedEquipment, mpSweeps, mpPoints, livePose, fpvPoseStore, showMpEquip, showMpSweeps, showMpAiHints, showMpPoints, showMpLive, hiddenMpLabels, selectedMpItem, selectedFloor, showWalls, showRooms, showRoomLabels, showDoors, showWindows, showGrid, showScale]);
 
   // Load or render geo-referenced top-down ortho reference when settings change
   useEffect(() => {
@@ -4227,14 +4289,34 @@ export default function FloorPlanViewer({
             }
           }
         }
+        if (showMpEquip) {
+          for (const eq of placedEquipment || []) {
+            if (!SUPPORTED_EQUIPMENT_LABELS.includes(eq?.label)) continue;
+            if (eq.floor_idx == null || Number(eq.floor_idx) !== Number(selectedFloor)) continue;
+            if (hiddenMpLabels.includes(eq.label)) continue;
+            if (Math.hypot(eq.x - mwx, eq.z - mwz) <= hitR) {
+              onSelectMpItem({ kind: "equipment", isPlaced: true, data: eq });
+              return;
+            }
+          }
+        }
         if (showMpEquip || showMpAiHints) {
+          const placedIdSet = new Set(
+            (placedEquipment || []).map((eq) => eq.instance_id).filter(Boolean)
+          );
           for (const inst of mpInstances || []) {
             if (!onFloor(inst)) continue;
             if (hiddenMpLabels.includes(inst.label)) continue;
             const isHint = inst.label === "dvere" || inst.label === "okno";
-            if ((isHint && !showMpAiHints) || (!isHint && !showMpEquip)) continue;
-            if (Math.hypot(inst.s2f_position.x - mwx, inst.s2f_position.z - mwz) <= hitR) {
-              onSelectMpItem({ kind: "instance", data: inst });
+            if (isHint && !showMpAiHints) continue;
+            if (!isHint) {
+              if (!showMpEquip || !SUPPORTED_EQUIPMENT_LABELS.includes(inst.label)) continue;
+              if (placedIdSet.has(inst.instance_id)) continue;
+            }
+            const pos = inst.snapped_s2f_position || inst.s2f_position;
+            if (!pos) continue;
+            if (Math.hypot(pos.x - mwx, pos.z - mwz) <= hitR) {
+              onSelectMpItem({ kind: "instance", isPlaced: false, data: inst });
               return;
             }
           }
@@ -4515,7 +4597,7 @@ export default function FloorPlanViewer({
       }
       return;
     }
-  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, showMpPoints, hiddenMpLabels, onSelectMpItem, showWalls, commitNotchPreview]);
+  }, [pushHistory, scheduleDraw, getWorldFromEvent, onSelectRoom, roomsData, toolDoorWidth, toolDoorHingeSide, toolDoorSwingDir, toolDoorTopMargin, toolWindowWidth, toolWindowBottomMargin, toolWindowTopMargin, selectedFloor, mpInstances, placedEquipment, mpPoints, mpSweeps, showMpEquip, showMpAiHints, showMpSweeps, showMpPoints, hiddenMpLabels, onSelectMpItem, showWalls, commitNotchPreview]);
 
   const onWheel = useCallback((e) => {
     e.preventDefault();

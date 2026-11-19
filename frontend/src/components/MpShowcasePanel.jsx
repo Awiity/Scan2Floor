@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { colorForMpLabel } from "./MpObjects3D";
+import { colorForMpLabel, SUPPORTED_EQUIPMENT_LABELS } from "./MpObjects3D";
 
 const SDK_BOOTSTRAP = "https://api.matterport.com/sdk/bootstrap/3.0.0-0-g0517b8d76c/sdk.es6.js";
 
@@ -9,6 +9,7 @@ export default function MpShowcasePanel({
   points = [],
   sweeps = {},
   instances = [],
+  placedEquipment = [],
   inventory = [],
   activeFloor = "all",
   saveName = null,
@@ -18,6 +19,7 @@ export default function MpShowcasePanel({
   onFocus3D,
   onEnterFpv,
   onSelectMpItem,
+  onAddEquipmentFromMp,
   labelFilter,
   setLabelFilter,
   pendingCommand = null,
@@ -166,6 +168,10 @@ export default function MpShowcasePanel({
   }, [appKey]);
 
   const floorNum = activeFloor === "all" ? null : Number(activeFloor);
+  const placedIdSet = useMemo(
+    () => new Set((placedEquipment || []).map((eq) => eq.instance_id).filter(Boolean)),
+    [placedEquipment]
+  );
 
   const filteredPoints = useMemo(() => {
     return points.filter((p) => {
@@ -431,9 +437,13 @@ export default function MpShowcasePanel({
             {filteredInventory.map((row) => {
               const isExpanded = expandedLabel === row.label;
               const isFilter = labelFilter === row.label;
+              const isSupportedEquip = SUPPORTED_EQUIPMENT_LABELS.includes(row.label);
               const matchingFloorInsts = instances.filter(
                 (i) => i.label === row.label && (floorNum === null || i.floor_idx === floorNum)
               );
+              const placedHereCount = matchingFloorInsts.filter((i) =>
+                placedIdSet.has(i.instance_id)
+              ).length;
               const firstInst = matchingFloorInsts[0] || instances.find((i) => i.label === row.label);
 
               return (
@@ -462,8 +472,33 @@ export default function MpShowcasePanel({
                       </div>
                       <div style={{ fontSize: 10, color: "var(--text-3, #9ca3af)" }}>
                         {floorNum !== null ? `${matchingFloorInsts.length} on floor · ` : ""}{row.count} total
+                        {isSupportedEquip && ` · ${placedHereCount} in 3D`}
                       </div>
                     </div>
+                    {isSupportedEquip && onAddEquipmentFromMp && matchingFloorInsts.length > 0 && (
+                      <button
+                        onClick={async () => {
+                          const res = await onAddEquipmentFromMp({
+                            labels: [row.label],
+                            floorIdx: floorNum,
+                          });
+                          if (res) setStatusMsg(`Added ${res.added} ${row.en} to 3D Viewer.`);
+                        }}
+                        disabled={placedHereCount >= matchingFloorInsts.length}
+                        style={{
+                          fontSize: 10, padding: "2px 7px", borderRadius: 4,
+                          cursor: placedHereCount >= matchingFloorInsts.length ? "default" : "pointer",
+                          background: placedHereCount >= matchingFloorInsts.length
+                            ? "rgba(34,197,94,0.12)"
+                            : "rgba(34,197,94,0.22)",
+                          border: "1px solid rgba(34,197,94,0.45)",
+                          color: "#4ade80", fontWeight: 700,
+                        }}
+                        title={`Add all ${row.en} on this floor to 3D Viewer`}
+                      >
+                        {placedHereCount >= matchingFloorInsts.length ? "✓ 3D" : "+ 3D"}
+                      </button>
+                    )}
                     {firstInst && (
                       <button
                         onClick={() => {
@@ -530,6 +565,27 @@ export default function MpShowcasePanel({
                             {inst.room_name ? ` (${inst.room_name})` : ""}
                           </span>
                           <div style={{ display: "flex", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+                            {isSupportedEquip && onAddEquipmentFromMp && (
+                              <button
+                                disabled={placedIdSet.has(inst.instance_id)}
+                                onClick={async () => {
+                                  const res = await onAddEquipmentFromMp({ instanceIds: [inst.instance_id] });
+                                  if (res) setStatusMsg(`Added ${inst.instance_id} to 3D Viewer.`);
+                                }}
+                                style={{
+                                  fontSize: 10, padding: "2px 6px", borderRadius: 4,
+                                  cursor: placedIdSet.has(inst.instance_id) ? "default" : "pointer",
+                                  background: placedIdSet.has(inst.instance_id)
+                                    ? "rgba(34,197,94,0.12)"
+                                    : "rgba(34,197,94,0.22)",
+                                  border: "1px solid rgba(34,197,94,0.45)",
+                                  color: "#4ade80", fontWeight: 700,
+                                }}
+                                title={placedIdSet.has(inst.instance_id) ? "Already in 3D Viewer" : "Add to 3D Viewer"}
+                              >
+                                {placedIdSet.has(inst.instance_id) ? "✓ 3D" : "+ 3D"}
+                              </button>
+                            )}
                             <button
                               onClick={() => handleFlyToInstance(inst, true)}
                               style={{

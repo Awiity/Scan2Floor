@@ -277,6 +277,15 @@ input:focus-visible + .s2f-switch { outline: 2px solid var(--sel); outline-offse
 .s2f-notice { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); z-index: 15; padding: 8px 14px; border-radius: var(--radius); border: 1px solid var(--border-hi); background: rgba(var(--panel-rgb), .94); color: var(--text-2); font-size: 12px; }
 .s2f-corner { position: absolute; bottom: 12px; left: 12px; z-index: 10; padding: 5px 10px; border-radius: var(--radius-sm); background: rgba(var(--panel-rgb), .85); border: 1px solid var(--border); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--text-3); pointer-events: none; }
 
+.s2f-perf { position: absolute; top: 12px; right: 12px; z-index: 20; display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px 5px 10px; border-radius: var(--radius-sm); background: rgba(var(--panel-rgb), .85); border: 1px solid var(--border); backdrop-filter: blur(10px); font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; line-height: 1; }
+.s2f-perf-sep { color: var(--text-3); }
+.s2f-perf-ram { background: none; border: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.s2f-perf-ram:hover { color: var(--text); }
+.s2f-perf-btn { background: none; border: none; padding: 0 2px; margin-left: 2px; font: inherit; font-size: 12px; line-height: 1; color: var(--text-3); cursor: pointer; }
+.s2f-perf-btn:hover { color: var(--text); }
+.s2f-perf.collapsed { padding: 5px 8px; color: var(--text-3); cursor: pointer; }
+.s2f-perf.collapsed:hover { color: var(--text); border-color: var(--border-hi); }
+
 /* ── Drawer & popover ─────────────────────────────────────── */
 .s2f-drawer {
   position: absolute; top: 0; right: 0; bottom: 0; width: 380px; max-width: 100%; z-index: 40;

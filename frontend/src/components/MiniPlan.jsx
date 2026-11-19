@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { colorForMpLabel } from "./MpObjects3D";
+import {
+  colorForMpLabel,
+  EQUIPMENT_META,
+  SUPPORTED_EQUIPMENT_LABELS,
+} from "./MpObjects3D";
 import { getCanvasTheme, getRoomAccent, withAlpha } from "../theme";
 
 /**
@@ -77,6 +81,7 @@ export default function MiniPlan({
   dataVersion = 0,
   theme = "dark",
   instances = [],
+  placedEquipment = [],
   sweeps = {},
   points = [],
   inventory = [],
@@ -155,20 +160,50 @@ export default function MiniPlan({
 
   /* ---------------- equipment data ---------------- */
   const onFloor = useCallback(
-    (item) => Boolean(item?.s2f_position) && item.floor_idx != null && Number(item.floor_idx) === Number(floor),
+    (item) => Boolean(item?.s2f_position || (item?.x != null && item?.z != null)) && item.floor_idx != null && Number(item.floor_idx) === Number(floor),
     [floor]
   );
-  const floorInstances = useMemo(() => instances.filter(onFloor), [instances, onFloor]);
+  const placedIdSet = useMemo(
+    () => new Set((placedEquipment || []).map((eq) => eq.instance_id).filter(Boolean)),
+    [placedEquipment]
+  );
+  const floorPlaced = useMemo(
+    () =>
+      (placedEquipment || []).filter(
+        (eq) => SUPPORTED_EQUIPMENT_LABELS.includes(eq?.label) && eq?.x != null && eq?.z != null && onFloor(eq)
+      ),
+    [placedEquipment, onFloor]
+  );
+  const floorInstances = useMemo(
+    () =>
+      instances.filter(
+        (i) =>
+          SUPPORTED_EQUIPMENT_LABELS.includes(i?.label) &&
+          !placedIdSet.has(i.instance_id) &&
+          Boolean(i?.snapped_s2f_position || i?.s2f_position) &&
+          onFloor(i)
+      ),
+    [instances, placedIdSet, onFloor]
+  );
   const labelInfo = useMemo(() => {
     const names = {};
-    inventory.forEach((r) => { names[r.label] = r.cz || r.en || r.label; });
+    inventory.forEach((r) => { names[r.label] = r.en || r.cz || r.label; });
     const counts = {};
+    floorPlaced.forEach((eq) => { counts[eq.label] = (counts[eq.label] || 0) + 1; });
     floorInstances.forEach((i) => { counts[i.label] = (counts[i.label] || 0) + 1; });
-    return Object.entries(counts)
-      .map(([label, count]) => ({ label, count, name: names[label] || label }))
-      .sort((a, b) => b.count - a.count);
-  }, [floorInstances, inventory]);
+    return SUPPORTED_EQUIPMENT_LABELS
+      .filter((lbl) => (counts[lbl] || 0) > 0)
+      .map((label) => ({
+        label,
+        count: counts[label] || 0,
+        name: EQUIPMENT_META[label]?.en || names[label] || label,
+      }));
+  }, [floorPlaced, floorInstances, inventory]);
 
+  const visiblePlaced = useMemo(
+    () => (opts.equipment ? floorPlaced.filter((eq) => !hidden.includes(eq.label)) : []),
+    [floorPlaced, hidden, opts.equipment]
+  );
   const visibleInstances = useMemo(
     () => (opts.equipment ? floorInstances.filter((i) => !hidden.includes(i.label)) : []),
     [floorInstances, hidden, opts.equipment]
@@ -341,15 +376,30 @@ export default function MiniPlan({
         });
       }
 
-      // equipment
-      const selId = selectedMpItem?.kind === "instance" ? selectedMpItem.data?.instance_id : null;
+      // equipment (placed = solid circle, unplaced hint = dashed ring)
+      const selInstId =
+        selectedMpItem?.kind === "equipment" || selectedMpItem?.kind === "instance"
+          ? selectedMpItem.data?.instance_id
+          : null;
+      const selEquipId = selectedMpItem?.kind === "equipment" ? selectedMpItem.data?.id : null;
       visibleInstances.forEach((inst) => {
-        const [px, pz] = P(inst.s2f_position.x, inst.s2f_position.z);
-        const sel = inst.instance_id === selId;
-        ctx.fillStyle = colorForMpLabel(inst.label);
-        ctx.beginPath(); ctx.arc(px, pz, sel ? 6 : 3.6, 0, Math.PI * 2); ctx.fill();
+        const pos = inst.snapped_s2f_position || inst.s2f_position;
+        const [px, pz] = P(pos.x, pos.z);
+        const sel = inst.instance_id === selInstId;
+        ctx.save();
+        ctx.setLineDash([2, 2]);
+        ctx.strokeStyle = sel ? T.sel : colorForMpLabel(inst.label);
+        ctx.lineWidth = sel ? 2 : 1.3;
+        ctx.beginPath(); ctx.arc(px, pz, sel ? 5.5 : 3.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.restore();
+      });
+      visiblePlaced.forEach((eq) => {
+        const [px, pz] = P(eq.x, eq.z);
+        const sel = eq.id === selEquipId || (eq.instance_id && eq.instance_id === selInstId);
+        ctx.fillStyle = colorForMpLabel(eq.label);
+        ctx.beginPath(); ctx.arc(px, pz, sel ? 6.5 : 4.2, 0, Math.PI * 2); ctx.fill();
         ctx.strokeStyle = sel ? T.sel : T.bg;
-        ctx.lineWidth = sel ? 2.2 : 1;
+        ctx.lineWidth = sel ? 2.2 : 1.1;
         ctx.stroke();
       });
 
@@ -438,7 +488,7 @@ export default function MiniPlan({
 
     drawRef.current = draw;
     draw();
-  }, [open, cw, ch, data, opts, selectedRoomId, selectedMpItem, livePose, fpvPoseStore, visibleInstances, floorSweeps, floorPoints, onFloor, floor, theme, tick]);
+  }, [open, cw, ch, data, opts, selectedRoomId, selectedMpItem, livePose, fpvPoseStore, visiblePlaced, visibleInstances, floorSweeps, floorPoints, onFloor, floor, theme, tick]);
 
   useEffect(() => {
     if (!fpvPoseStore || !open) return undefined;
@@ -499,8 +549,11 @@ export default function MiniPlan({
     const hit = 9 / cam.s;
     const near = (pos) => Math.hypot(pos.x - wx, pos.z - wz) <= hit;
 
+    for (const eq of visiblePlaced) {
+      if (near(eq)) { onSelectMpItem?.({ kind: "equipment", isPlaced: true, data: eq }); return; }
+    }
     for (const inst of visibleInstances) {
-      if (near(inst.s2f_position)) { onSelectMpItem?.({ kind: "instance", data: inst }); return; }
+      if (near(inst.snapped_s2f_position || inst.s2f_position)) { onSelectMpItem?.({ kind: "instance", isPlaced: false, data: inst }); return; }
     }
     if (opts.points) {
       for (const pt of floorPoints) {

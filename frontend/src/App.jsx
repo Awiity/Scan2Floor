@@ -24,6 +24,7 @@ import LayersPanel from "./components/LayersPanel";
 import RedetectDrawer from "./components/RedetectDrawer";
 import SaveOutput from "./components/SaveOutput";
 import MiniPlan from "./components/MiniPlan";
+import { PerfFrameTracker, PerfOverlay } from "./components/PerfMonitor";
 import { loadAlgoParams, persistAlgoParams } from "./algoParams";
 
 const POLL_MS = 7 * 1000;
@@ -39,6 +40,26 @@ export default function App() {
   /* ---------- server status ---------- */
   const [backendStatus, setBackendStatus] = useState("connecting"); // connecting|ready|processing|error
   const [modelInfo, setModelInfo] = useState(null);
+  const [backendMemory, setBackendMemory] = useState(null);
+  const [showPerf, setShowPerf] = useState(() => {
+    try {
+      return localStorage.getItem("s2f_show_perf") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  const [perfStats, setPerfStats] = useState({ fps: null, browserHeapBytes: 0 });
+  const togglePerf = useCallback(() => {
+    setShowPerf((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("s2f_show_perf", next ? "1" : "0");
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  }, []);
 
   /* ---------- layer visibility -------- */
   const [showMesh] = useState(false); // reserved, toggle removed from UI
@@ -48,6 +69,7 @@ export default function App() {
   const [showBim3D, setShowBim3D] = useState(true);
   const [bimFilters, setBimFilters] = useState({ walls: true, rooms: true, doors: true, windows: true });
   const [showMpEquip, setShowMpEquip] = useState(true);
+  const [showMpHints3D, setShowMpHints3D] = useState(true);
   const [showMpSweeps, setShowMpSweeps] = useState(false);
   const [showMpPoints, setShowMpPoints] = useState(true);
   const [showMpLive, setShowMpLive] = useState(true);
@@ -57,6 +79,7 @@ export default function App() {
   const [mpSweeps, setMpSweeps] = useState({});
   const [mpInstances, setMpInstances] = useState([]);
   const [mpInventory, setMpInventory] = useState([]);
+  const [placedEquipment, setPlacedEquipment] = useState([]);
   const [mpLabelFilter, setMpLabelFilter] = useState(null);
   const [selectedMpItem, setSelectedMpItem] = useState(null);
   const [hoveredMpItem, setHoveredMpItem] = useState(null);
@@ -505,6 +528,158 @@ export default function App() {
     refreshMpData();
   }, [refreshMpData, floorDataVersion]);
 
+  const effectiveFloorCount = loadedSave
+    ? (saveInfo?.floor_levels?.length ?? 1)
+    : (modelInfo?.floor_levels?.length ?? 0);
+
+  const refreshPlacedEquipment = useCallback(async () => {
+    const nFloors = Math.max(effectiveFloorCount, 1);
+    const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+    try {
+      const results = await Promise.all(
+        Array.from({ length: nFloors }, (_, fIdx) =>
+          fetch(`${apiBase}/equipment/${fIdx}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null)
+        )
+      );
+      const merged = results.flatMap((res, fIdx) =>
+        Array.isArray(res?.items)
+          ? res.items.map((it) => ({ ...it, floor_idx: it.floor_idx ?? fIdx }))
+          : []
+      );
+      setPlacedEquipment(merged);
+    } catch {
+      // ignore
+    }
+  }, [loadedSave, effectiveFloorCount]);
+
+  useEffect(() => {
+    refreshPlacedEquipment();
+  }, [refreshPlacedEquipment, floorDataVersion]);
+
+  const handleAddEquipmentFromMp = useCallback(async ({
+    instanceIds = null,
+    labels = null,
+    floorIdx = null,
+  } = {}) => {
+    try {
+      const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+      const body = {};
+      if (instanceIds) body.instance_ids = instanceIds;
+      if (labels) body.labels = labels;
+      if (floorIdx !== null && floorIdx !== undefined && floorIdx !== "all") {
+        body.floor_idx = Number(floorIdx);
+      }
+      const res = await fetch(`${apiBase}/equipment/add-from-mp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      await refreshPlacedEquipment();
+      if (instanceIds?.length === 1) {
+        const allItems = Object.values(data.items_by_floor || {}).flat();
+        const placed = allItems.find((it) => it.instance_id === instanceIds[0]);
+        if (placed) {
+          setSelectedMpItem({ kind: "equipment", isPlaced: true, data: placed });
+        }
+      }
+      return data;
+    } catch (err) {
+      console.error("Failed to add equipment from Matterport:", err);
+      return null;
+    }
+  }, [loadedSave, refreshPlacedEquipment]);
+
+  const handleUpdateEquipment = useCallback(async (updatedItem) => {
+    if (!updatedItem) return;
+    try {
+      const fIdx = Number(updatedItem.floor_idx ?? (activeFloor === "all" ? 0 : activeFloor));
+      const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+      const res = await fetch(`${apiBase}/equipment/${fIdx}`);
+      const cur = res.ok ? (await res.json())?.items || [] : [];
+      const nextItems = cur.map((it) =>
+        it.id === updatedItem.id || (updatedItem.instance_id && it.instance_id === updatedItem.instance_id)
+          ? { ...it, ...updatedItem, floor_idx: fIdx }
+          : it
+      );
+      const putRes = await fetch(`${apiBase}/equipment/${fIdx}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: nextItems }),
+      });
+      if (!putRes.ok) throw new Error("Failed to save equipment update");
+      await refreshPlacedEquipment();
+      setSelectedMpItem({ kind: "equipment", isPlaced: true, data: { ...updatedItem, floor_idx: fIdx } });
+    } catch (err) {
+      console.error("Failed to update equipment:", err);
+    }
+  }, [loadedSave, activeFloor, refreshPlacedEquipment]);
+
+  const handleDeleteEquipment = useCallback(async (item) => {
+    if (!item) return;
+    try {
+      const fIdx = Number(item.floor_idx ?? (activeFloor === "all" ? 0 : activeFloor));
+      const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+      const res = await fetch(`${apiBase}/equipment/${fIdx}`);
+      const cur = res.ok ? (await res.json())?.items || [] : [];
+      const nextItems = cur.filter(
+        (it) => it.id !== item.id && (!item.instance_id || it.instance_id !== item.instance_id)
+      );
+      const putRes = await fetch(`${apiBase}/equipment/${fIdx}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: nextItems }),
+      });
+      if (!putRes.ok) throw new Error("Failed to remove equipment");
+      await refreshPlacedEquipment();
+      setSelectedMpItem(null);
+    } catch (err) {
+      console.error("Failed to remove equipment:", err);
+    }
+  }, [loadedSave, activeFloor, refreshPlacedEquipment]);
+
+  const handleClearEquipmentByLabel = useCallback(async (label, floorIdx = activeFloor) => {
+    try {
+      const nFloors = Math.max(effectiveFloorCount, 1);
+      const floors =
+        floorIdx === "all" || floorIdx == null
+          ? Array.from({ length: nFloors }, (_, i) => i)
+          : [Number(floorIdx)];
+      const apiBase = loadedSave ? `/api/saves/${encodeURIComponent(loadedSave)}` : "/api";
+      await Promise.all(
+        floors.map(async (fIdx) => {
+          const res = await fetch(`${apiBase}/equipment/${fIdx}`);
+          if (!res.ok) return;
+          const cur = (await res.json())?.items || [];
+          const nextItems = cur.filter((it) => it.label !== label);
+          if (nextItems.length !== cur.length) {
+            await fetch(`${apiBase}/equipment/${fIdx}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ items: nextItems }),
+            });
+          }
+        })
+      );
+      await refreshPlacedEquipment();
+      setSelectedMpItem((prev) => {
+        if (
+          prev?.kind === "equipment" &&
+          prev?.data?.label === label &&
+          (floorIdx === "all" || floorIdx == null || Number(prev?.data?.floor_idx) === Number(floorIdx))
+        ) {
+          return null;
+        }
+        return prev;
+      });
+    } catch (err) {
+      console.error("Failed to clear equipment by label:", err);
+    }
+  }, [loadedSave, activeFloor, effectiveFloorCount, refreshPlacedEquipment]);
+
   const handleFocus3DPoint = useCallback((s2fPos) => {
     const ctrl = controlsRef.current;
     if (!ctrl || !s2fPos) return;
@@ -520,8 +695,11 @@ export default function App() {
     if (!item?.data) return null;
     const levels = modelInfo?.floor_levels ?? [];
 
-    if (item.kind === "instance") {
-      const target = item.data.s2f_position;
+    if (item.kind === "instance" || item.kind === "equipment") {
+      const target =
+        item.kind === "equipment"
+          ? { x: item.data.x, y: item.data.y, z: item.data.z }
+          : (item.data.snapped_s2f_position || item.data.s2f_position);
       if (!target) return null;
 
       // Pick highest-confidence observing sweep so camera stands inside room looking at object
@@ -687,17 +865,20 @@ export default function App() {
   const handleCycleFpvItem = useCallback((delta) => {
     const floorNum = activeFloor === "all" ? null : Number(activeFloor);
     const activeLabel =
-      selectedMpItem?.kind === "instance" ? selectedMpItem.data?.label : "dvere";
+      selectedMpItem?.kind === "instance" || selectedMpItem?.kind === "equipment"
+        ? selectedMpItem.data?.label
+        : "dvere";
     const pool = mpInstances.filter(
       (i) =>
         i.label === activeLabel &&
         (floorNum === null || i.floor_idx === floorNum) &&
         (!hiddenMpLabels.includes(i.label) ||
-          (selectedMpItem?.kind === "instance" && selectedMpItem.data?.label === i.label))
+          ((selectedMpItem?.kind === "instance" || selectedMpItem?.kind === "equipment") &&
+            selectedMpItem.data?.label === i.label))
     );
     if (!pool.length) return;
     const curIdx =
-      selectedMpItem?.kind === "instance"
+      selectedMpItem?.kind === "instance" || selectedMpItem?.kind === "equipment"
         ? pool.findIndex((i) => i.instance_id === selectedMpItem.data?.instance_id)
         : -1;
     const nextIdx = curIdx < 0 ? 0 : (curIdx + delta + pool.length) % pool.length;
@@ -708,7 +889,7 @@ export default function App() {
     if (!item?.data) return;
     revealView("360");
     const qs = loadedSave ? `?save_name=${encodeURIComponent(loadedSave)}` : "";
-    if (item.kind === "instance") {
+    if ((item.kind === "instance" || item.kind === "equipment") && item.data.instance_id) {
       const res = await fetch(`/api/mp/goto-instance/${item.data.instance_id}${qs}`, { method: "POST" });
       if (res.ok) {
         const data = await res.json();
@@ -761,6 +942,7 @@ export default function App() {
       const data = await res.json();
       setBackendStatus(data.status); // "idle" | "processing" | "ready"
       if (data.info) setModelInfo(data.info);
+      if (data.memory) setBackendMemory(data.memory);
     } catch {
       setBackendStatus("error");
     }
@@ -846,6 +1028,8 @@ export default function App() {
     fpvPoseStore.set(null);
     setMpLabelFilter(null);
     setHiddenMpLabels([]);
+    setPlacedEquipment([]);
+    setShowMpHints3D(true);
     setActiveFloor(0);
     setShowAlgo(false);
     setLayout("single");
@@ -1015,10 +1199,12 @@ export default function App() {
           )}
           <MpObjects3D
             instances={mpInstances}
+            placedEquipment={placedEquipment}
             points={mpPoints}
             sweeps={mpSweeps}
             activeFloor={activeFloor}
             showEquipment={showMpEquip}
+            showUnplacedHints={showMpHints3D}
             showSweeps={showMpSweeps}
             showPoints={showMpPoints}
             showLivePose={showMpLive}
@@ -1047,6 +1233,8 @@ export default function App() {
         <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
           <GizmoViewport labelColor={isDark ? "white" : "#222222"} axisHeadScale={1} />
         </GizmoHelper>
+
+        <PerfFrameTracker active={visible && showPerf} onSample={setPerfStats} />
       </Canvas>
 
       <LayersPanel
@@ -1060,15 +1248,19 @@ export default function App() {
         }}
         textureOpacity={textureOpacity} setTextureOpacity={setTextureOpacity}
         showMpEquip={showMpEquip} setShowMpEquip={setShowMpEquip}
+        showMpHints3D={showMpHints3D} setShowMpHints3D={setShowMpHints3D}
         showMpSweeps={showMpSweeps} setShowMpSweeps={setShowMpSweeps}
         showMpPoints={showMpPoints} setShowMpPoints={setShowMpPoints}
         showMpLive={showMpLive} setShowMpLive={setShowMpLive}
         hiddenMpLabels={hiddenMpLabels} setHiddenMpLabels={setHiddenMpLabels}
         instances={mpInstances}
+        placedEquipment={placedEquipment}
         inventory={mpInventory}
         activeFloor={activeFloor}
         cloudColors={cloudColors} setCloudColors={setCloudColors}
         mpStats={mpStats}
+        onAddEquipmentFromMp={handleAddEquipmentFromMp}
+        onClearEquipmentByLabel={handleClearEquipmentByLabel}
       />
 
       <MiniPlan
@@ -1079,6 +1271,7 @@ export default function App() {
         dataVersion={floorDataVersion}
         theme={theme}
         instances={mpInstances}
+        placedEquipment={placedEquipment}
         sweeps={mpSweeps}
         points={mpPoints}
         inventory={mpInventory}
@@ -1108,6 +1301,11 @@ export default function App() {
         onEnterFpv={handleEnterFpv}
         onDeleteMpPoint={handleDeleteMpPoint}
         onSaveMpAsPoint={handleSaveMpAsPoint}
+        placedEquipment={placedEquipment}
+        modelInfo={loadedSave ? (saveInfo || modelInfo) : modelInfo}
+        onAddEquipmentFromMp={handleAddEquipmentFromMp}
+        onUpdateEquipment={handleUpdateEquipment}
+        onDeleteEquipment={handleDeleteEquipment}
       />
 
       {/* First-person HUD */}
@@ -1171,6 +1369,14 @@ export default function App() {
           {modelInfo.wall_slices_ready ? "dense slices" : modelInfo.preprocess_walls_running ? "extracting…" : "1:100 sparse"}
         </div>
       )}
+
+      <PerfOverlay
+        fps={perfStats.fps}
+        browserHeapBytes={perfStats.browserHeapBytes}
+        backendMemory={backendMemory}
+        visible={showPerf}
+        onToggle={togglePerf}
+      />
     </>
   );
 
@@ -1182,6 +1388,7 @@ export default function App() {
       points={mpPoints}
       sweeps={mpSweeps}
       instances={mpInstances}
+      placedEquipment={placedEquipment}
       inventory={mpInventory}
       activeFloor={activeFloor}
       saveName={loadedSave}
@@ -1191,6 +1398,7 @@ export default function App() {
       onFocus3D={handleFocus3DPoint}
       onEnterFpv={handleEnterFpv}
       onSelectMpItem={onSelectMpItemShared}
+      onAddEquipmentFromMp={handleAddEquipmentFromMp}
       labelFilter={mpLabelFilter}
       setLabelFilter={setMpLabelFilter}
       pendingCommand={pendingMpCommand}
@@ -1210,6 +1418,7 @@ export default function App() {
       saveName={loadedSave}
       onWallsSaved={handleWallsDetected}
       mpInstances={mpInstances}
+      placedEquipment={placedEquipment}
       mpSweeps={mpSweeps}
       mpPoints={mpPoints}
       mpInventory={mpInventory}

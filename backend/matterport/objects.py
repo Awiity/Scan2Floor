@@ -20,6 +20,12 @@ from .config import (
     resolve_paths,
 )
 
+SUPPORTED_EQUIPMENT_LABELS: tuple[str, ...] = (
+    "hasici_pristroj",
+    "svitidlo",
+    "nouzove_osvetleni",
+)
+
 # 25 Czech/English building & MEP equipment object classes
 VOCABULARY: list[dict[str, Any]] = [
     {"id": "dvere", "cz": "dveře", "en": "door", "synonyms": ["door", "dvere", "entrance"], "default_height_m": 2.0},
@@ -31,7 +37,7 @@ VOCABULARY: list[dict[str, Any]] = [
     {"id": "zasuvka", "cz": "zásuvka", "en": "power outlet", "synonyms": ["power outlet", "socket", "outlet", "zasuvka"], "default_height_m": 0.1},
     {"id": "vypinac", "cz": "vypínač", "en": "light switch", "synonyms": ["light switch", "switch", "vypinac"], "default_height_m": 0.1},
     {"id": "svitidlo", "cz": "svítidlo", "en": "light fixture", "synonyms": ["light fixture", "lamp", "ceiling light", "svitidlo", "svetlo"], "default_height_m": 0.2},
-    {"id": "nouzove_osvetleni", "cz": "nouzové osvětlení", "en": "emergency exit light", "synonyms": ["exit sign", "emergency light", "nouzove osvetleni", "exit"], "default_height_m": 0.25},
+    {"id": "nouzove_osvetleni", "cz": "nouzové osvětlení", "en": "emergency exit light", "synonyms": ["exit sign", "emergency light", "nouzove osvetleni", "exit", "vychod", "unikovy", "nouzovy", "vychod_(unikovy,_nouzovy)"], "default_height_m": 0.25},
     {"id": "kamera", "cz": "bezpečnostní kamera", "en": "security camera", "synonyms": ["security camera", "cctv", "camera", "kamera"], "default_height_m": 0.2},
     {"id": "detektor_koure", "cz": "detektor kouře", "en": "smoke detector", "synonyms": ["smoke detector", "fire alarm", "sensor", "detektor", "cidlo"], "default_height_m": 0.08},
     {"id": "klimatizace", "cz": "klimatizace", "en": "air conditioner", "synonyms": ["air conditioner", "ac unit", "hvac", "klimatizace"], "default_height_m": 0.35},
@@ -363,6 +369,11 @@ class ObjectStore:
             if isinstance(raw, dict):
                 raw.setdefault("sweeps", {})
                 raw.setdefault("instances", [])
+                for inst in raw["instances"]:
+                    if isinstance(inst, dict):
+                        inst["label"] = normalize_label(
+                            inst.get("label") or inst.get("raw_label") or "other"
+                        )
                 return raw
         except Exception:
             pass

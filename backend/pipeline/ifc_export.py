@@ -778,9 +778,9 @@ def _safe_load_mp_instances(processed_dir: str, floor_idx: int, include_mp_equip
     if not include_mp_equipment:
         return []
     try:
-        from matterport.coords import load_mp_instances_for_dir
+        from matterport.coords import load_placed_or_mp_equipment
 
-        return load_mp_instances_for_dir(processed_dir, floor_idx)
+        return load_placed_or_mp_equipment(processed_dir, floor_idx)
     except Exception:
         return []
 

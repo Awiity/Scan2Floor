@@ -28,11 +28,11 @@ LAYER_EQUIP  = "A-EQUIP"
 
 def _load_mp_equipment(processed_dir: str, floor_idx: int) -> list[dict]:
     try:
-        from matterport.coords import load_mp_instances_for_dir
+        from matterport.coords import load_placed_or_mp_equipment
 
         return [
             inst
-            for inst in load_mp_instances_for_dir(processed_dir, floor_idx)
+            for inst in load_placed_or_mp_equipment(processed_dir, floor_idx)
             if inst.get("label") not in {"dvere", "okno"}
         ]
     except Exception:

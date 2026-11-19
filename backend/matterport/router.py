@@ -26,7 +26,15 @@ from .coords import (
     mp_to_s2f,
     s2f_to_mp,
 )
-from .objects import ObjectStore, VOCABULARY, normalize_label, tags_for_sweep
+from .objects import (
+    ObjectStore,
+    SUPPORTED_EQUIPMENT_LABELS,
+    VOCABULARY,
+    normalize_label,
+    tags_for_sweep,
+)
+
+VISIBLE_MP_LABELS: frozenset[str] = frozenset(SUPPORTED_EQUIPMENT_LABELS) | {"dvere", "okno"}
 from .points import PointStore
 from .registry_sync import push_after_change
 from .tools.export_ifc import export_to_ifc
@@ -185,6 +193,7 @@ def mp_config(save_name: str | None = Query(default=None)) -> dict[str, Any]:
         "model_id": MODEL_ID,
         "application_key": APPLICATION_KEY,
         "vocabulary": VOCABULARY,
+        "supported_equipment_labels": list(SUPPORTED_EQUIPMENT_LABELS),
         "centroid_xy": list(ctx.centroid_xy),
         "floor_levels": ctx.floor_levels,
     }
@@ -301,6 +310,7 @@ def mp_list_objects(
     save_name: str | None = Query(default=None),
     floor_idx: int | None = Query(default=None),
     label: str | None = Query(default=None),
+    supported_only: bool = Query(default=True),
 ) -> dict[str, Any]:
     _, os_store, mid = get_stores(save_name=save_name)
     ctx = load_s2f_context(save_name)
@@ -314,6 +324,8 @@ def mp_list_objects(
         sweeps_out[sid] = esw
 
     instances_out = [enrich_instance(inst, ctx) for inst in os_store.instances(label=label)]
+    if supported_only and not label:
+        instances_out = [i for i in instances_out if i.get("label") in VISIBLE_MP_LABELS]
     if floor_idx is not None:
         instances_out = [i for i in instances_out if i.get("floor_idx") == floor_idx]
 
@@ -331,10 +343,13 @@ def mp_list_objects(
 def mp_inventory(
     save_name: str | None = Query(default=None),
     floor_idx: int | None = Query(default=None),
+    supported_only: bool = Query(default=True),
 ) -> dict[str, Any]:
     _, os_store, mid = get_stores(save_name=save_name)
     if floor_idx is None:
         items = os_store.inventory_summary()
+        if supported_only:
+            items = [r for r in items if r.get("label") in VISIBLE_MP_LABELS]
         return {"model_id": mid, "floor_idx": None, "items": items}
 
     ctx = load_s2f_context(save_name)
@@ -345,6 +360,8 @@ def mp_inventory(
         if ei.get("floor_idx") != floor_idx:
             continue
         lbl = normalize_label(ei.get("label", "other"))
+        if supported_only and lbl not in VISIBLE_MP_LABELS:
+            continue
         b = by_label.setdefault(
             lbl,
             {

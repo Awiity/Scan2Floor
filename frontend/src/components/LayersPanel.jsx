@@ -1,5 +1,9 @@
 import { useMemo, useState } from "react";
-import { colorForMpLabel } from "./MpObjects3D";
+import {
+  colorForMpLabel,
+  EQUIPMENT_META,
+  SUPPORTED_EQUIPMENT_LABELS,
+} from "./MpObjects3D";
 
 function Row({ label, sub, checked, onChange, disabled, children }) {
   return (
@@ -31,17 +35,22 @@ export default function LayersPanel({
   showCloud, setShowCloud, cloudReady, cloudPoints,
   showTexture, setShowTexture, textureOpacity, setTextureOpacity,
   showMpEquip, setShowMpEquip,
+  showMpHints3D = true, setShowMpHints3D,
   showMpSweeps, setShowMpSweeps,
   showMpPoints = true, setShowMpPoints,
   showMpLive = true, setShowMpLive,
   hiddenMpLabels = [], setHiddenMpLabels,
   instances = [],
+  placedEquipment = [],
   inventory = [],
   activeFloor = "all",
   cloudColors, setCloudColors,
   mpStats,
+  onAddEquipmentFromMp,
+  onClearEquipmentByLabel,
 }) {
   const [open, setOpen] = useState(true);
+  const [busyLabel, setBusyLabel] = useState(null);
   const fmt = (n) => n?.toLocaleString?.() ?? "—";
 
   const updateColor = (key, value) =>
@@ -53,19 +62,39 @@ export default function LayersPanel({
 
   const labelInfo = useMemo(() => {
     const floorNum = activeFloor === "all" || activeFloor == null ? null : Number(activeFloor);
-    if (floorNum === null) return [];
+    const onFloor = (item) =>
+      item?.floor_idx != null && (floorNum === null || Number(item.floor_idx) === floorNum);
+
     const names = {};
-    inventory.forEach((r) => { names[r.label] = r.cz || r.en || r.label; });
-    const counts = {};
+    inventory.forEach((r) => { names[r.label] = r.en || r.cz || r.label; });
+
+    const detectedCounts = {};
     instances.forEach((inst) => {
-      if (!inst?.s2f_position) return;
-      if (inst.floor_idx == null || Number(inst.floor_idx) !== floorNum) return;
-      counts[inst.label] = (counts[inst.label] || 0) + 1;
+      if (!SUPPORTED_EQUIPMENT_LABELS.includes(inst?.label)) return;
+      if (!(inst?.snapped_s2f_position || inst?.s2f_position) || !onFloor(inst)) return;
+      detectedCounts[inst.label] = (detectedCounts[inst.label] || 0) + 1;
     });
-    return Object.entries(counts)
-      .map(([label, count]) => ({ label, count, name: names[label] || label }))
-      .sort((a, b) => b.count - a.count);
-  }, [instances, inventory, activeFloor]);
+
+    const placedCounts = {};
+    placedEquipment.forEach((eq) => {
+      if (!SUPPORTED_EQUIPMENT_LABELS.includes(eq?.label)) return;
+      if (!onFloor(eq)) return;
+      placedCounts[eq.label] = (placedCounts[eq.label] || 0) + 1;
+    });
+
+    return SUPPORTED_EQUIPMENT_LABELS
+      .map((label) => {
+        const meta = EQUIPMENT_META[label];
+        return {
+          label,
+          count: detectedCounts[label] || 0,
+          placed: placedCounts[label] || 0,
+          name: meta?.en || names[label] || label,
+          czName: meta?.cz || names[label] || label,
+        };
+      })
+      .filter((row) => row.count > 0 || row.placed > 0);
+  }, [instances, placedEquipment, inventory, activeFloor]);
 
   const toggleLabel = (label) =>
     setHiddenMpLabels?.((prev) =>
@@ -75,16 +104,36 @@ export default function LayersPanel({
   const toggleBim = (key, val) =>
     setBimFilters?.((prev) => ({ ...prev, [key]: val }));
 
-  const visibleEquipCount = labelInfo.reduce(
-    (acc, item) => (hiddenMpLabels.includes(item.label) ? acc : acc + item.count),
-    0
-  );
   const totalEquipCount = labelInfo.reduce((acc, item) => acc + item.count, 0);
-  const equipSub = mpStats
-    ? (hiddenMpLabels.length > 0 && labelInfo.length > 0
-        ? `${visibleEquipCount} / ${totalEquipCount} visible`
-        : `${totalEquipCount} items on floor · ${mpStats.instances} total`)
-    : "Asset markers";
+  const totalPlacedCount = labelInfo.reduce((acc, item) => acc + item.placed, 0);
+  const equipSub = labelInfo.length > 0
+    ? `${totalPlacedCount} placed · ${totalEquipCount} detected`
+    : mpStats
+      ? "No fire/light objects on floor"
+      : "Asset markers";
+
+  const handleBulkAdd = async (label) => {
+    if (!onAddEquipmentFromMp || busyLabel) return;
+    setBusyLabel(label);
+    try {
+      await onAddEquipmentFromMp({
+        labels: [label],
+        floorIdx: activeFloor === "all" ? null : Number(activeFloor),
+      });
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const handleBulkClear = async (label) => {
+    if (!onClearEquipmentByLabel || busyLabel) return;
+    setBusyLabel(label);
+    try {
+      await onClearEquipmentByLabel(label, activeFloor);
+    } finally {
+      setBusyLabel(null);
+    }
+  };
 
   return (
     <div className={`s2f-layers${open ? "" : " collapsed"}`} onPointerDown={(e) => e.stopPropagation()}>
@@ -137,6 +186,16 @@ export default function LayersPanel({
           <Row label="Equipment & MEP" sub={equipSub} checked={showMpEquip} onChange={setShowMpEquip}>
             {setHiddenMpLabels && (
               <div className="s2f-layer-extra">
+                {setShowMpHints3D && (
+                  <label className="s2f-mini-check" style={{ marginBottom: 4 }}>
+                    <input
+                      type="checkbox"
+                      checked={!!showMpHints3D}
+                      onChange={(e) => setShowMpHints3D(e.target.checked)}
+                    />
+                    <span className="s2f-mini-name">Show unplaced AI hints</span>
+                  </label>
+                )}
                 <div className="s2f-mini-section" style={{ marginTop: 2 }}>
                   <span>Equipment types</span>
                   <span>
@@ -147,24 +206,83 @@ export default function LayersPanel({
                 </div>
                 {labelInfo.length === 0 ? (
                   <div className="s2f-hint">
-                    {activeFloor === "all" || activeFloor == null
-                      ? "Select a floor (F0, F1, …) to view equipment"
-                      : "No equipment on this floor"}
+                    No fire extinguishers or light sources on this floor
                   </div>
                 ) : (
                   <div className="s2f-equip-list">
-                    {labelInfo.map(({ label, count, name }) => (
-                      <label key={label} className="s2f-mini-check" title={label}>
-                        <input
-                          type="checkbox"
-                          checked={!hiddenMpLabels.includes(label)}
-                          onChange={() => toggleLabel(label)}
-                        />
-                        <i style={{ background: colorForMpLabel(label) }} />
-                        <span className="s2f-mini-name">{name}</span>
-                        <em>{count}</em>
-                      </label>
-                    ))}
+                    {labelInfo.map(({ label, count, placed, name, czName }) => {
+                      const isBusy = busyLabel === label;
+                      return (
+                        <div
+                          key={label}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "2px 0",
+                          }}
+                        >
+                          <label
+                            className="s2f-mini-check"
+                            style={{ flex: 1, minWidth: 0, padding: 0 }}
+                            title={`${name} (${czName})`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={!hiddenMpLabels.includes(label)}
+                              onChange={() => toggleLabel(label)}
+                            />
+                            <i style={{ background: colorForMpLabel(label) }} />
+                            <span className="s2f-mini-name">{name}</span>
+                            <em style={{ marginLeft: "auto", flexShrink: 0 }}>
+                              {placed}/{count}
+                            </em>
+                          </label>
+                          {onAddEquipmentFromMp && placed < count && (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleBulkAdd(label)}
+                              title={`Add all ${name} from MatterportIn3D to 3D Viewer`}
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 700,
+                                padding: "1px 5px",
+                                borderRadius: 4,
+                                cursor: isBusy ? "wait" : "pointer",
+                                background: "rgba(34,197,94,0.16)",
+                                border: "1px solid rgba(34,197,94,0.4)",
+                                color: "#4ade80",
+                                flexShrink: 0,
+                              }}
+                            >
+                              {isBusy ? "…" : "+ Add all"}
+                            </button>
+                          )}
+                          {onClearEquipmentByLabel && placed > 0 && (
+                            <button
+                              type="button"
+                              disabled={isBusy}
+                              onClick={() => handleBulkClear(label)}
+                              title={`Remove placed ${name} from 3D Viewer`}
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 600,
+                                padding: "1px 5px",
+                                borderRadius: 4,
+                                cursor: isBusy ? "wait" : "pointer",
+                                background: "rgba(var(--red-rgb),0.14)",
+                                border: "1px solid rgba(var(--red-rgb),0.35)",
+                                color: "var(--red)",
+                                flexShrink: 0,
+                              }}
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

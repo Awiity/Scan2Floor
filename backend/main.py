@@ -1,3 +1,4 @@
+import ctypes
 import json
 import math
 import os
@@ -27,10 +28,19 @@ from pipeline.wall_detection_c2b import detect_walls_c2b_for_floor
 from pipeline.floor_from_c2b import update_floor_levels_from_c2b
 import pipeline.run_pipeline as _pipeline
 from matterport.config import MODEL_ID, bootstrap_model_data, resolve_paths as resolve_mp_paths
-from matterport.objects import ObjectStore as MpObjectStore
+from matterport.coords import enrich_instance as enrich_mp_instance, load_s2f_context as load_mp_s2f_context
+from matterport.objects import (
+    ObjectStore as MpObjectStore,
+    SUPPORTED_EQUIPMENT_LABELS as MP_SUPPORTED_EQUIPMENT_LABELS,
+    normalize_label as normalize_mp_label,
+)
 from matterport.points import PointStore as MpPointStore
 from matterport.registry_sync import start_sync_loop as start_mp_sync_loop
-from matterport.router import invalidate_store_cache as invalidate_mp_cache, router as matterport_router
+from matterport.router import (
+    get_stores as get_mp_stores,
+    invalidate_store_cache as invalidate_mp_cache,
+    router as matterport_router,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -320,8 +330,97 @@ def reprocess_status():
 # ── Status / Point Cloud ─────────────────────────────────────────────────────
 
 
+def _get_memory_info() -> dict:
+    """Return process RSS and system RAM usage in bytes (cross-platform, zero deps)."""
+    proc_rss = 0
+    sys_used = 0
+    sys_total = 0
+
+    try:
+        if os.name == "nt":
+            class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", ctypes.c_ulong),
+                    ("PageFaultCount", ctypes.c_ulong),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            class _MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_uint64),
+                    ("ullAvailPhys", ctypes.c_uint64),
+                    ("ullTotalPageFile", ctypes.c_uint64),
+                    ("ullAvailPageFile", ctypes.c_uint64),
+                    ("ullTotalVirtual", ctypes.c_uint64),
+                    ("ullAvailVirtual", ctypes.c_uint64),
+                    ("ullAvailExtendedVirtual", ctypes.c_uint64),
+                ]
+
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.GetCurrentProcess.restype = ctypes.c_void_p
+            k32.K32GetProcessMemoryInfo.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(_PROCESS_MEMORY_COUNTERS),
+                ctypes.c_ulong,
+            ]
+            k32.K32GetProcessMemoryInfo.restype = ctypes.c_int
+            k32.GlobalMemoryStatusEx.argtypes = [ctypes.POINTER(_MEMORYSTATUSEX)]
+            k32.GlobalMemoryStatusEx.restype = ctypes.c_int
+
+            pmc = _PROCESS_MEMORY_COUNTERS()
+            pmc.cb = ctypes.sizeof(pmc)
+            if k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb):
+                proc_rss = int(pmc.WorkingSetSize)
+
+            mem = _MEMORYSTATUSEX()
+            mem.dwLength = ctypes.sizeof(mem)
+            if k32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+                sys_total = int(mem.ullTotalPhys)
+                sys_used = max(0, sys_total - int(mem.ullAvailPhys))
+        else:
+            if os.path.exists("/proc/self/status"):
+                with open("/proc/self/status") as f:
+                    for line in f:
+                        if line.startswith("VmRSS:"):
+                            parts = line.split()
+                            if len(parts) >= 2:
+                                proc_rss = int(parts[1]) * 1024
+                            break
+            if os.path.exists("/proc/meminfo"):
+                meminfo = {}
+                with open("/proc/meminfo") as f:
+                    for line in f:
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            key = parts[0].rstrip(":")
+                            if key in ("MemTotal", "MemAvailable"):
+                                meminfo[key] = int(parts[1]) * 1024
+                sys_total = meminfo.get("MemTotal", 0)
+                sys_avail = meminfo.get("MemAvailable", 0)
+                if sys_total > 0:
+                    sys_used = max(0, sys_total - sys_avail)
+    except Exception:
+        pass
+
+    return {
+        "proc_rss_bytes": proc_rss,
+        "sys_used_bytes": sys_used,
+        "sys_total_bytes": sys_total,
+    }
+
+
 @app.get("/api/status")
 def status():
+    memory = _get_memory_info()
     bin_path = os.path.join(PROCESSED_DIR, "pointcloud.bin")
     info_path = os.path.join(PROCESSED_DIR, "info.json")
     if os.path.exists(bin_path) and os.path.exists(info_path):
@@ -341,12 +440,12 @@ def status():
         info["wall_slices_ready"] = slices_ready
         info["preprocess_walls_running"] = _preprocess_status["running"]
 
-        return {"status": "ready", "info": info}
+        return {"status": "ready", "info": info, "memory": memory}
 
     # No pointcloud.bin / info.json — distinguish between actively running vs idle
     with _reprocess_lock:
         is_running = _reprocess_status["running"]
-    return {"status": "processing" if is_running else "idle", "info": None}
+    return {"status": "processing" if is_running else "idle", "info": None, "memory": memory}
 
 
 @app.get("/api/pointcloud")
@@ -1346,6 +1445,7 @@ _SAVE_PATTERNS = [
     "walls_floor_*.json",
     "rooms_floor_*.json",
     "openings_floor_*.json",
+    "equipment_floor_*.json",
     "floor_*.dxf",
     "floor_*.svg",
     "info.json",
@@ -1729,6 +1829,168 @@ def save_get_info(name: str):
         raise HTTPException(status_code=404, detail="info.json not found in this save.")
     with open(path) as f:
         return json.load(f)
+
+
+# ── Placed 3D Equipment (sourced from MatterportIn3D) ─────────────────────────
+
+
+class EquipmentFloorPayload(BaseModel):
+    items: list[dict]
+
+
+class AddMpEquipmentPayload(BaseModel):
+    instance_ids: Optional[list[str]] = None
+    labels: Optional[list[str]] = None
+    floor_idx: Optional[int] = None
+
+
+def _get_equipment_for_dir(base_dir: str, floor_idx: int) -> dict:
+    path = os.path.join(base_dir, f"equipment_floor_{floor_idx}.json")
+    if not os.path.exists(path):
+        return {"floor_idx": floor_idx, "items": []}
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    return {
+        "floor_idx": floor_idx,
+        "items": data.get("items", []) if isinstance(data, dict) else [],
+    }
+
+
+def _put_equipment_for_dir(base_dir: str, floor_idx: int, items: list[dict]) -> dict:
+    os.makedirs(base_dir, exist_ok=True)
+    path = os.path.join(base_dir, f"equipment_floor_{floor_idx}.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"floor_idx": floor_idx, "items": items}, fh, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+    try:
+        export_floor_dxf(floor_idx, base_dir)
+    except Exception:
+        pass
+    return {"status": "saved", "floor_idx": floor_idx, "count": len(items)}
+
+
+def _mp_instance_to_equipment_record(inst: dict, floor_idx: int) -> dict:
+    snapped = inst.get("snapped_s2f_position") or inst["s2f_position"]
+    raw_s2f = inst["s2f_position"]
+    iid = inst["instance_id"]
+    lbl = inst["label"]
+    return {
+        "id": f"eq_{iid}",
+        "instance_id": iid,
+        "label": lbl,
+        "type": "fire_extinguisher" if lbl == "hasici_pristroj" else "light_source",
+        "floor_idx": floor_idx,
+        "x": snapped["x"],
+        "y": snapped["y"],
+        "z": snapped["z"],
+        "raw_x": raw_s2f["x"],
+        "raw_y": raw_s2f["y"],
+        "raw_z": raw_s2f["z"],
+        "rotation_y": inst.get("rotation_y", 0.0),
+        "mount_type": inst.get("mount_type", "wall"),
+        "wall_idx": inst.get("wall_idx"),
+        "floor_y": inst.get("floor_y"),
+        "ceil_y": inst.get("ceil_y"),
+        "room_id": inst.get("room_id"),
+        "room_name": inst.get("room_name"),
+        "max_score": inst.get("max_score", 0.0),
+        "observation_count": inst.get("observation_count", 1),
+        "sweep_ids": inst.get("sweep_ids", []),
+        "observations": inst.get("observations", []),
+        "anchor": inst.get("anchor"),
+    }
+
+
+def _add_mp_equipment_for_dir(
+    base_dir: str,
+    payload: AddMpEquipmentPayload,
+    save_name: Optional[str] = None,
+) -> dict:
+    _, os_store, _ = get_mp_stores(save_name=save_name)
+    ctx = load_mp_s2f_context(save_name=save_name)
+    supported_set = set(MP_SUPPORTED_EQUIPMENT_LABELS)
+    target_labels = (
+        {normalize_mp_label(lbl) for lbl in payload.labels} & supported_set
+        if payload.labels is not None
+        else supported_set
+    )
+    target_ids = set(payload.instance_ids) if payload.instance_ids is not None else None
+
+    by_floor: dict[int, list[dict]] = {}
+    for inst in os_store.instances():
+        enriched = enrich_mp_instance(inst, ctx)
+        lbl = enriched.get("label")
+        if lbl not in supported_set or lbl not in target_labels:
+            continue
+        if target_ids is not None and enriched.get("instance_id") not in target_ids:
+            continue
+        f_idx = enriched.get("floor_idx")
+        if f_idx is None:
+            continue
+        f_idx_int = int(f_idx)
+        if payload.floor_idx is not None and f_idx_int != int(payload.floor_idx):
+            continue
+        by_floor.setdefault(f_idx_int, []).append(enriched)
+
+    added_total = 0
+    items_by_floor: dict[int, list[dict]] = {}
+    for f_idx, matched in sorted(by_floor.items()):
+        existing = list(_get_equipment_for_dir(base_dir, f_idx)["items"])
+        existing_iids = {it.get("instance_id") for it in existing if it.get("instance_id")}
+        added_here = 0
+        for inst in matched:
+            iid = inst.get("instance_id")
+            if not iid or iid in existing_iids:
+                continue
+            existing.append(_mp_instance_to_equipment_record(inst, f_idx))
+            existing_iids.add(iid)
+            added_here += 1
+        if added_here > 0:
+            _put_equipment_for_dir(base_dir, f_idx, existing)
+            added_total += added_here
+        items_by_floor[f_idx] = existing
+
+    return {"status": "ok", "added": added_total, "items_by_floor": items_by_floor}
+
+
+@app.get("/api/equipment/{floor_idx}")
+def get_equipment(floor_idx: int):
+    return _get_equipment_for_dir(PROCESSED_DIR, floor_idx)
+
+
+@app.put("/api/equipment/{floor_idx}")
+def save_equipment(floor_idx: int, payload: EquipmentFloorPayload):
+    return _put_equipment_for_dir(PROCESSED_DIR, floor_idx, payload.items)
+
+
+@app.post("/api/equipment/add-from-mp")
+def add_equipment_from_mp(payload: AddMpEquipmentPayload):
+    return _add_mp_equipment_for_dir(PROCESSED_DIR, payload, save_name=None)
+
+
+@app.get("/api/saves/{name}/equipment/{floor_idx}")
+def save_get_equipment(name: str, floor_idx: int):
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    return _get_equipment_for_dir(save_path, floor_idx)
+
+
+@app.put("/api/saves/{name}/equipment/{floor_idx}")
+def save_put_equipment(name: str, floor_idx: int, payload: EquipmentFloorPayload):
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    return _put_equipment_for_dir(save_path, floor_idx, payload.items)
+
+
+@app.post("/api/saves/{name}/equipment/add-from-mp")
+def save_add_equipment_from_mp(name: str, payload: AddMpEquipmentPayload):
+    save_path = _save_dir(name)
+    if not os.path.isdir(save_path):
+        raise HTTPException(status_code=404, detail=f"Save '{name}' not found.")
+    return _add_mp_equipment_for_dir(save_path, payload, save_name=name)
 
 
 # ── Serve React frontend ──────────────────────────────────────────────────────
